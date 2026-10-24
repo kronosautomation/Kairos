@@ -77,11 +77,13 @@ public sealed class InMemoryEventSinkConformanceTests : EventSinkConformance
     protected override Task<IReadOnlyList<RunEventNotice>> ReceivedAsync() => Task.FromResult(_sink.Published);
 }
 
-public sealed class WebhookEventSinkConformanceTests : EventSinkConformance
+public class WebhookEventSinkConformanceTests : EventSinkConformance
 {
     private static readonly byte[] Secret = RandomNumberGenerator.GetBytes(32);
     private readonly List<RunEventNotice> _received = [];
     private int _failuresLeft;
+
+    protected virtual bool CloudEvents => false;
 
     private sealed class Receiver(WebhookEventSinkConformanceTests owner) : HttpMessageHandler
     {
@@ -101,13 +103,13 @@ public sealed class WebhookEventSinkConformanceTests : EventSinkConformance
                 return new HttpResponseMessage(HttpStatusCode.Unauthorized);
             }
 
-            owner._received.AddRange(WebhookEventSink.Parse(body));
+            owner._received.AddRange(owner.CloudEvents ? CloudEventsFormat.ParseRunEvents(body) : WebhookEventSink.Parse(body));
             return new HttpResponseMessage(HttpStatusCode.NoContent);
         }
     }
 
     protected override IEventSink CreateSink() =>
-        new WebhookEventSink(new HttpClient(new Receiver(this)), new Uri("https://hooks.example.test/kairos"), Secret);
+        new WebhookEventSink(new HttpClient(new Receiver(this)), new Uri("https://hooks.example.test/kairos"), Secret, cloudEvents: CloudEvents);
 
     protected override Task<IReadOnlyList<RunEventNotice>> ReceivedAsync() => Task.FromResult<IReadOnlyList<RunEventNotice>>([.. _received]);
 
@@ -116,6 +118,11 @@ public sealed class WebhookEventSinkConformanceTests : EventSinkConformance
         _failuresLeft = count;
         return Task.FromResult(true);
     }
+}
+
+public sealed class CloudEventsWebhookSinkConformanceTests : WebhookEventSinkConformanceTests
+{
+    protected override bool CloudEvents => true;
 }
 
 public sealed class InMemoryInboxConformanceTests : EventSourceConformance

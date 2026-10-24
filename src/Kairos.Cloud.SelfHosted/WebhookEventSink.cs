@@ -9,7 +9,8 @@ namespace Kairos.Cloud.SelfHosted;
 /// <summary>
 /// Publishes run events to an HTTP endpoint. Each request is signed (<c>X-Kairos-Signature: sha256=HMAC(secret, timestamp.body)</c>,
 /// <c>X-Kairos-Timestamp</c>) so receivers can authenticate it and reject replays. Delivery is at-least-once: transient failures are
-/// retried with backoff, so receivers de-duplicate on the stable event id. Bodies carry metadata only, never payloads.
+/// retried with backoff, so receivers de-duplicate on the stable event id. Bodies carry metadata only, never payloads. With
+/// <c>cloudEvents</c> the body is a CloudEvents 1.0 batch (see <see cref="CloudEventsFormat"/>) instead of the Kairos JSON shape.
 /// </summary>
 public sealed class WebhookEventSink : IEventSink
 {
@@ -21,8 +22,9 @@ public sealed class WebhookEventSink : IEventSink
     private readonly byte[] _secret;
     private readonly TimeProvider _time;
     private readonly int _maxAttempts;
+    private readonly bool _cloudEvents;
 
-    public WebhookEventSink(HttpClient http, Uri endpoint, byte[] secret, TimeProvider? time = null, int maxAttempts = 4)
+    public WebhookEventSink(HttpClient http, Uri endpoint, byte[] secret, TimeProvider? time = null, int maxAttempts = 4, bool cloudEvents = false)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -34,6 +36,7 @@ public sealed class WebhookEventSink : IEventSink
         _secret = [.. secret];
         _time = time ?? TimeProvider.System;
         _maxAttempts = maxAttempts;
+        _cloudEvents = cloudEvents;
     }
 
     public async ValueTask PublishAsync(IReadOnlyList<RunEventNotice> events, CancellationToken cancellationToken)
@@ -44,12 +47,12 @@ public sealed class WebhookEventSink : IEventSink
             return;
         }
 
-        byte[] body = Serialize(events);
+        byte[] body = _cloudEvents ? CloudEventsFormat.SerializeBatch(events) : Serialize(events);
         for (int attempt = 1; ; attempt++)
         {
             string timestamp = _time.GetUtcNow().ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
             using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint) { Content = new ByteArrayContent(body) };
-            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(_cloudEvents ? CloudEventsFormat.BatchContentType : "application/json");
             request.Headers.TryAddWithoutValidation(TimestampHeader, timestamp);
             request.Headers.TryAddWithoutValidation(SignatureHeader, Sign(_secret, timestamp, body));
 
