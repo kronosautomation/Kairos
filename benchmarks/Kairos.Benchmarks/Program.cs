@@ -2,7 +2,13 @@
 using BenchmarkDotNet.Running;
 using Kairos;
 
+if (args.Length > 0 && args[0] == "groupcommit")
+{
+    return await GroupCommitBenchmark.RunAsync();
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(ReplayBenchmarks).Assembly).Run(args);
+return 0;
 
 /// <summary>Replay of a 999-event history: a started event, then per activity a result, a task boundary and the next command.</summary>
 [MemoryDiagnoser]

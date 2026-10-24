@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Kairos.Core\Kairos.Core.csproj" />
+    <ProjectReference Include="..\..\src\Kairos.Persistence.Postgres\Kairos.Persistence.Postgres.csproj" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
   </ItemGroup>
 
   <ItemGroup>

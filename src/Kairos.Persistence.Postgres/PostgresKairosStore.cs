@@ -10,6 +10,9 @@ namespace Kairos.Persistence.Postgres;
 /// The hot path (completing a workflow task) is a single statement in a single round trip; the rest use short explicit
 /// transactions. Deadlocks and serialization failures are retried.
 /// </summary>
+/// <summary>One workflow-task completion inside a group commit.</summary>
+public sealed record WorkflowTaskCompletion(WorkflowTask Task, IReadOnlyList<HistoryEvent> NewEvents);
+
 public sealed class PostgresKairosStore(NpgsqlDataSource dataSource) : IKairosStore
 {
     public const string NotifyChannel = "kairos_work";
@@ -175,14 +178,83 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource) : IKairosSt
     }
 
     public async ValueTask<CompletionOutcome> CompleteWorkflowTaskAsync(
-        WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now, CancellationToken cancellationToken)
+        WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now, CancellationToken cancellationToken) =>
+        (await CompleteWorkflowTasksAsync([new WorkflowTaskCompletion(task, newEvents)], now, cancellationToken).ConfigureAwait(false))[0];
+
+    /// <summary>
+    /// Group commit: completes several workflow tasks of one tenant scope in a single round trip and a single transaction commit
+    /// (one statement per task, each independently guarded, so one stale lease never rejects its neighbours).
+    /// </summary>
+    public async ValueTask<CompletionOutcome[]> CompleteWorkflowTasksAsync(
+        IReadOnlyList<WorkflowTaskCompletion> items, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        if (items.Count == 0)
+        {
+            return [];
+        }
+
+        TenantScope scope = items[0].Task.Run.Scope;
+        var prepared = new PreparedCompletion[items.Count];
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (items[i].Task.Run.Scope != scope)
+            {
+                throw new ArgumentException("A group commit must stay within one tenant scope.", nameof(items));
+            }
+
+            prepared[i] = Prepare(items[i].Task, items[i].NewEvents, now);
+        }
+
+        long[] applied = await Retry(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(scope);
+            bool notify = false;
+            foreach (PreparedCompletion p in prepared)
+            {
+                batch.BatchCommands.Add(p.ToCommand(scope, now));
+                notify |= p.HasActivities;
+            }
+
+            if (notify)
+            {
+                batch.BatchCommands.Add(Notify(scope));
+            }
+
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false); // set_config
+            var counts = new long[prepared.Length];
+            for (int i = 0; i < counts.Length; i++)
+            {
+                await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+                counts[i] = reader.GetInt64(0);
+                await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return counts;
+        }).ConfigureAwait(false);
+
+        var outcomes = new CompletionOutcome[prepared.Length];
+        for (int i = 0; i < outcomes.Length; i++)
+        {
+            outcomes[i] = applied[i] == 1
+                ? CompletionOutcome.Applied
+                : await ResolveUnappliedAsync(prepared[i].Task, now, cancellationToken).ConfigureAwait(false);
+        }
+
+        return outcomes;
+    }
+
+    /// <summary>Seals the boundary + command events as one chain extension from the snapshot the worker replayed.</summary>
+    private static PreparedCompletion Prepare(WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(task);
         StoreRules.ValidateWorkflowTaskEvents(task.Run, newEvents);
         RunKey run = task.Run;
         HistoryEvent head = task.History[^1];
 
-        // Seal the boundary and the command events as one chain extension from the snapshot the worker replayed.
         var sealedEvents = new List<HistoryEvent>(newEvents.Count + 1);
         long seq = head.Sequence;
         byte[] prev = head.Hash;
@@ -194,7 +266,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource) : IKairosSt
             prev = s.Hash;
         }
 
-        int state = 0;
+        short state = 0;
         var actIds = new List<int>();
         var actBodies = new List<byte[]>();
         var timerIds = new List<int>();
@@ -229,7 +301,41 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource) : IKairosSt
             timerDue.Clear();
         }
 
-        const string Sql = """
+        return new PreparedCompletion(task, head, sealedEvents, state, actIds.ToArray(), actBodies.ToArray(), timerIds.ToArray(), timerDue.ToArray());
+    }
+
+    private sealed record PreparedCompletion(
+        WorkflowTask Task, HistoryEvent Head, List<HistoryEvent> Events, short State,
+        int[] ActIds, byte[][] ActBodies, int[] TimerIds, DateTime[] TimerDue)
+    {
+        public bool HasActivities => ActIds.Length > 0;
+
+        public NpgsqlBatchCommand ToCommand(TenantScope scope, DateTimeOffset now)
+        {
+            var cmd = new NpgsqlBatchCommand(CompleteWorkflowSql);
+            RunKey run = Task.Run;
+            Scope(cmd, scope);
+            cmd.Parameters.AddWithValue("r", run.RunId);
+            cmd.Parameters.AddWithValue("token", Task.LeaseToken);
+            cmd.Parameters.AddWithValue("headseq", Head.Sequence);
+            cmd.Parameters.AddWithValue("headhash", Head.Hash);
+            cmd.Parameters.AddWithValue("lastseq", Events[^1].Sequence);
+            cmd.Parameters.AddWithValue("lasthash", Events[^1].Hash);
+            cmd.Parameters.AddWithValue("state", State);
+            cmd.Parameters.Add(Ts("now", now));
+            cmd.Parameters.Add(Arr("seqs", NpgsqlDbType.Bigint, Events.Select(e => e.Sequence).ToArray()));
+            cmd.Parameters.Add(Arr("bodies", NpgsqlDbType.Bytea, Events.Select(HistoryEventCodec.Encode).ToArray()));
+            cmd.Parameters.Add(Arr("prevs", NpgsqlDbType.Bytea, Events.Select(e => e.PrevHash).ToArray()));
+            cmd.Parameters.Add(Arr("hashes", NpgsqlDbType.Bytea, Events.Select(e => e.Hash).ToArray()));
+            cmd.Parameters.Add(Arr("actids", NpgsqlDbType.Integer, ActIds));
+            cmd.Parameters.Add(Arr("actbodies", NpgsqlDbType.Bytea, ActBodies));
+            cmd.Parameters.Add(Arr("timerids", NpgsqlDbType.Integer, TimerIds));
+            cmd.Parameters.Add(Arr("timerdue", NpgsqlDbType.TimestampTz, TimerDue));
+            return cmd;
+        }
+    }
+
+    private const string CompleteWorkflowSql = """
             WITH guard AS (
                 UPDATE kairos.runs SET last_seq = @lastseq, last_hash = @lasthash, state = @state
                 WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r
@@ -262,48 +368,10 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource) : IKairosSt
             SELECT count(*) FROM guard
             """;
 
-        long applied = await Retry(async () =>
-        {
-            await using NpgsqlBatch batch = Batch(run.Scope);
-            NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
-            cmd.CommandText = Sql;
-            Scope(cmd, run.Scope);
-            cmd.Parameters.AddWithValue("r", run.RunId);
-            cmd.Parameters.AddWithValue("token", task.LeaseToken);
-            cmd.Parameters.AddWithValue("headseq", head.Sequence);
-            cmd.Parameters.AddWithValue("headhash", head.Hash);
-            cmd.Parameters.AddWithValue("lastseq", sealedEvents[^1].Sequence);
-            cmd.Parameters.AddWithValue("lasthash", sealedEvents[^1].Hash);
-            cmd.Parameters.AddWithValue("state", (short)state);
-            cmd.Parameters.Add(Ts("now", now));
-            cmd.Parameters.Add(Arr("seqs", NpgsqlDbType.Bigint, sealedEvents.Select(e => e.Sequence).ToArray()));
-            cmd.Parameters.Add(Arr("bodies", NpgsqlDbType.Bytea, sealedEvents.Select(HistoryEventCodec.Encode).ToArray()));
-            cmd.Parameters.Add(Arr("prevs", NpgsqlDbType.Bytea, sealedEvents.Select(e => e.PrevHash).ToArray()));
-            cmd.Parameters.Add(Arr("hashes", NpgsqlDbType.Bytea, sealedEvents.Select(e => e.Hash).ToArray()));
-            cmd.Parameters.Add(Arr("actids", NpgsqlDbType.Integer, actIds.ToArray()));
-            cmd.Parameters.Add(Arr("actbodies", NpgsqlDbType.Bytea, actBodies.ToArray()));
-            cmd.Parameters.Add(Arr("timerids", NpgsqlDbType.Integer, timerIds.ToArray()));
-            cmd.Parameters.Add(Arr("timerdue", NpgsqlDbType.TimestampTz, timerDue.ToArray()));
-            batch.BatchCommands.Add(cmd);
-            if (actIds.Count > 0)
-            {
-                batch.BatchCommands.Add(Notify(run.Scope));
-            }
-
-            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            batch.Connection = conn;
-            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            return reader.GetInt64(0);
-        }).ConfigureAwait(false);
-
-        if (applied == 1)
-        {
-            return CompletionOutcome.Applied;
-        }
-
-        // Rare path: work out why, and release the task for a re-run when only history moved.
+    /// <summary>Rare path: work out why a completion was not applied, and release the task for a re-run when only history moved.</summary>
+    private async Task<CompletionOutcome> ResolveUnappliedAsync(WorkflowTask task, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        RunKey run = task.Run;
         return await InTransaction(run.Scope, async (conn, tx) =>
         {
             await using var q = new NpgsqlCommand(
