@@ -44,11 +44,12 @@ public interface IKeyProvider
 /// <summary>Seals and opens payloads on the client side. The server only ever sees what <see cref="ProtectAsync"/> returns.</summary>
 public interface IPayloadProtector
 {
-    /// <param name="context">Authenticated binding (tenant, namespace, run, field). A payload opens only under the context it was sealed with.</param>
-    ValueTask<byte[]> ProtectAsync(ReadOnlyMemory<byte> plaintext, ReadOnlyMemory<byte> context, CancellationToken cancellationToken);
+    /// <param name="scope">Tenant and namespace; keys are never shared across scopes.</param>
+    /// <param name="context">Authenticated binding (run, field, id). A payload opens only under the context it was sealed with.</param>
+    ValueTask<byte[]> ProtectAsync(TenantScope scope, ReadOnlyMemory<byte> plaintext, ReadOnlyMemory<byte> context, CancellationToken cancellationToken);
 
-    /// <exception cref="PayloadProtectionException">Wrong context, unknown key, or altered ciphertext.</exception>
-    ValueTask<byte[]> UnprotectAsync(ReadOnlyMemory<byte> protectedPayload, ReadOnlyMemory<byte> context, CancellationToken cancellationToken);
+    /// <exception cref="PayloadProtectionException">Wrong scope or context, unknown key, or altered ciphertext.</exception>
+    ValueTask<byte[]> UnprotectAsync(TenantScope scope, ReadOnlyMemory<byte> protectedPayload, ReadOnlyMemory<byte> context, CancellationToken cancellationToken);
 }
 
 public sealed class PayloadProtectionException : Exception

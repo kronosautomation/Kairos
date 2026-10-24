@@ -26,6 +26,19 @@ public sealed class KairosOptions
 
     public WorkerOptions Worker { get; set; } = new();
 
+    internal IPayloadProtector? PayloadProtector { get; private set; }
+
+    /// <summary>
+    /// Client-side payload encryption: inputs, results, signals and failure messages are sealed before they reach the database and opened
+    /// only here. Use <c>Kairos.Worker.EnvelopePayloadProtector</c> over your key provider.
+    /// </summary>
+    public KairosOptions UsePayloadProtector(IPayloadProtector protector)
+    {
+        ArgumentNullException.ThrowIfNull(protector);
+        PayloadProtector = protector;
+        return this;
+    }
+
     /// <summary>Postgres only: no cluster, no sidecar. Connect as the <c>kairos_dataplane</c> role.</summary>
     public KairosOptions UsePostgres(string connectionString)
     {

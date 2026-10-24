@@ -453,6 +453,12 @@
       "kairos.abstractions": {
         "type": "Project"
       },
+      "kairos.cloud.selfhosted": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )"
+        }
+      },
       "kairos.core": {
         "type": "Project",
         "dependencies": {
@@ -481,6 +487,12 @@
         "dependencies": {
           "Kairos.Core": "[1.0.0, )",
           "xunit": "[2.9.3, )"
+        }
+      },
+      "kairos.worker": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )"
         }
       },
       "Microsoft.Extensions.DependencyInjection.Abstractions": {

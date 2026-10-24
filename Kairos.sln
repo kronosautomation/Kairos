@@ -31,6 +31,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Kairos.Conformance", "tests
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Kairos.SelfHosted.Tests", "tests\Kairos.SelfHosted.Tests\Kairos.SelfHosted.Tests.csproj", "{B40DB60F-FCCB-45EB-B894-8F176FBE2FC2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Kairos.Worker", "src\Kairos.Worker\Kairos.Worker.csproj", "{9B253395-0D51-4A7E-9092-D536C00835FD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -173,6 +175,18 @@ Global
 		{B40DB60F-FCCB-45EB-B894-8F176FBE2FC2}.Release|x64.Build.0 = Release|Any CPU
 		{B40DB60F-FCCB-45EB-B894-8F176FBE2FC2}.Release|x86.ActiveCfg = Release|Any CPU
 		{B40DB60F-FCCB-45EB-B894-8F176FBE2FC2}.Release|x86.Build.0 = Release|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Debug|x64.Build.0 = Debug|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Debug|x86.Build.0 = Debug|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Release|x64.ActiveCfg = Release|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Release|x64.Build.0 = Release|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Release|x86.ActiveCfg = Release|Any CPU
+		{9B253395-0D51-4A7E-9092-D536C00835FD}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -189,5 +203,6 @@ Global
 		{C69BF783-7825-4B50-8CFF-A3CEE97EDA93} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{5173121B-D4C2-46F0-A18D-6768C1EC27AD} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{B40DB60F-FCCB-45EB-B894-8F176FBE2FC2} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{9B253395-0D51-4A7E-9092-D536C00835FD} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

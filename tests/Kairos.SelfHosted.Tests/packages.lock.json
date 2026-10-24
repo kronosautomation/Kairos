@@ -105,6 +105,12 @@
           "xunit": "[2.9.3, )"
         }
       },
+      "kairos.worker": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )"
+        }
+      },
       "xunit": {
         "type": "CentralTransitive",
         "requested": "[2.9.3, )",

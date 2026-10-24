@@ -36,10 +36,11 @@ public sealed class WorkerRuntime
     private readonly ActivityRegistry _activities;
     private readonly TimeProvider _time;
     private readonly WorkerOptions _options;
+    private readonly PayloadCrypto? _crypto;
 
     public WorkerRuntime(
         IKairosStore store, TenantScope scope, WorkflowRegistry workflows, ActivityRegistry activities,
-        TimeProvider time, WorkerOptions? options = null)
+        TimeProvider time, WorkerOptions? options = null, IPayloadProtector? payloadProtector = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(workflows);
@@ -51,6 +52,7 @@ public sealed class WorkerRuntime
         _activities = activities;
         _time = time;
         _options = options ?? new WorkerOptions();
+        _crypto = payloadProtector is null ? null : new PayloadCrypto(payloadProtector);
     }
 
     /// <summary>Called for every task that failed replay. Hook for logging/metrics; must not throw.</summary>
@@ -93,9 +95,19 @@ public sealed class WorkerRuntime
         ReplayResult result;
         try
         {
-            result = WorkflowReplayer.Replay(workflow, task.History, _options.VerifyHashChain);
+            if (_crypto is null)
+            {
+                result = WorkflowReplayer.Replay(workflow, task.History, _options.VerifyHashChain);
+            }
+            else
+            {
+                // Verify the chain over the ciphertext the server holds, then replay the opened (plaintext) copy.
+                HashChain.Verify(task.History);
+                IReadOnlyList<HistoryEvent> opened = await _crypto.OpenHistoryAsync(task.History, cancellationToken).ConfigureAwait(false);
+                result = WorkflowReplayer.Replay(workflow, opened, verifyHashChain: false);
+            }
         }
-        catch (Exception ex) when (ex is NonDeterminismException or HistoryIntegrityException)
+        catch (Exception ex) when (ex is NonDeterminismException or HistoryIntegrityException or PayloadProtectionException)
         {
             Fault(task, ex);
             await _store.ReleaseWorkflowTaskAsync(task, now + _options.FailedTaskRetryDelay, now, countAttempt: true, cancellationToken).ConfigureAwait(false);
@@ -106,7 +118,8 @@ public sealed class WorkerRuntime
         var events = new List<HistoryEvent>(result.NewCommands.Count);
         for (int i = 0; i < result.NewCommands.Count; i++)
         {
-            events.Add(ToEvent(task.Run, result.NewCommands[i], stamp));
+            HistoryEvent plain = ToEvent(task.Run, result.NewCommands[i], stamp);
+            events.Add(_crypto is null ? plain : await _crypto.SealEventAsync(plain, cancellationToken).ConfigureAwait(false));
         }
 
         await _store.CompleteWorkflowTaskAsync(task, events, stamp, cancellationToken).ConfigureAwait(false);
@@ -151,7 +164,10 @@ public sealed class WorkerRuntime
             }
 
             var context = new ActivityContext(r, task.ActivityId, task.ActivityType, task.Attempt, task.IdempotencyKey) { Heartbeat = Beat };
-            byte[] output = await activity(context, task.Input, attemptCts.Token).ConfigureAwait(false);
+            byte[] input = _crypto is null
+                ? task.Input
+                : await _crypto.OpenAsync(r.Scope, r.RunId, "act-in", task.ActivityId, task.Input, attemptCts.Token).ConfigureAwait(false);
+            byte[] output = await activity(context, input, attemptCts.Token).ConfigureAwait(false);
             outcome = new ActivityCompleted(r.TenantId, r.NamespaceId, r.RunId, 0, _time.GetUtcNow(), task.ActivityId, output);
         }
         catch (OperationCanceledException) when (leaseLost)
@@ -181,6 +197,11 @@ public sealed class WorkerRuntime
             {
                 await autoBeat.ConfigureAwait(false);
             }
+        }
+
+        if (_crypto is not null)
+        {
+            outcome = await _crypto.SealEventAsync(outcome, cancellationToken).ConfigureAwait(false);
         }
 
         await _store.CompleteActivityTaskAsync(task, outcome, retryAt, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);

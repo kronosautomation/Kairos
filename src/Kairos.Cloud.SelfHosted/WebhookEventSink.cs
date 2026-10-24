@@ -130,18 +130,32 @@ public sealed class WebhookEventSink : IEventSink
         return stream.ToArray();
     }
 
+    /// <summary>Receiver side: parses a webhook body. Anything malformed throws <see cref="FormatException"/> and nothing else.</summary>
     public static IReadOnlyList<RunEventNotice> Parse(ReadOnlySpan<byte> body)
     {
-        var events = new List<RunEventNotice>();
-        using JsonDocument doc = JsonDocument.Parse(body.ToArray());
-        foreach (JsonElement e in doc.RootElement.GetProperty("events").EnumerateArray())
+        try
         {
-            var run = new RunKey(e.GetProperty("tenantId").GetGuid(), e.GetProperty("namespaceId").GetGuid(), e.GetProperty("runId").GetGuid());
-            events.Add(new RunEventNotice(
-                e.GetProperty("id").GetString()!, run, Enum.Parse<HistoryEventType>(e.GetProperty("type").GetString()!),
-                e.GetProperty("sequence").GetInt64(), e.GetProperty("at").GetDateTimeOffset()));
-        }
+            var events = new List<RunEventNotice>();
+            using JsonDocument doc = JsonDocument.Parse(body.ToArray(), new JsonDocumentOptions { MaxDepth = 8 });
+            foreach (JsonElement e in doc.RootElement.GetProperty("events").EnumerateArray())
+            {
+                var run = new RunKey(e.GetProperty("tenantId").GetGuid(), e.GetProperty("namespaceId").GetGuid(), e.GetProperty("runId").GetGuid());
+                string typeName = e.GetProperty("type").GetString() ?? throw new FormatException("Missing event type.");
+                if (!Enum.TryParse(typeName, ignoreCase: false, out HistoryEventType type) || !Enum.IsDefined(type))
+                {
+                    throw new FormatException("Unknown event type.");
+                }
 
-        return events;
+                events.Add(new RunEventNotice(
+                    e.GetProperty("id").GetString() ?? throw new FormatException("Missing event id."), run, type,
+                    e.GetProperty("sequence").GetInt64(), e.GetProperty("at").GetDateTimeOffset()));
+            }
+
+            return events;
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or ArgumentException or OverflowException)
+        {
+            throw new FormatException("Malformed webhook body.", ex);
+        }
     }
 }

@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Kairos.Cloud.SelfHosted\Kairos.Cloud.SelfHosted.csproj" />
+    <ProjectReference Include="..\..\src\Kairos.Worker\Kairos.Worker.csproj" />
     <ProjectReference Include="..\Kairos.Conformance\Kairos.Conformance.csproj" />
     <ProjectReference Include="..\Kairos.Testing\Kairos.Testing.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
