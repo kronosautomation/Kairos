@@ -12,6 +12,13 @@
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
 
     <!-- Warnings are errors; analyzers run at the strictest recommended level, including in the build. -->
+    <!-- Package metadata: everything in this repository is Apache-2.0 (docs/LICENSING.md). -->
+    <Authors>Kronos Automation LLC</Authors>
+    <Company>Kronos Automation LLC</Company>
+    <Copyright>Copyright 2026 Kronos Automation LLC</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
     <AnalysisMode>Recommended</AnalysisMode>
