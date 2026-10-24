@@ -6,7 +6,7 @@ namespace Kairos.Testing;
 /// The behaviour every <see cref="IKairosStore"/> must have. Subclass and supply a fresh, empty store; the in-memory
 /// reference and PostgreSQL run exactly the same tests. Covers I2, I3 (task fencing), I5 (tenant isolation), I8.
 /// </summary>
-public abstract class StoreContractTests
+public abstract partial class StoreContractTests
 {
     protected static readonly TenantScope A = new(Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001"), Guid.Parse("aaaaaaaa-0000-0000-0000-0000000000a1"));
     protected static readonly TenantScope B = new(Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002"), Guid.Parse("bbbbbbbb-0000-0000-0000-0000000000b2"));

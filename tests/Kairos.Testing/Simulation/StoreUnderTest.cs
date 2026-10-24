@@ -19,7 +19,7 @@ public sealed record StoreUnderTest(IKairosStore Store, IStoreDiagnostics Diagno
 
     private sealed class InMemoryDiagnostics(InMemoryKairosStore store) : IStoreDiagnostics
     {
-        public ValueTask<StoreStats> GetStatsAsync(TenantScope scope) => ValueTask.FromResult(store.GetStats());
+        public ValueTask<StoreStats> GetStatsAsync(TenantScope scope) => ValueTask.FromResult(store.GetStats(scope));
 
         public ValueTask<DateTimeOffset?> NextWakeupAsync(TenantScope scope, DateTimeOffset now) =>
             ValueTask.FromResult(store.NextWakeup(scope, now));
