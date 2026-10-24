@@ -123,6 +123,7 @@ services:
       context: .
       dockerfile: ci.Dockerfile
     profiles: ["ci"]
+    entrypoint: ["bash", "/src/docker/ci-run.sh"]   # run the repo's script, so script changes need no image rebuild
     working_dir: /src
     environment:
       CI: "true"

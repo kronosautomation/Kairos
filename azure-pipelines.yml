@@ -61,14 +61,14 @@ stages:
             nuget | "$(Agent.OS)" | ${{ t.tfm }}
           path: $(NUGET_PACKAGES)
 
-      - script: dotnet restore Kairos.sln -p:TargetFramework=${{ t.tfm }} -p:RestoreLockedMode=${{ t.locked }}
+      - script: dotnet restore Kairos.sln -p:KairosTargetFramework=${{ t.tfm }} -p:RestoreLockedMode=${{ t.locked }}
         displayName: Restore
 
-      - script: dotnet build Kairos.sln -c $(BuildConfiguration) --no-restore -p:TargetFramework=${{ t.tfm }}
+      - script: dotnet build Kairos.sln -c $(BuildConfiguration) --no-restore -p:KairosTargetFramework=${{ t.tfm }}
         displayName: Build (warnings are errors)
 
       - script: >
-          dotnet test Kairos.sln -c $(BuildConfiguration) --no-build -p:TargetFramework=${{ t.tfm }}
+          dotnet test Kairos.sln -c $(BuildConfiguration) --no-build -p:KairosTargetFramework=${{ t.tfm }}
           --filter "Category!=Nightly&Category!=Soak&Category!=CloudSandbox"
           --logger trx --results-directory $(Agent.TempDirectory)/TestResults
           --collect "XPlat Code Coverage"

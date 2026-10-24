@@ -9,10 +9,10 @@ echo "== Copying repo (bin/obj excluded) =="
 rsync -a --delete --exclude bin --exclude obj --exclude .ci-local --exclude .git /src/ /work/
 cd /work
 
-restore() { dotnet restore Kairos.sln -p:TargetFramework="$TFM" -p:RestoreLockedMode=$LOCKED; }
-build()   { dotnet build Kairos.sln -c Release --no-restore -p:TargetFramework="$TFM"; }
+restore() { dotnet restore Kairos.sln -p:KairosTargetFramework="$TFM" -p:RestoreLockedMode=$LOCKED; }
+build()   { dotnet build Kairos.sln -c Release --no-restore -p:KairosTargetFramework="$TFM"; }
 run_tests() {
-  local args=(test Kairos.sln -c Release --no-build -p:TargetFramework="$TFM" --filter "$1" --logger trx --results-directory "$OUT")
+  local args=(test Kairos.sln -c Release --no-build -p:KairosTargetFramework="$TFM" --filter "$1" --logger trx --results-directory "$OUT")
   [ "${2:-}" = "coverage" ] && args+=(--collect "XPlat Code Coverage")
   dotnet "${args[@]}"
 }

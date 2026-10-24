@@ -1,7 +1,10 @@
 ﻿<Project>
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- CI switches every project at once with -p:KairosTargetFramework=net11.0. (A global TargetFramework is not passed to
+         project references, so overriding TargetFramework itself builds references for the wrong framework.) -->
+    <KairosTargetFramework Condition="'$(KairosTargetFramework)' == ''">net10.0</KairosTargetFramework>
+    <TargetFramework>$(KairosTargetFramework)</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
