@@ -1,0 +1,127 @@
+# Kairos — Security & Separation Architecture
+
+Kairos is a durable workflow engine for .NET: workflows are plain C# (async/await),
+every step is checkpointed to an event history, and runs survive crashes and deploys.
+Security and tenant isolation are design constraints from day one, not add-ons.
+
+## 1. Core principle: the engine never runs customer code
+
+- Customer workflow and activity code runs only in **customer-hosted workers** (their VMs, containers, functions).
+- Workers connect **outbound** to Kairos, poll for tasks, and report results. Kairos never calls into customer networks.
+- The server stores and orders events. It does not execute or deserialize customer types.
+- Result: a compromise of the Kairos service cannot run code in a customer environment, and customer code cannot reach other tenants.
+
+## 2. Plane separation
+
+| Plane | Responsibility | Exposure |
+|---|---|---|
+| **Data plane** (`Kairos.Server`) | Start/signal/cancel runs, task polling, history | Public, mTLS or token auth, per-namespace scoped |
+| **Control plane** (`Kairos.Admin`) | Tenants, namespaces, keys, quotas, billing | Private network only, separate deployment, separate identity, separate DB role |
+| **Persistence** | Postgres | Private endpoint only, no public IP |
+
+The data plane cannot create tenants or keys. The control plane cannot read workflow payloads.
+
+## 3. Tenant isolation (defense in depth)
+
+1. **Namespace = isolation boundary.** Every row carries `tenant_id` + `namespace_id`.
+2. **Postgres Row-Level Security** with `FORCE ROW LEVEL SECURITY`. The server connects as a non-owner role and sets
+   `app.tenant_id` per transaction (`SET LOCAL`), so a missing `WHERE` clause cannot leak rows.
+3. **Separate database roles:**
+   - `kairos_migrator` — DDL only, used by migrations in CI/CD, never by running services.
+   - `kairos_dataplane` — DML on workflow tables, bound by RLS, no DDL.
+   - `kairos_controlplane` — DML on tenant/key/quota tables only, no access to payload tables.
+   - `kairos_readonly` — reporting/support, RLS-bound.
+4. **Enterprise tier:** dedicated database (or dedicated cluster) per tenant, same code path.
+5. **Noisy-neighbor limits** per namespace: request rate, concurrent runs, payload size, history length, timer count.
+
+## 4. Data protection
+
+- **Client-side payload encryption (default on).** The worker SDK encrypts inputs, outputs, and signal payloads with
+  envelope encryption (AES-256-GCM data keys, wrapped by the customer's KMS / Key Vault key). Kairos stores ciphertext
+  only and never holds the customer's key. Search attributes stay plaintext and are opt-in per field.
+- **Server-side at-rest encryption** on storage and backups as a second layer.
+- **TLS 1.3 everywhere**, including server ↔ Postgres.
+- **No secrets in history.** SDK analyzers flag workflow inputs typed as credentials; secrets come from the worker's own vault.
+
+## 5. Identity & access
+
+- **Workers:** mTLS client certificates or short-lived OIDC client-credential tokens (≤ 1 hour). No long-lived shared secrets.
+- **API keys** (for humans/CI): shown once, stored as HMAC-SHA256 with a server-side pepper held in Key Vault, scoped to one
+  namespace and one role, expiring by default.
+- **Roles per namespace:** `admin`, `operator` (start/signal/cancel/terminate), `worker` (poll/complete only), `reader`.
+  Least privilege: a worker credential cannot start or read other workflows.
+- **Control plane** uses workforce SSO (Entra ID / OIDC) with MFA, never API keys.
+
+## 6. Integrity & audit
+
+- **Hash-chained history:** each event stores `SHA-256(prev_hash || event)`, so tampering or reordering is detectable.
+- **Append-only audit log** of every control-plane action and every privileged data-plane action (terminate, reset, key use).
+- Optimistic concurrency on run state (version column), so no lost updates under concurrent workers.
+
+## 7. Workflow correctness as a security property
+
+- Roslyn analyzers block non-deterministic APIs inside workflow code (`DateTime.Now`, `Guid.NewGuid`, `Random`,
+  direct I/O, `Task.Run`, static mutable state) and steer to `ctx.Now`, `ctx.NewGuid`, activities.
+- Replay verification: a worker that produces a command sequence differing from history fails the task rather than
+  silently diverging.
+
+## 8. Platform & supply chain
+
+- Central package management, NuGet lock files, `NuGetAudit` set to fail on high/critical vulnerabilities.
+- `TreatWarningsAsErrors`, nullable enabled, analyzers on, no reflection-based serialization (System.Text.Json source generators).
+- Native AOT, non-root distroless containers, read-only root filesystem, no shell in the image.
+- Secrets via managed identity and Key Vault; nothing in config files or env files committed to git.
+- Signed container images and SBOM generation in CI.
+
+## 9. Solution layout (separation in code)
+
+```
+src/
+  Kairos.Abstractions     contracts only, zero dependencies
+  Kairos.Core             history model, replay, state machine (no I/O)
+  Kairos.Persistence.Postgres   RLS-aware storage, migrations
+  Kairos.Server           data-plane API (gRPC + HTTP)
+  Kairos.Admin            control-plane API (separate host)
+  Kairos.Worker           customer SDK: workflows, activities, payload encryption
+  Kairos.Analyzers        determinism + secret-handling analyzers
+tests/
+  Kairos.Core.Tests
+  Kairos.Persistence.Tests   includes cross-tenant leak tests that must fail closed
+  Kairos.Worker.Tests
+```
+
+Dependency rule: Core depends only on Abstractions; Server/Admin never reference Worker; Worker never references Persistence.
+
+## 10. Performance, redundancy & memory (top-priority design goals)
+
+### Speed
+- **One transaction per workflow task:** append new events, update run state, and enqueue follow-up tasks/timers in a
+  single Postgres round-trip (batched statements). No read-modify-write chatter.
+- **Push, not poll:** workers long-poll; the server wakes them via Postgres `LISTEN/NOTIFY`, with `FOR UPDATE SKIP LOCKED`
+  task claims so many workers never contend on the same row.
+- **Sticky execution:** a worker keeps hot workflow state cached, so a new task only replays the *new* events.
+  Full replay happens only on cache miss or failover.
+- gRPC over HTTP/2 between workers and server, binary payloads, prepared statements, connection pooling.
+- Tables partitioned (history by run-id hash, timers by due time) so indexes stay small and hot.
+- **Benchmarks are gates:** BenchmarkDotNet suites for replay, append, and task dispatch run in CI and fail on regression.
+
+### Redundant operation (high availability, no duplicate side effects)
+- **Stateless server nodes**, N+1 behind a load balancer, any node can serve any tenant. Rolling deploys with graceful drain.
+- **Postgres HA:** zone-redundant primary with a synchronous standby, point-in-time restore, cross-region async replica for DR.
+- **No single leader:** timer and task-dispatch work is split into shards owned by time-limited leases with
+  **fencing tokens**, so a paused or partitioned node cannot write after losing its lease.
+- **Exactly-once state, at-least-once delivery:** every activity attempt carries an idempotency key
+  (`run_id + activity_seq`); completions for a stale attempt or stale lease are rejected. Starting a workflow with an
+  existing workflow id is deduplicated, not re-run.
+- Optimistic concurrency (`version` column) on runs prevents two workers advancing the same run.
+- Heartbeats + timeouts detect dead workers and reschedule tasks automatically.
+
+### Memory
+- Hot paths allocation-free where practical: `ArrayPool<byte>`, `Span<T>`, `Utf8JsonWriter`/source-generated
+  serializers, no LINQ or closures in dispatch/replay loops.
+- Payloads stored separately from event metadata and loaded lazily; replay touches metadata only unless a step needs
+  its result.
+- Sticky cache is a bounded LRU with a **byte budget**, not an entry count, and evicts under memory pressure.
+- History size caps with **continue-as-new** for long-lived workflows, so no run grows without bound.
+- Streaming reads of history pages instead of materializing full histories.
+- Allocation budgets asserted in benchmarks (`MemoryDiagnoser`), Server GC tuned, `DOTNET_GCHeapHardLimit` set in containers.
