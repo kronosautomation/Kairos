@@ -346,7 +346,7 @@ public sealed class SimWorld
         }
 
         (RunInfo run, string signal) = pending[rng.Next(pending.Count)];
-        await _client.SignalAsync(run.Key!.Value, signal, SignalPayload);
+        await _client.SignalAsync(run.Key!.Value, signal, SignalPayload, signalId: signal);
         run.SignalsSent.Add(signal); // an After-fault throws above, so it is re-sent later (a harmless duplicate)
     }
 
@@ -404,7 +404,7 @@ public sealed class SimWorld
             {
                 if (!r.SignalsSent.Contains(name))
                 {
-                    await _client.SignalAsync(r.Key!.Value, name, SignalPayload);
+                    await _client.SignalAsync(r.Key!.Value, name, SignalPayload, signalId: name);
                     r.SignalsSent.Add(name);
                     return true;
                 }

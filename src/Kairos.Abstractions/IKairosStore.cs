@@ -63,8 +63,11 @@ public interface IKairosStore
     /// <summary>Appends WorkflowStarted and makes the first workflow task runnable. Deduplicates by workflow id.</summary>
     ValueTask<StartRunResult> StartRunAsync(StartRunRequest request, CancellationToken cancellationToken);
 
-    /// <summary>Appends SignalReceived. Returns false when the run is closed or unknown.</summary>
-    ValueTask<bool> SignalRunAsync(RunKey run, string signalName, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>
+    /// Appends SignalReceived. Returns false when the run is closed or unknown. A signal id already delivered to this run is ignored (true),
+    /// so redelivery from a bus or a retrying client cannot signal twice.
+    /// </summary>
+    ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken);
 
     /// <summary>Claims one runnable workflow task for one of <paramref name="buildIds"/> (run pinning), or null.</summary>
     ValueTask<WorkflowTask?> PollWorkflowTaskAsync(

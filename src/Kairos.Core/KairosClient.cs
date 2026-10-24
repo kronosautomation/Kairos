@@ -10,8 +10,9 @@ public sealed class KairosClient
     private readonly Func<Guid> _newRunId;
 
     private readonly PayloadCrypto? _crypto;
+    private readonly Func<string> _newSignalId;
 
-    public KairosClient(IKairosStore store, TimeProvider time, Func<Guid>? newRunId = null, IPayloadProtector? payloadProtector = null)
+    public KairosClient(IKairosStore store, TimeProvider time, Func<Guid>? newRunId = null, IPayloadProtector? payloadProtector = null, Func<string>? newSignalId = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(time);
@@ -19,6 +20,7 @@ public sealed class KairosClient
         _time = time;
         _newRunId = newRunId ?? (() => Guid.CreateVersion7(time.GetUtcNow()));
         _crypto = payloadProtector is null ? null : new PayloadCrypto(payloadProtector);
+        _newSignalId = newSignalId ?? (() => Guid.CreateVersion7(time.GetUtcNow()).ToString("N"));
     }
 
     public async ValueTask<StartRunResult> StartAsync(
@@ -32,12 +34,22 @@ public sealed class KairosClient
         return await _store.StartRunAsync(new StartRunRequest(run, workflowId, workflowType, buildId, sent, _time.GetUtcNow()), cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask<bool> SignalAsync(RunKey run, string signalName, byte[] payload, CancellationToken cancellationToken = default)
+    /// <param name="signalId">
+    /// Identifies this delivery. Retrying with the same id never signals twice; omit it for a fresh id. With encryption on the id also
+    /// authenticates the payload, so two signals of one name cannot be swapped.
+    /// </param>
+    public ValueTask<bool> SignalAsync(RunKey run, string signalName, byte[] payload, CancellationToken cancellationToken) =>
+        SignalAsync(run, signalName, payload, signalId: null, cancellationToken);
+
+    /// <inheritdoc cref="SignalAsync(RunKey, string, byte[], CancellationToken)"/>
+    public async ValueTask<bool> SignalAsync(
+        RunKey run, string signalName, byte[] payload, string? signalId = null, CancellationToken cancellationToken = default)
     {
+        string id = signalId ?? _newSignalId();
         byte[] sent = _crypto is null
             ? payload
-            : await _crypto.SealAsync(run.Scope, run.RunId, "signal:" + signalName, 0, payload, cancellationToken).ConfigureAwait(false);
-        return await _store.SignalRunAsync(run, signalName, sent, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+            : await _crypto.SealAsync(run.Scope, run.RunId, PayloadCrypto.SignalField(signalName, id), 0, payload, cancellationToken).ConfigureAwait(false);
+        return await _store.SignalRunAsync(run, signalName, id, sent, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask<RunState?> GetStateAsync(RunKey run, CancellationToken cancellationToken = default) =>

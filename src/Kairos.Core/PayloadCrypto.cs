@@ -11,6 +11,9 @@ public sealed class PayloadCrypto(IPayloadProtector protector)
 {
     private const string TextPrefix = "enc:";
 
+    /// <summary>The authentication field of a signal payload: name and the client-generated id, so equal-named signals are not interchangeable.</summary>
+    public static string SignalField(string signalName, string signalId) => $"signal:{signalName}:{signalId}";
+
     public static byte[] Context(Guid runId, string field, long id = 0) =>
         Encoding.UTF8.GetBytes($"kairos/v1|{runId:N}|{field}|{id}");
 
@@ -51,10 +54,11 @@ public sealed class PayloadCrypto(IPayloadProtector protector)
                 return TextPrefix + Convert.ToBase64String(await SealAsync(scope, run, field, id, Encoding.UTF8.GetBytes(value), ct).ConfigureAwait(false));
             }
 
-            // Unprefixed text is store-written diagnostics (e.g. a lease-expiry record); everything a worker writes is prefixed.
+            // Everything a worker writes is sealed. Unsealed text is refused: accepting it would let a compromised server author
+            // failure messages that workflow code (and the models behind agent workflows) would trust.
             return value.StartsWith(TextPrefix, StringComparison.Ordinal)
                 ? Encoding.UTF8.GetString(await OpenAsync(scope, run, field, id, FromBase64(value[TextPrefix.Length..]), ct).ConfigureAwait(false))
-                : value;
+                : throw new PayloadProtectionException();
         }
 
         return e switch
@@ -62,9 +66,12 @@ public sealed class PayloadCrypto(IPayloadProtector protector)
             WorkflowStarted s => s with { Input = await Bytes(s.Input, "start", 0).ConfigureAwait(false) },
             ActivityScheduled s => s with { Input = await Bytes(s.Input, "act-in", s.ActivityId).ConfigureAwait(false) },
             ActivityCompleted c => c with { Result = await Bytes(c.Result, "act-out", c.ActivityId).ConfigureAwait(false) },
-            ActivityFailed f when f.ErrorType != StoreRules.LeaseExpiredError =>
+            ActivityFailed f when f.ErrorType == StoreRules.LeaseExpiredError =>
+                // The one record the store writes itself, with fixed text. A different message under this error type is a forgery.
+                open && !string.Equals(f.Message, StoreRules.LeaseExpiredMessage, StringComparison.Ordinal) ? throw new PayloadProtectionException() : f,
+            ActivityFailed f =>
                 f with { Message = await Text(f.Message, $"act-fail-{f.Attempt}", f.ActivityId).ConfigureAwait(false) },
-            SignalReceived s => s with { Payload = await Bytes(s.Payload, "signal:" + s.SignalName, 0).ConfigureAwait(false) },
+            SignalReceived s => s with { Payload = await Bytes(s.Payload, SignalField(s.SignalName, s.SignalId), 0).ConfigureAwait(false) },
             WorkflowCompleted c => c with { Result = await Bytes(c.Result, "result", 0).ConfigureAwait(false) },
             WorkflowFailed f => f with { Message = await Text(f.Message, "fail", 0).ConfigureAwait(false) },
             WorkflowContinued c => c with { Input = await Bytes(c.Input, "continue", 0).ConfigureAwait(false) },

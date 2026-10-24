@@ -135,7 +135,7 @@ public abstract partial class StoreContractTests
             Assert.Equal(RunState.Running, await a.Store.GetRunStateAsync(a.Busy, Ct));
         },
         [nameof(IKairosStore.SignalRunAsync)] = async (a, f) =>
-            Assert.False(await a.Store.SignalRunAsync(In(f, a.Busy), "go", B8("x"), Time.GetUtcNow(), Ct)),
+            Assert.False(await a.Store.SignalRunAsync(In(f, a.Busy), "go", "leak-signal", B8("x"), Time.GetUtcNow(), Ct)),
         [nameof(IKairosStore.PollWorkflowTaskAsync)] = async (a, f) =>
             Assert.Null(await a.Store.PollWorkflowTaskAsync(f, DefaultBuild, Time.GetUtcNow().AddDays(1), TimeSpan.FromMinutes(1), Ct)),
         [nameof(IKairosStore.CompleteWorkflowTaskAsync)] = async (a, f) =>
@@ -224,8 +224,8 @@ public abstract partial class StoreContractTests
         public override ValueTask<IReadOnlyList<HistoryEvent>> GetHistoryAsync(RunKey run, CancellationToken cancellationToken) =>
             base.GetHistoryAsync(new RunKey(A.TenantId, A.NamespaceId, run.RunId), cancellationToken);
 
-        public override ValueTask<bool> SignalRunAsync(RunKey run, string signalName, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
-            base.SignalRunAsync(new RunKey(A.TenantId, A.NamespaceId, run.RunId), signalName, payload, now, cancellationToken);
+        public override ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
+            base.SignalRunAsync(new RunKey(A.TenantId, A.NamespaceId, run.RunId), signalName, signalId, payload, now, cancellationToken);
     }
 
     [Fact]

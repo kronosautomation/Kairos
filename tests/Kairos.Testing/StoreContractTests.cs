@@ -289,7 +289,7 @@ public abstract partial class StoreContractTests
         {
             Assert.Empty(await store.GetHistoryAsync(wrong, Ct));
             Assert.Null(await store.GetRunStateAsync(wrong, Ct));
-            Assert.False(await store.SignalRunAsync(wrong, "x", [], Time.GetUtcNow(), Ct));
+            Assert.False(await store.SignalRunAsync(wrong, "x", "s1", [], Time.GetUtcNow(), Ct));
         }
 
         // A task claimed by A cannot be completed by presenting it under B.
@@ -769,5 +769,54 @@ public abstract partial class StoreContractTests
         AssertChainIntact(history);
         StoreStats stats = await StatsAsync(store, A);
         Assert.Equal((0, 0, 0, 0), (stats.OpenRuns, stats.WorkflowTasks, stats.ActivityTasks, stats.Timers)); // I9: nothing left running
+    }
+
+    // ---- signal ids ---------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_redelivered_signal_id_is_ignored_and_distinct_ids_each_deliver()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "sig-dedup", "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+
+        Assert.True(await store.SignalRunAsync(run, "approve", "id-1", B8("first"), Time.GetUtcNow(), Ct));
+        Assert.True(await store.SignalRunAsync(run, "approve", "id-1", B8("first"), Time.GetUtcNow(), Ct)); // redelivery: accepted, not applied twice
+        Assert.True(await store.SignalRunAsync(run, "approve", "id-2", B8("second"), Time.GetUtcNow(), Ct));
+
+        SignalReceived[] signals = [.. (await client.GetHistoryAsync(run, Ct)).OfType<SignalReceived>()];
+        Assert.Equal(["id-1", "id-2"], signals.Select(x => x.SignalId));
+        Assert.Equal(["first", "second"], signals.Select(x => Str(x.Payload)));
+        AssertChainIntact(await client.GetHistoryAsync(run, Ct));
+    }
+
+    [Fact]
+    public async Task Signal_ids_are_per_run_and_an_empty_id_is_refused()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult one = await client.StartAsync(A, "sig-a", "wf", [], cancellationToken: Ct);
+        StartRunResult two = await client.StartAsync(A, "sig-b", "wf", [], cancellationToken: Ct);
+        var runOne = new RunKey(A.TenantId, A.NamespaceId, one.RunId);
+        var runTwo = new RunKey(A.TenantId, A.NamespaceId, two.RunId);
+
+        Assert.True(await store.SignalRunAsync(runOne, "go", "same-id", [], Time.GetUtcNow(), Ct));
+        Assert.True(await store.SignalRunAsync(runTwo, "go", "same-id", [], Time.GetUtcNow(), Ct));
+
+        Assert.Single((await client.GetHistoryAsync(runOne, Ct)).OfType<SignalReceived>());
+        Assert.Single((await client.GetHistoryAsync(runTwo, Ct)).OfType<SignalReceived>());
+        await Assert.ThrowsAnyAsync<ArgumentException>(async () => await store.SignalRunAsync(runOne, "go", "", [], Time.GetUtcNow(), Ct));
+    }
+
+    [Fact]
+    public async Task A_signal_to_a_closed_run_is_refused_even_with_a_known_id()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "sig-closed", "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        Assert.True(await store.SignalRunAsync(run, "go", "id-1", [], Time.GetUtcNow(), Ct));
+        await store.FailRunAsync(run, "done", "ops", Time.GetUtcNow(), Ct);
+
+        Assert.False(await store.SignalRunAsync(run, "go", "id-1", [], Time.GetUtcNow(), Ct));
+        Assert.False(await store.SignalRunAsync(run, "go", "id-2", [], Time.GetUtcNow(), Ct));
     }
 }

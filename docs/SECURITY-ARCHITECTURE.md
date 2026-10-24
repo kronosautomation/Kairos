@@ -153,3 +153,35 @@ Requirements derived from these:
 
 Sources: Railway preliminary report (blog.railway.com, 22 Oct 2026); TechCrunch, 22 Oct 2026; CBS News, 23 Oct 2026;
 Seoul Economic Daily, 7 Oct 2026; Tech Times, 5 Oct 2026.
+
+## 12. What client-side payload encryption protects, and what it does not
+
+Payload encryption (section 4) protects **content**. A server that is fully compromised (database, process, CI identity) cannot read any
+payload and cannot forge a sealed one; this is tested (`DecryptionBoundaryTests`, `ConfidentialityTests`).
+
+**Protected (sealed with AES-256-GCM, bound to tenant, namespace, run, field and id):** workflow input and result, activity input and
+result, signal payloads, failure messages (the only unsealed failure text accepted is the store's own fixed lease-expiry record), and
+the carried input of continue-as-new. Each signal also has a client-generated id, so two signals of one name are not interchangeable and
+a redelivered id is ignored.
+
+**Not protected, by design (readable metadata):** workflow, activity and signal *names*, error *types*, event types and sequence,
+timer durations, timestamps, run and workflow ids, sizes of payloads, and the tenant structure. Do not put secrets or personal data in
+names or ids; put them in payloads.
+
+**What a compromised server can still do** (integrity of content holds, integrity of *scheduling* does not):
+- withhold, delay or reorder events, or stop answering (denial of service);
+- fire timers early or late, or refuse to fire them;
+- fabricate events that carry no sealed payload (for example a timer firing, an activity failure of the store-written lease-expiry kind,
+  or a termination), and drop events from the tail of a run (the hash chain proves order and integrity of what is present, not completeness);
+- observe traffic patterns: which workflows run, when, how often, and how large their payloads are.
+It cannot make a workflow read data it did not write, and replaying a sealed value into another place fails closed.
+
+**Revocation window.** After a customer revokes or rotates a master key in their KMS:
+- a process started afterwards can open nothing and seal nothing;
+- a running worker stops *opening* previously cached keys after `UnwrappedKeyTtl` (default 15 minutes);
+- a running worker stops *sealing* with its current data key after `DataKeyLifetime` (default 1 hour), then fails closed;
+- keys are wiped from memory when replaced or evicted. Set shorter values for stricter response; the cost is more key-provider calls.
+
+If event authenticity against a malicious server matters (regulated settings), the standalone server (Milestone 7) gets an
+event-authenticity design: commands signed by the worker with a customer-held key, verified before replay.
+

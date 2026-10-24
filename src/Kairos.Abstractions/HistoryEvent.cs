@@ -128,6 +128,12 @@ public sealed record SignalReceived(
     string SignalName, byte[] Payload) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.SignalReceived;
+
+    /// <summary>
+    /// Client-generated id of this delivery. It authenticates the payload (equal-named signals are not interchangeable) and lets the
+    /// store ignore a redelivered signal. Empty only in histories written before ids existed.
+    /// </summary>
+    public string SignalId { get; init; } = "";
 }
 
 public sealed record WorkflowCompleted(

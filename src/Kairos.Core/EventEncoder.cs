@@ -25,7 +25,7 @@ internal static class EventEncoder
         TimerFired => 4,
         WorkflowTaskCompleted => 0,
         RunTerminated x => StringMax(x.Reason),
-        SignalReceived x => StringMax(x.SignalName) + BytesMax(x.Payload),
+        SignalReceived x => StringMax(x.SignalName) + BytesMax(x.Payload) + (x.SignalId.Length == 0 ? 0 : StringMax(x.SignalId)),
         WorkflowCompleted x => BytesMax(x.Result),
         WorkflowFailed x => StringMax(x.ErrorType) + StringMax(x.Message),
         _ => throw new ArgumentException($"Unknown history event type {e.GetType().Name}.", nameof(e)),
@@ -99,6 +99,11 @@ internal static class EventEncoder
             case SignalReceived x:
                 w.WriteString(x.SignalName);
                 w.WriteBytes(x.Payload);
+                if (x.SignalId.Length > 0)
+                {
+                    w.WriteString(x.SignalId); // trailing and optional: histories written before signal ids keep their exact encoding and hashes
+                }
+
                 break;
             case WorkflowCompleted x:
                 w.WriteBytes(x.Result);

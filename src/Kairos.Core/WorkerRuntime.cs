@@ -185,6 +185,11 @@ public sealed class WorkerRuntime
             // OutOfMemoryException is deliberately not recorded: it means the process is dying, the lease expires, and the
             // reaper counts the attempt (a poison task cannot loop forever, see StoreRules / ReapExpiredLeasesAsync).
             string errorType = ex.GetType().Name;
+            if (errorType == StoreRules.LeaseExpiredError)
+            {
+                errorType += "Exception"; // that name is reserved for the record the store writes itself
+            }
+
             bool retry = ex is not ActivityNotRegisteredException && task.RetryPolicy.ShouldRetry(task.Attempt, errorType);
             DateTimeOffset stamp = _time.GetUtcNow();
             outcome = new ActivityFailed(r.TenantId, r.NamespaceId, r.RunId, 0, stamp, task.ActivityId, task.Attempt, errorType, ex.Message, retry);

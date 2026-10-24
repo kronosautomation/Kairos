@@ -95,8 +95,8 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
     public ValueTask<StartRunResult> StartRunAsync(StartRunRequest request, CancellationToken cancellationToken) =>
         Faulty(nameof(StartRunAsync), () => inner.StartRunAsync(request, cancellationToken));
 
-    public ValueTask<bool> SignalRunAsync(RunKey run, string signalName, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
-        Faulty(nameof(SignalRunAsync), () => inner.SignalRunAsync(run, signalName, payload, now, cancellationToken));
+    public ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Faulty(nameof(SignalRunAsync), () => inner.SignalRunAsync(run, signalName, signalId, payload, now, cancellationToken));
 
     public ValueTask<WorkflowTask?> PollWorkflowTaskAsync(
         TenantScope scope, IReadOnlyCollection<string> buildIds, DateTimeOffset now, TimeSpan lease, CancellationToken cancellationToken) =>

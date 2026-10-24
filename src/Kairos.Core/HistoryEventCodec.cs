@@ -60,7 +60,7 @@ public static class HistoryEventCodec
             HistoryEventType.RunTerminated => new RunTerminated(tenant, ns, run, seq, ts, r.ReadString()),
             HistoryEventType.WorkflowTaskCompleted => new WorkflowTaskCompleted(tenant, ns, run, seq, ts),
             HistoryEventType.TimerFired => new TimerFired(tenant, ns, run, seq, ts, r.ReadInt32()),
-            HistoryEventType.SignalReceived => new SignalReceived(tenant, ns, run, seq, ts, r.ReadString(), r.ReadBytes()),
+            HistoryEventType.SignalReceived => ReadSignal(ref r, tenant, ns, run, seq, ts),
             HistoryEventType.WorkflowCompleted => new WorkflowCompleted(tenant, ns, run, seq, ts, r.ReadBytes()),
             HistoryEventType.WorkflowFailed => new WorkflowFailed(tenant, ns, run, seq, ts, r.ReadString(), r.ReadString()),
             _ => throw new FormatException($"Unknown history event type {(byte)type}."),
@@ -72,6 +72,23 @@ public static class HistoryEventCodec
         }
 
         return e with { PrevHash = prevHash, Hash = hash };
+    }
+
+    private static SignalReceived ReadSignal(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)
+    {
+        string name = r.ReadString();
+        byte[] payload = r.ReadBytes();
+        string id = "";
+        if (!r.AtEnd)
+        {
+            id = r.ReadString();
+            if (id.Length == 0)
+            {
+                throw new FormatException("Non-canonical signal id."); // an empty id is encoded by leaving it out
+            }
+        }
+
+        return new SignalReceived(tenant, ns, run, seq, ts, name, payload) { SignalId = id };
     }
 
     private static WorkflowStarted ReadStarted(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)

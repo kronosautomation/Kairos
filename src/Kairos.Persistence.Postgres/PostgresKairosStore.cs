@@ -101,8 +101,9 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         }).ConfigureAwait(false);
     }
 
-    public async ValueTask<bool> SignalRunAsync(RunKey run, string signalName, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken)
+    public async ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrEmpty(signalId);
         return await InTransaction(run.Scope, async (conn, tx) =>
         {
             RunHead? head = await LockRunAsync(conn, tx, run, cancellationToken).ConfigureAwait(false);
@@ -111,7 +112,20 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 return false;
             }
 
-            var template = new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload);
+            await using (var claim = new NpgsqlCommand(
+                "INSERT INTO kairos.signal_ids (tenant_id, namespace_id, run_id, signal_id) VALUES (@t, @n, @r, @id) ON CONFLICT DO NOTHING", conn, tx))
+            {
+                claim.Parameters.AddWithValue("t", run.TenantId);
+                claim.Parameters.AddWithValue("n", run.NamespaceId);
+                claim.Parameters.AddWithValue("r", run.RunId);
+                claim.Parameters.AddWithValue("id", signalId);
+                if (await claim.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0)
+                {
+                    return true; // already delivered: nothing more to do
+                }
+            }
+
+            var template = new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId };
             await AppendAsync(conn, tx, run, head, [template], cancellationToken).ConfigureAwait(false);
             await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false);
             await NotifyAsync(conn, tx, run.Scope, cancellationToken).ConfigureAwait(false);
@@ -852,7 +866,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             HistoryEvent failed = await AppendAsync(
                 conn, tx, run, head,
                 [new ActivityFailed(scope.TenantId, scope.NamespaceId, runId, 0, now, activityId, attempt,
-                    StoreRules.LeaseExpiredError, "The attempt lease expired before it completed.", retry)],
+                    StoreRules.LeaseExpiredError, StoreRules.LeaseExpiredMessage, retry)],
                 ct).ConfigureAwait(false);
             heads[runId] = head with { LastSeq = failed.Sequence, LastHash = failed.Hash };
 

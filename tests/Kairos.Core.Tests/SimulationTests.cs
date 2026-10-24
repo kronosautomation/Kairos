@@ -126,7 +126,7 @@ public sealed class SimulationTests
 
     private sealed class LossySignalStore(IKairosStore inner) : ForwardingStore(inner)
     {
-        public override ValueTask<bool> SignalRunAsync(RunKey run, string signalName, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
+        public override ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
             ValueTask.FromResult(true); // "ok" -- and nothing happened
     }
 

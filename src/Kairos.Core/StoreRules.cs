@@ -13,6 +13,9 @@ public static class StoreRules
     /// <summary>Error type recorded when a lease expires without a completion (the worker died, hung, or was partitioned).</summary>
     public const string LeaseExpiredError = "LeaseExpired";
 
+    /// <summary>The fixed text of the lease-expiry record. It is the only failure text the store writes, and the only one accepted unsealed.</summary>
+    public const string LeaseExpiredMessage = "The attempt lease expired before it completed.";
+
     /// <summary>A workflow task whose lease expires this many times is parked as stuck instead of being offered forever.</summary>
     public const int MaxWorkflowTaskAttempts = 10;
 

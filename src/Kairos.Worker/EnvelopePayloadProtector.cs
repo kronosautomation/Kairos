@@ -1,8 +1,31 @@
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace Kairos.Worker;
+
+/// <summary>Limits that decide how long a process may keep using a data key after the key provider stops allowing it.</summary>
+public sealed class EnvelopeOptions
+{
+    /// <summary>Payloads sealed under one data key before a new one is made (random 96-bit GCM nonces stay far below their safe bound).</summary>
+    public int MaxUsesPerDataKey { get; init; } = 10_000;
+
+    /// <summary>
+    /// How long one data key stays in use for sealing, however quiet the worker. After this, the next payload needs a fresh wrap from the
+    /// key provider, so a revoked or rotated master key stops being used for new payloads within this time.
+    /// </summary>
+    public TimeSpan DataKeyLifetime { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// How long an unwrapped data key stays cached for opening. After this the provider is asked again, so revoking the customer's key
+    /// stops a running worker from opening anything not already open within this time (default 15 minutes).
+    /// </summary>
+    public TimeSpan UnwrappedKeyTtl { get; init; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>Most unwrapped data keys cached at once.</summary>
+    public int MaxCachedKeys { get; init; } = 256;
+}
 
 /// <summary>
 /// Client-side envelope encryption (docs/SECURITY-ARCHITECTURE.md section 4). Payloads are sealed with AES-256-GCM under a data key; the
@@ -10,57 +33,111 @@ namespace Kairos.Worker;
 /// never sees a key. The authenticated data binds each payload to its tenant, namespace and caller-supplied context (run, field, id), so a
 /// ciphertext cannot be replayed into another run, field or tenant.
 /// <para>
-/// To avoid a key-provider round trip per payload, one data key per scope is reused for up to <see cref="MaxUsesPerDataKey"/> payloads
-/// (random 96-bit nonces stay far below the GCM safety bound at that count), and unwrapped keys are kept in a small bounded cache.
+/// Data keys are reused to avoid a provider round trip per payload, but only briefly (see <see cref="EnvelopeOptions"/>), and they are
+/// wiped from memory when replaced or evicted (never while an operation is still using them).
 /// </para>
 /// </summary>
-public sealed class EnvelopePayloadProtector : IPayloadProtector
+public sealed class EnvelopePayloadProtector : IPayloadProtector, IDisposable
 {
-    public const int MaxUsesPerDataKey = 10_000;
-    public const int MaxCachedUnwrappedKeys = 256;
-
     private const byte FormatVersion = 1;
     private const int NonceSize = 12;
     private const int TagSize = 16;
     private const int DataKeySize = 32;
 
     private readonly IKeyProvider _keys;
+    private readonly TimeProvider _time;
+    private readonly EnvelopeOptions _options;
     private readonly object _gate = new();
     private readonly Dictionary<TenantScope, ActiveKey> _active = [];
-    private readonly Dictionary<string, byte[]> _unwrapped = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, KeyHolder> _unwrapped = new(StringComparer.Ordinal);
 
-    public EnvelopePayloadProtector(IKeyProvider keys)
+    public EnvelopePayloadProtector(IKeyProvider keys, TimeProvider? time = null, EnvelopeOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(keys);
         _keys = keys;
+        _time = time ?? TimeProvider.System;
+        _options = options ?? new EnvelopeOptions();
     }
 
     public async ValueTask<byte[]> ProtectAsync(TenantScope scope, ReadOnlyMemory<byte> plaintext, ReadOnlyMemory<byte> context, CancellationToken cancellationToken)
     {
-        ActiveKey active = await GetActiveKeyAsync(scope, cancellationToken).ConfigureAwait(false);
-        byte[] keyId = Encoding.UTF8.GetBytes(active.Wrapped.KeyId);
-        byte[] wrapped = active.Wrapped.Ciphertext;
+        while (true)
+        {
+            ActiveKey active = await GetActiveKeyAsync(scope, cancellationToken).ConfigureAwait(false);
+            if (!active.Holder.TryRent(out byte[]? dataKey))
+            {
+                continue; // retired between lookup and use; make a fresh one
+            }
 
-        int headerLength = 1 + 2 + keyId.Length + 2 + wrapped.Length;
-        byte[] output = new byte[headerLength + NonceSize + TagSize + plaintext.Length];
-        output[0] = FormatVersion;
-        BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(1), checked((ushort)keyId.Length));
-        keyId.CopyTo(output, 3);
-        BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(3 + keyId.Length), checked((ushort)wrapped.Length));
-        wrapped.CopyTo(output, 5 + keyId.Length);
-
-        Span<byte> nonce = output.AsSpan(headerLength, NonceSize);
-        RandomNumberGenerator.Fill(nonce);
-        using var aes = new AesGcm(active.DataKey, TagSize);
-        aes.Encrypt(nonce, plaintext.Span, output.AsSpan(headerLength + NonceSize + TagSize), output.AsSpan(headerLength + NonceSize, TagSize), Aad(scope, context.Span));
-        return output;
+            try
+            {
+                return Seal(scope, active.Wrapped, dataKey, plaintext.Span, context.Span);
+            }
+            finally
+            {
+                active.Holder.Return();
+            }
+        }
     }
 
     public async ValueTask<byte[]> UnprotectAsync(TenantScope scope, ReadOnlyMemory<byte> protectedPayload, ReadOnlyMemory<byte> context, CancellationToken cancellationToken)
     {
         (WrappedKey wrapped, int headerLength) = ParseHeader(protectedPayload.Span);
-        byte[] dataKey = await GetDataKeyAsync(scope, wrapped, cancellationToken).ConfigureAwait(false);
-        return Decrypt(dataKey, protectedPayload.Span, headerLength, Aad(scope, context.Span));
+        while (true)
+        {
+            KeyHolder holder = await GetDataKeyAsync(scope, wrapped, cancellationToken).ConfigureAwait(false);
+            if (!holder.TryRent(out byte[]? dataKey))
+            {
+                continue;
+            }
+
+            try
+            {
+                return Decrypt(dataKey, protectedPayload.Span, headerLength, Aad(scope, context.Span));
+            }
+            finally
+            {
+                holder.Return();
+            }
+        }
+    }
+
+    /// <summary>Wipes every key held in memory (once nothing is using them).</summary>
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            foreach (ActiveKey active in _active.Values)
+            {
+                active.Holder.Retire();
+            }
+
+            foreach (KeyHolder holder in _unwrapped.Values)
+            {
+                holder.Retire();
+            }
+
+            _active.Clear();
+            _unwrapped.Clear();
+        }
+    }
+
+    private static byte[] Seal(TenantScope scope, WrappedKey wrapped, byte[] dataKey, ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> context)
+    {
+        byte[] keyId = Encoding.UTF8.GetBytes(wrapped.KeyId);
+        int headerLength = 1 + 2 + keyId.Length + 2 + wrapped.Ciphertext.Length;
+        byte[] output = new byte[headerLength + NonceSize + TagSize + plaintext.Length];
+        output[0] = FormatVersion;
+        BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(1), checked((ushort)keyId.Length));
+        keyId.CopyTo(output, 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(3 + keyId.Length), checked((ushort)wrapped.Ciphertext.Length));
+        wrapped.Ciphertext.CopyTo(output, 5 + keyId.Length);
+
+        Span<byte> nonce = output.AsSpan(headerLength, NonceSize);
+        RandomNumberGenerator.Fill(nonce);
+        using var aes = new AesGcm(dataKey, TagSize);
+        aes.Encrypt(nonce, plaintext, output.AsSpan(headerLength + NonceSize + TagSize), output.AsSpan(headerLength + NonceSize, TagSize), Aad(scope, context));
+        return output;
     }
 
     private static (WrappedKey Wrapped, int HeaderLength) ParseHeader(ReadOnlySpan<byte> blob)
@@ -114,62 +191,106 @@ public sealed class EnvelopePayloadProtector : IPayloadProtector
 
     private async ValueTask<ActiveKey> GetActiveKeyAsync(TenantScope scope, CancellationToken ct)
     {
+        DateTimeOffset now = _time.GetUtcNow();
         lock (_gate)
         {
-            if (_active.TryGetValue(scope, out ActiveKey? current) && current.Uses < MaxUsesPerDataKey)
+            if (_active.TryGetValue(scope, out ActiveKey? current))
             {
-                current.Uses++;
-                return current;
+                if (current.Uses < _options.MaxUsesPerDataKey && now < current.CreatedAt + _options.DataKeyLifetime)
+                {
+                    current.Uses++;
+                    return current;
+                }
+
+                current.Holder.Retire(); // used up or too old: wiped as soon as nothing is mid-operation with it
+                _active.Remove(scope);
             }
         }
 
         byte[] dataKey = RandomNumberGenerator.GetBytes(DataKeySize);
-        WrappedKey wrapped = await _keys.WrapAsync(dataKey, ScopeContext(scope), ct).ConfigureAwait(false);
-        var fresh = new ActiveKey(dataKey, wrapped) { Uses = 1 };
+        WrappedKey wrapped;
+        try
+        {
+            wrapped = await _keys.WrapAsync(dataKey, ScopeContext(scope), ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(dataKey);
+            throw;
+        }
+
+        // Sealing and opening use separate copies: the sealing key lives for DataKeyLifetime, the opening copy only for UnwrappedKeyTtl.
+        var fresh = new ActiveKey(new KeyHolder(dataKey, now + _options.DataKeyLifetime), wrapped, now) { Uses = 1 };
+        var opening = new KeyHolder(dataKey.ToArray(), now + _options.UnwrappedKeyTtl);
         lock (_gate)
         {
+            if (_active.Remove(scope, out ActiveKey? raced))
+            {
+                raced.Holder.Retire();
+            }
+
             _active[scope] = fresh;
-            Remember(scope, wrapped, dataKey);
+            Remember(CacheKey(scope, wrapped), opening);
         }
 
         return fresh;
     }
 
-    private async ValueTask<byte[]> GetDataKeyAsync(TenantScope scope, WrappedKey wrapped, CancellationToken ct)
+    private async ValueTask<KeyHolder> GetDataKeyAsync(TenantScope scope, WrappedKey wrapped, CancellationToken ct)
     {
         string cacheKey = CacheKey(scope, wrapped);
+        DateTimeOffset now = _time.GetUtcNow();
         lock (_gate)
         {
-            if (_unwrapped.TryGetValue(cacheKey, out byte[]? cached))
+            if (_unwrapped.TryGetValue(cacheKey, out KeyHolder? cached))
             {
-                return cached;
+                if (now < cached.ExpiresAt)
+                {
+                    return cached;
+                }
+
+                cached.Retire(); // past its TTL: forget it, so the provider is asked again (and can say no)
+                _unwrapped.Remove(cacheKey);
             }
         }
 
+        byte[] dataKey;
         try
         {
-            byte[] dataKey = await _keys.UnwrapAsync(wrapped, ScopeContext(scope), ct).ConfigureAwait(false);
-            lock (_gate)
-            {
-                Remember(scope, wrapped, dataKey);
-            }
-
-            return dataKey;
+            dataKey = await _keys.UnwrapAsync(wrapped, ScopeContext(scope), ct).ConfigureAwait(false);
         }
         catch (KeyUnwrapException ex)
         {
             throw new PayloadProtectionException("The payload could not be opened.", ex);
         }
-    }
 
-    private void Remember(TenantScope scope, WrappedKey wrapped, byte[] dataKey)
-    {
-        if (_unwrapped.Count >= MaxCachedUnwrappedKeys)
+        var holder = new KeyHolder(dataKey, now + _options.UnwrappedKeyTtl);
+        lock (_gate)
         {
-            _unwrapped.Clear(); // bounded: re-unwrapping is only a provider call
+            Remember(cacheKey, holder);
         }
 
-        _unwrapped[CacheKey(scope, wrapped)] = dataKey;
+        return holder;
+    }
+
+    private void Remember(string cacheKey, KeyHolder holder)
+    {
+        if (_unwrapped.Remove(cacheKey, out KeyHolder? replaced) && !ReferenceEquals(replaced, holder))
+        {
+            replaced.Retire();
+        }
+
+        if (_unwrapped.Count >= _options.MaxCachedKeys)
+        {
+            foreach (KeyHolder old in _unwrapped.Values)
+            {
+                old.Retire(); // bounded cache: dropping a key only costs a provider call later, and the wipe waits for any user
+            }
+
+            _unwrapped.Clear();
+        }
+
+        _unwrapped[cacheKey] = holder;
     }
 
     private static string CacheKey(TenantScope scope, WrappedKey wrapped) =>
@@ -191,12 +312,77 @@ public sealed class EnvelopePayloadProtector : IPayloadProtector
         return aad;
     }
 
-    private sealed class ActiveKey(byte[] dataKey, WrappedKey wrapped)
+    private sealed class ActiveKey(KeyHolder holder, WrappedKey wrapped, DateTimeOffset createdAt)
     {
-        public byte[] DataKey { get; } = dataKey;
+        public KeyHolder Holder { get; } = holder;
 
         public WrappedKey Wrapped { get; } = wrapped;
 
+        public DateTimeOffset CreatedAt { get; } = createdAt;
+
         public int Uses { get; set; }
+    }
+
+    /// <summary>
+    /// A data key that is zeroed when retired, but never while an operation still holds it: retiring only marks it; the wipe happens when
+    /// the last user returns it (or immediately if nobody is using it).
+    /// </summary>
+    private sealed class KeyHolder(byte[] key, DateTimeOffset expiresAt)
+    {
+        private readonly object _lock = new();
+        private int _users;
+        private bool _retired;
+
+        public DateTimeOffset ExpiresAt { get; } = expiresAt;
+
+        public bool IsRetired
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _retired;
+                }
+            }
+        }
+
+        public bool TryRent([NotNullWhen(true)] out byte[]? dataKey)
+        {
+            lock (_lock)
+            {
+                if (_retired)
+                {
+                    dataKey = null;
+                    return false;
+                }
+
+                _users++;
+                dataKey = key;
+                return true;
+            }
+        }
+
+        public void Return()
+        {
+            lock (_lock)
+            {
+                if (--_users == 0 && _retired)
+                {
+                    CryptographicOperations.ZeroMemory(key);
+                }
+            }
+        }
+
+        public void Retire()
+        {
+            lock (_lock)
+            {
+                _retired = true;
+                if (_users == 0)
+                {
+                    CryptographicOperations.ZeroMemory(key);
+                }
+            }
+        }
     }
 }

@@ -6,8 +6,8 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask<StartRunResult> StartRunAsync(StartRunRequest request, CancellationToken cancellationToken) =>
         inner.StartRunAsync(request, cancellationToken);
 
-    public virtual ValueTask<bool> SignalRunAsync(RunKey run, string signalName, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
-        inner.SignalRunAsync(run, signalName, payload, now, cancellationToken);
+    public virtual ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
+        inner.SignalRunAsync(run, signalName, signalId, payload, now, cancellationToken);
 
     public virtual ValueTask<WorkflowTask?> PollWorkflowTaskAsync(
         TenantScope scope, IReadOnlyCollection<string> buildIds, DateTimeOffset now, TimeSpan lease, CancellationToken cancellationToken) =>

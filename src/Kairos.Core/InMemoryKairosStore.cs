@@ -35,8 +35,9 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
-    public ValueTask<bool> SignalRunAsync(RunKey run, string signalName, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken)
+    public ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrEmpty(signalId);
         lock (_gate)
         {
             if (FindRun(run) is not { State: RunState.Running } r)
@@ -44,7 +45,12 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
                 return ValueTask.FromResult(false);
             }
 
-            Append(r, new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload));
+            if (!r.SignalIds.Add(signalId))
+            {
+                return ValueTask.FromResult(true); // already delivered
+            }
+
+            Append(r, new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId });
             EnsureWorkflowTask(Scope(run.Scope, create: false)!, r, now);
             return ValueTask.FromResult(true);
         }
@@ -326,7 +332,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
                 bool retry = s.RetryPolicy.ShouldRetry(row.Attempt, StoreRules.LeaseExpiredError);
                 Append(run, new ActivityFailed(
                     run.Key.TenantId, run.Key.NamespaceId, run.Key.RunId, 0, now, s.ActivityId, row.Attempt,
-                    StoreRules.LeaseExpiredError, "The attempt lease expired before it completed.", retry));
+                    StoreRules.LeaseExpiredError, StoreRules.LeaseExpiredMessage, retry));
                 if (retry)
                 {
                     row.Leased = false;
@@ -561,7 +567,11 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
                         startedTimers.Remove(t.TimerId);
                         newExternal = true;
                         break;
-                    case SignalReceived or WorkflowStarted:
+                    case SignalReceived signalEvent:
+                        run.SignalIds.Add(signalEvent.SignalId);
+                        newExternal = true;
+                        break;
+                    case WorkflowStarted:
                         newExternal = true;
                         break;
                     case WorkflowTaskCompleted:
@@ -759,6 +769,8 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         public RunKey Key { get; } = key;
 
         public string WorkflowId { get; init; } = "";
+
+        public HashSet<string> SignalIds { get; } = new(StringComparer.Ordinal);
 
         public string WorkflowType { get; } = workflowType;
 
