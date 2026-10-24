@@ -241,6 +241,7 @@ public sealed class WorkerRuntime
         RecordPatchCommand c => new PatchMarker(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.PatchId),
         CompleteWorkflowCommand c => new WorkflowCompleted(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.Result),
         FailWorkflowCommand c => new WorkflowFailed(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.ErrorType, c.Message),
+        ContinueAsNewCommand c => new WorkflowContinued(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.NewRunId, c.Input),
         _ => throw new InvalidOperationException($"Unknown command {command.GetType().Name}."),
     };
 

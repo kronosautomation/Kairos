@@ -10,10 +10,10 @@ public sealed class PostgresStoreContractTests(PostgresFixture fixture) : StoreC
 {
     private TestDatabase? _db;
 
-    protected override async Task<IKairosStore> CreateStoreAsync()
+    protected override async Task<IKairosStore> CreateStoreAsync(StoreLimits limits)
     {
         _db = await fixture.NewDatabaseAsync();
-        return _db.NewStore();
+        return _db.NewStore(limits);
     }
 
     protected override async Task<StoreStats> StatsAsync(IKairosStore store, TenantScope scope) =>

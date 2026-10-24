@@ -112,7 +112,8 @@ public sealed class TestDatabase(string name, PostgresFixture fixture) : IAsyncD
     public NpgsqlDataSource Migrator => For(PostgresProvisioning.MigratorRole);
 
     /// <summary>Virtual-time store: leases follow the caller's clock so tests and simulations control expiry.</summary>
-    public PostgresKairosStore NewStore() => new(DataPlane, new PostgresStoreOptions { LeaseClock = LeaseClock.Caller });
+    public PostgresKairosStore NewStore(StoreLimits? limits = null) =>
+        new(DataPlane, new PostgresStoreOptions { LeaseClock = LeaseClock.Caller, Limits = limits ?? new StoreLimits() });
 
     /// <summary>Production behaviour: leases follow the database clock.</summary>
     public PostgresKairosStore NewDatabaseClockStore() => new(DataPlane, new PostgresStoreOptions { LeaseClock = LeaseClock.Database });

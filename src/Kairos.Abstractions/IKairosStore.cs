@@ -13,6 +13,9 @@ public enum RunState
     Running,
     Completed,
     Failed,
+
+    /// <summary>Handed over to a fresh run of the same workflow id (see <see cref="IKairosStore.GetCurrentRunAsync"/>).</summary>
+    ContinuedAsNew,
 }
 
 public enum CompletionOutcome
@@ -125,6 +128,9 @@ public interface IKairosStore
     ValueTask<int> FireDueTimersAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken);
 
     ValueTask<IReadOnlyList<HistoryEvent>> GetHistoryAsync(RunKey run, CancellationToken cancellationToken);
+
+    /// <summary>The latest run in the continue-as-new chain of <paramref name="workflowId"/>, or null.</summary>
+    ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken);
 
     /// <summary>Null when the run does not exist in this scope.</summary>
     ValueTask<RunState?> GetRunStateAsync(RunKey run, CancellationToken cancellationToken);

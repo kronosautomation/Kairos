@@ -9,6 +9,8 @@ public sealed record StartTimerCommand(int TimerId, TimeSpan Duration) : Workflo
 
 public sealed record RecordPatchCommand(string PatchId) : WorkflowCommand;
 
+public sealed record ContinueAsNewCommand(Guid NewRunId, byte[] Input) : WorkflowCommand;
+
 public sealed record CompleteWorkflowCommand(byte[] Result) : WorkflowCommand;
 
 public sealed record FailWorkflowCommand(string ErrorType, string Message) : WorkflowCommand;

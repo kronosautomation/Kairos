@@ -49,7 +49,8 @@ public static class HistoryEventCodec
 
         HistoryEvent e = type switch
         {
-            HistoryEventType.WorkflowStarted => new WorkflowStarted(tenant, ns, run, seq, ts, r.ReadString(), r.ReadString(), r.ReadBytes()),
+            HistoryEventType.WorkflowStarted => ReadStarted(ref r, tenant, ns, run, seq, ts),
+            HistoryEventType.WorkflowContinued => new WorkflowContinued(tenant, ns, run, seq, ts, r.ReadGuid(), r.ReadBytes()),
             HistoryEventType.PatchMarker => new PatchMarker(tenant, ns, run, seq, ts, r.ReadString()),
             HistoryEventType.ActivityScheduled => ReadScheduled(ref r, tenant, ns, run, seq, ts),
             HistoryEventType.ActivityCompleted => new ActivityCompleted(tenant, ns, run, seq, ts, r.ReadInt32(), r.ReadBytes()),
@@ -71,6 +72,14 @@ public static class HistoryEventCodec
         }
 
         return e with { PrevHash = prevHash, Hash = hash };
+    }
+
+    private static WorkflowStarted ReadStarted(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)
+    {
+        string type = r.ReadString();
+        string build = r.ReadString();
+        byte[] input = r.ReadBytes();
+        return new WorkflowStarted(tenant, ns, run, seq, ts, type, build, input) { PreviousRunId = r.ReadGuid() };
     }
 
     private static ActivityScheduled ReadScheduled(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)

@@ -15,8 +15,10 @@ public abstract class StoreContractTests
 
     protected VirtualTimeProvider Time { get; } = new();
 
-    /// <summary>A store with no data in it. Called once per test.</summary>
-    protected abstract Task<IKairosStore> CreateStoreAsync();
+    protected Task<IKairosStore> CreateStoreAsync() => CreateStoreAsync(new StoreLimits());
+
+    /// <summary>A store with no data in it and the given history cap. Called once per test.</summary>
+    protected abstract Task<IKairosStore> CreateStoreAsync(StoreLimits limits);
 
     /// <summary>Resource counters for the scope (the stuck-task checks).</summary>
     protected abstract Task<StoreStats> StatsAsync(IKairosStore store, TenantScope scope);
@@ -658,5 +660,133 @@ public abstract class StoreContractTests
         Assert.Equal((0, 0, 0, 0), (after.ActivityTasks, after.Timers, after.WorkflowTasks, after.OpenRuns));
         Assert.Null(await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct));
         Assert.Equal(0, await store.FireDueTimersAsync(A, Time.GetUtcNow().AddDays(1), Ct));
+    }
+
+    // ---- continue-as-new and the history cap ---------------------------------------------------------------------------
+
+    /// <summary>Sums 1..n, one activity per number, handing over to a fresh run whenever the history reaches <paramref name="handoverAt"/> events.</summary>
+    private static WorkflowFunc Summer(int handoverAt) => async (ctx, input) =>
+    {
+        int next = BitConverter.ToInt32(input, 0), total = BitConverter.ToInt32(input, 4), last = BitConverter.ToInt32(input, 8);
+        while (next <= last)
+        {
+            if (ctx.HistoryLength >= handoverAt)
+            {
+                throw ctx.ContinueAsNew(Pack(next, total, last));
+            }
+
+            byte[] r = await ctx.ExecuteActivityAsync("echo", BitConverter.GetBytes(next));
+            total += BitConverter.ToInt32(r, 0);
+            next++;
+        }
+
+        return BitConverter.GetBytes(total);
+    };
+
+    private static byte[] Pack(params int[] values) => [.. values.SelectMany(BitConverter.GetBytes)];
+
+    private static byte[] SumInput(int first, int last) => Pack(first, 0, last);
+
+    [Fact]
+    public async Task Continue_as_new_hands_over_to_a_fresh_run_and_keeps_every_history_short()
+    {
+        const int Cap = 24;
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "summer", "wf", SumInput(1, 40), cancellationToken: Ct);
+        await DriveAsync(store, A, Workflows("default", Summer(Cap - 6)), Activities(), maxSteps: 2000);
+
+        // Follow the chain from the first run.
+        var chain = new List<IReadOnlyList<HistoryEvent>>();
+        var key = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        while (true)
+        {
+            IReadOnlyList<HistoryEvent> history = await client.GetHistoryAsync(key, Ct);
+            AssertChainIntact(history);
+            Assert.True(history.Count <= Cap, $"Run {chain.Count} grew to {history.Count} events (cap {Cap}).");
+            chain.Add(history);
+            if (history[^1] is not WorkflowContinued next)
+            {
+                break;
+            }
+
+            Assert.Equal(RunState.ContinuedAsNew, await client.GetStateAsync(key, Ct));
+            key = new RunKey(A.TenantId, A.NamespaceId, next.NewRunId);
+            Assert.Equal(chain[^1][0].RunId, ((WorkflowStarted)(await client.GetHistoryAsync(key, Ct))[0]).PreviousRunId); // linked both ways
+        }
+
+        Assert.True(chain.Count >= 4, $"Expected the work to span several runs, got {chain.Count}.");
+        Assert.Equal(RunState.Completed, await client.GetStateAsync(key, Ct));
+        Assert.Equal(40 * 41 / 2, BitConverter.ToInt32(((WorkflowCompleted)chain[^1][^1]).Result, 0)); // state carried through every hand-over
+
+        // The business id now means the latest run; starting it again is a duplicate, not a new chain.
+        Assert.Equal(key, await store.GetCurrentRunAsync(A, "summer", Ct));
+        StartRunResult again = await client.StartAsync(A, "summer", "wf", SumInput(1, 1), cancellationToken: Ct);
+        Assert.False(again.Started);
+        Assert.Equal(key.RunId, again.RunId);
+
+        // Old runs replay cleanly as closed histories.
+        ReplayResult replay = WorkflowReplayer.Replay(Summer(Cap - 6), chain[0]);
+        Assert.True(replay.IsClosed);
+        Assert.Empty(replay.NewCommands);
+        StoreStats stats = await StatsAsync(store, A);
+        Assert.Equal((0, 0, 0, 0), (stats.OpenRuns, stats.WorkflowTasks, stats.ActivityTasks, stats.Timers));
+    }
+
+    [Fact]
+    public async Task Continuing_discards_the_old_runs_work_and_signals_reach_only_the_new_run()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "handover", "wf", [], cancellationToken: Ct);
+        var first = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        WorkflowFunc wf = async (ctx, input) =>
+        {
+            if (input.Length == 0)
+            {
+                _ = ctx.ExecuteActivityAsync("echo", ReadOnlyMemory<byte>.Empty); // outstanding when we hand over
+                _ = ctx.DelayAsync(TimeSpan.FromHours(1));
+                throw ctx.ContinueAsNew(B8("carried"));
+            }
+
+            return B8(Str(input) + "+" + Str(await ctx.WaitForSignalAsync("go")));
+        };
+        await DriveAsync(store, A, Workflows("default", wf), Activities());
+
+        RunKey current = (await store.GetCurrentRunAsync(A, "handover", Ct))!.Value;
+        Assert.NotEqual(first.RunId, current.RunId);
+        Assert.False(await client.SignalAsync(first, "go", B8("old"), Ct)); // the old run is closed
+        Assert.True(await client.SignalAsync(current, "go", B8("new"), Ct));
+        await DriveAsync(store, A, Workflows("default", wf), Activities());
+
+        Assert.Equal(RunState.ContinuedAsNew, await client.GetStateAsync(first, Ct));
+        Assert.Equal("carried+new", Str(((WorkflowCompleted)(await client.GetHistoryAsync(current, Ct))[^1]).Result));
+        StoreStats stats = await StatsAsync(store, A);
+        Assert.Equal((0, 0, 0), (stats.ActivityTasks, stats.Timers, stats.WorkflowTasks)); // the old run left nothing behind
+    }
+
+    [Fact]
+    public async Task A_run_that_never_continues_is_stopped_at_the_history_cap()
+    {
+        const int Cap = 30;
+        IKairosStore store = await CreateStoreAsync(new StoreLimits { MaxHistoryEvents = Cap });
+        var client = new KairosClient(store, Time);
+        StartRunResult start = await client.StartAsync(A, "runaway", "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        WorkflowFunc forever = async (ctx, _) =>
+        {
+            while (true)
+            {
+                await ctx.ExecuteActivityAsync("echo", ReadOnlyMemory<byte>.Empty);
+            }
+        };
+
+        await DriveAsync(store, A, Workflows("default", forever), Activities(), maxSteps: 2000);
+
+        Assert.Equal(RunState.Failed, await client.GetStateAsync(run, Ct));
+        IReadOnlyList<HistoryEvent> history = await client.GetHistoryAsync(run, Ct);
+        Assert.Contains("HistoryLimitExceeded", Assert.IsType<RunTerminated>(history[^1]).Reason, StringComparison.Ordinal);
+        Assert.True(history.Count <= Cap + 2, $"History grew to {history.Count} events with a cap of {Cap} (plus the results in flight).");
+        AssertChainIntact(history);
+        StoreStats stats = await StatsAsync(store, A);
+        Assert.Equal((0, 0, 0, 0), (stats.OpenRuns, stats.WorkflowTasks, stats.ActivityTasks, stats.Timers)); // I9: nothing left running
     }
 }

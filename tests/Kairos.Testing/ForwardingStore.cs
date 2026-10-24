@@ -54,6 +54,9 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask<IReadOnlyList<HistoryEvent>> GetHistoryAsync(RunKey run, CancellationToken cancellationToken) =>
         inner.GetHistoryAsync(run, cancellationToken);
 
+    public virtual ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken) =>
+        inner.GetCurrentRunAsync(scope, workflowId, cancellationToken);
+
     public virtual ValueTask<RunState?> GetRunStateAsync(RunKey run, CancellationToken cancellationToken) =>
         inner.GetRunStateAsync(run, cancellationToken);
 }

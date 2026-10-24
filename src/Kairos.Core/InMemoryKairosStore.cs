@@ -6,8 +6,10 @@ public readonly record struct StoreStats(int Runs, int OpenRuns, int WorkflowTas
 /// Reference implementation of <see cref="IKairosStore"/> held in memory. Thread-safe (one lock). Semantics here are the
 /// contract the PostgreSQL store must match; both run the same store contract tests.
 /// </summary>
-public sealed class InMemoryKairosStore : IKairosStore
+public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosStore
 {
+    private readonly StoreLimits _limits = limits ?? new StoreLimits();
+
     private readonly object _gate = new();
     private readonly Dictionary<TenantScope, ScopeData> _scopes = [];
     private long _order;
@@ -23,7 +25,7 @@ public sealed class InMemoryKairosStore : IKairosStore
                 return ValueTask.FromResult(new StartRunResult(existing, false));
             }
 
-            var run = new Run(request.Run, request.WorkflowType, request.BuildId);
+            var run = new Run(request.Run, request.WorkflowType, request.BuildId) { WorkflowId = request.WorkflowId };
             scope.Runs.Add(request.Run.RunId, run);
             scope.WorkflowIds.Add(request.WorkflowId, request.Run.RunId);
             Append(run, new WorkflowStarted(
@@ -107,6 +109,17 @@ public sealed class InMemoryKairosStore : IKairosStore
             }
 
             Append(run, new WorkflowTaskCompleted(task.Run.TenantId, task.Run.NamespaceId, task.Run.RunId, 0, now));
+
+            // Bounded history (I9): a task that would push the run past the cap, and does not itself close or continue, ends the run.
+            bool closes = newEvents.Count > 0 && StoreRules.IsClosing(newEvents[^1]);
+            if (!closes && run.History.Count + newEvents.Count + 1 > _limits.MaxHistoryEvents) // one slot stays free for the RunTerminated record
+            {
+                Append(run, new RunTerminated(task.Run.TenantId, task.Run.NamespaceId, task.Run.RunId, 0, now, StoreRules.HistoryLimitReason(_limits.MaxHistoryEvents)));
+                Close(scope, run, RunState.Failed);
+                scope.WorkflowTasks.Remove(task.Run.RunId);
+                return ValueTask.FromResult(CompletionOutcome.Applied);
+            }
+
             for (int i = 0; i < newEvents.Count; i++)
             {
                 HistoryEvent sealedEvent = Append(run, newEvents[i]);
@@ -124,12 +137,30 @@ public sealed class InMemoryKairosStore : IKairosStore
                     case WorkflowFailed:
                         Close(scope, run, RunState.Failed);
                         break;
+                    case WorkflowContinued c:
+                        Close(scope, run, RunState.ContinuedAsNew);
+                        StartContinuation(scope, run, c, now);
+                        break;
                 }
             }
 
             scope.WorkflowTasks.Remove(task.Run.RunId);
             return ValueTask.FromResult(CompletionOutcome.Applied);
         }
+    }
+
+    /// <summary>The new run of a continue-as-new chain: same workflow id, type and build, empty history, input carried over.</summary>
+    private void StartContinuation(ScopeData scope, Run previous, WorkflowContinued c, DateTimeOffset now)
+    {
+        var key = new RunKey(previous.Key.TenantId, previous.Key.NamespaceId, c.NewRunId);
+        var next = new Run(key, previous.WorkflowType, previous.BuildId) { WorkflowId = previous.WorkflowId };
+        scope.Runs.Add(c.NewRunId, next);
+        scope.WorkflowIds[previous.WorkflowId] = c.NewRunId;
+        Append(next, new WorkflowStarted(key.TenantId, key.NamespaceId, c.NewRunId, 0, now, previous.WorkflowType, previous.BuildId, c.Input)
+        {
+            PreviousRunId = previous.Key.RunId,
+        });
+        EnsureWorkflowTask(scope, next, now);
     }
 
     public ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, DateTimeOffset now, bool countAttempt, CancellationToken cancellationToken)
@@ -455,6 +486,17 @@ public sealed class InMemoryKairosStore : IKairosStore
         }
     }
 
+    public ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            RunKey? current = Scope(scope, create: false) is { } data && data.WorkflowIds.TryGetValue(workflowId, out Guid id)
+                ? new RunKey(scope.TenantId, scope.NamespaceId, id)
+                : null;
+            return ValueTask.FromResult(current);
+        }
+    }
+
     public ValueTask<RunState?> GetRunStateAsync(RunKey run, CancellationToken cancellationToken)
     {
         lock (_gate)
@@ -530,6 +572,9 @@ public sealed class InMemoryKairosStore : IKairosStore
                         break;
                     case WorkflowFailed or RunTerminated:
                         run.State = RunState.Failed;
+                        break;
+                    case WorkflowContinued:
+                        run.State = RunState.ContinuedAsNew;
                         break;
                 }
             }
@@ -707,6 +752,8 @@ public sealed class InMemoryKairosStore : IKairosStore
     private sealed class Run(RunKey key, string workflowType, string buildId)
     {
         public RunKey Key { get; } = key;
+
+        public string WorkflowId { get; init; } = "";
 
         public string WorkflowType { get; } = workflowType;
 

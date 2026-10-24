@@ -6,6 +6,10 @@ namespace Kairos;
 /// </summary>
 public static class StoreRules
 {
+    /// <summary>The reason recorded when a run would outgrow the history cap without continuing as new.</summary>
+    public static string HistoryLimitReason(int max) =>
+        $"HistoryLimitExceeded: the run reached the {max}-event history cap without continuing as new.";
+
     /// <summary>Error type recorded when a lease expires without a completion (the worker died, hung, or was partitioned).</summary>
     public const string LeaseExpiredError = "LeaseExpired";
 
@@ -28,12 +32,12 @@ public static class StoreRules
             HistoryEvent e = events[i];
             RequireSameRun(run, e);
             if (e.Type is not (HistoryEventType.ActivityScheduled or HistoryEventType.TimerStarted or HistoryEventType.PatchMarker
-                or HistoryEventType.WorkflowCompleted or HistoryEventType.WorkflowFailed))
+                or HistoryEventType.WorkflowCompleted or HistoryEventType.WorkflowFailed or HistoryEventType.WorkflowContinued))
             {
                 throw new ArgumentException($"A workflow task may not append {e.Type} events.", nameof(events));
             }
 
-            if (e.Type is HistoryEventType.WorkflowCompleted or HistoryEventType.WorkflowFailed && i != events.Count - 1)
+            if (e.Type is HistoryEventType.WorkflowCompleted or HistoryEventType.WorkflowFailed or HistoryEventType.WorkflowContinued && i != events.Count - 1)
             {
                 throw new ArgumentException("A closing event must be last.", nameof(events));
             }
@@ -68,5 +72,6 @@ public static class StoreRules
     public static HistoryEvent Seal(HistoryEvent template, long sequence, ReadOnlySpan<byte> prevHash) =>
         HashChain.Seal(template with { Sequence = sequence }, prevHash);
 
-    public static bool IsClosing(HistoryEvent e) => e.Type is HistoryEventType.WorkflowCompleted or HistoryEventType.WorkflowFailed or HistoryEventType.RunTerminated;
+    public static bool IsClosing(HistoryEvent e) => e.Type is HistoryEventType.WorkflowCompleted or HistoryEventType.WorkflowFailed or HistoryEventType.RunTerminated
+            or HistoryEventType.WorkflowContinued;
 }

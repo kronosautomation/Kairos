@@ -25,6 +25,7 @@ public sealed class WorkflowExecution : IWorkflowContext
     private Task<byte[]>? _task;
     private int _nextCommandId;
     private int _guidCounter;
+    private int _historyLength;
     private bool _started;
     private bool _completionQueued;
     private bool _closed;
@@ -49,6 +50,15 @@ public sealed class WorkflowExecution : IWorkflowContext
     public DateTimeOffset Now { get; private set; }
 
     public bool IsReplaying { get; private set; }
+
+    public int HistoryLength => _historyLength;
+
+    /// <summary>History length at which <see cref="ShouldContinueAsNew"/> turns true. Defaults to <see cref="HistoryLimits.ContinueAsNewSuggestedAt"/>.</summary>
+    public int ContinueAsNewSuggestedAt { get; init; } = HistoryLimits.ContinueAsNewSuggestedAt;
+
+    public bool ShouldContinueAsNew => _historyLength >= ContinueAsNewSuggestedAt;
+
+    public ContinueAsNewException ContinueAsNew(ReadOnlyMemory<byte> input) => new(input.ToArray());
 
     /// <summary>True once a WorkflowCompleted/WorkflowFailed event has been applied.</summary>
     public bool IsClosed => _closed;
@@ -149,6 +159,7 @@ public sealed class WorkflowExecution : IWorkflowContext
             throw new NonDeterminismException($"Event {e.Sequence} ({e.Type}) follows the workflow's closing event.");
         }
 
+        _historyLength++;
         Dispatch(e);
     }
 
@@ -182,6 +193,18 @@ public sealed class WorkflowExecution : IWorkflowContext
             case RunTerminated:
                 _closed = true;
                 break;
+
+            case WorkflowContinued continued:
+                {
+                    var command = Expect<ContinueAsNewCommand>(e);
+                    if (command.NewRunId != continued.NewRunId || !command.Input.AsSpan().SequenceEqual(continued.Input))
+                    {
+                        throw Mismatch(e, "a different continue-as-new");
+                    }
+
+                    _closed = true;
+                    break;
+                }
 
             case WorkflowTaskCompleted:
                 RequireNoPendingCommands(e);
@@ -314,6 +337,10 @@ public sealed class WorkflowExecution : IWorkflowContext
         if (task.IsCompletedSuccessfully)
         {
             _pending.Enqueue(new CompleteWorkflowCommand(task.Result));
+        }
+        else if (!task.IsCanceled && task.Exception!.GetBaseException() is ContinueAsNewException continueAsNew)
+        {
+            _pending.Enqueue(new ContinueAsNewCommand(NewGuid(), continueAsNew.Input));
         }
         else
         {

@@ -189,6 +189,9 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
     public ValueTask<IReadOnlyList<HistoryEvent>> GetHistoryAsync(RunKey run, CancellationToken cancellationToken) =>
         inner.GetHistoryAsync(run, cancellationToken);
 
+    public ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken) =>
+        inner.GetCurrentRunAsync(scope, workflowId, cancellationToken);
+
     public ValueTask<RunState?> GetRunStateAsync(RunKey run, CancellationToken cancellationToken) =>
         inner.GetRunStateAsync(run, cancellationToken);
 

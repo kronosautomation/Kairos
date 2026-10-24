@@ -27,6 +27,15 @@ public interface IWorkflowContext
     /// </summary>
     bool IsPatched(string patchId);
 
+    /// <summary>Number of history events applied to this run so far. Deterministic: identical on every replay.</summary>
+    int HistoryLength { get; }
+
+    /// <summary>True once the history is long enough that the workflow should hand over to a fresh run (<see cref="HistoryLimits"/>).</summary>
+    bool ShouldContinueAsNew { get; }
+
+    /// <summary>Builds the exception that ends this run and starts a new one: <c>throw ctx.ContinueAsNew(input);</c></summary>
+    ContinueAsNewException ContinueAsNew(ReadOnlyMemory<byte> input);
+
     /// <summary>A deterministic GUID derived from the run id and a per-run counter.</summary>
     Guid NewGuid();
 

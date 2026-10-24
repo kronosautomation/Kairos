@@ -15,7 +15,8 @@ internal static class EventEncoder
     /// <summary>Upper bound of the encoded size of <paramref name="e"/>.</summary>
     public static int MaxSize(HistoryEvent e) => HeaderSize + e switch
     {
-        WorkflowStarted x => StringMax(x.WorkflowType) + StringMax(x.BuildId) + BytesMax(x.Input),
+        WorkflowStarted x => StringMax(x.WorkflowType) + StringMax(x.BuildId) + BytesMax(x.Input) + 16,
+        WorkflowContinued x => 16 + BytesMax(x.Input),
         PatchMarker x => StringMax(x.PatchId),
         ActivityScheduled x => 4 + StringMax(x.ActivityType) + BytesMax(x.Input) + PolicyMax(x.RetryPolicy),
         ActivityCompleted x => 4 + BytesMax(x.Result),
@@ -47,6 +48,11 @@ internal static class EventEncoder
             case WorkflowStarted x:
                 w.WriteString(x.WorkflowType);
                 w.WriteString(x.BuildId);
+                w.WriteBytes(x.Input);
+                w.WriteGuid(x.PreviousRunId);
+                break;
+            case WorkflowContinued x:
+                w.WriteGuid(x.NewRunId);
                 w.WriteBytes(x.Input);
                 break;
             case PatchMarker x:

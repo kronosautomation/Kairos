@@ -45,7 +45,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             WITH r AS (
                 INSERT INTO kairos.runs (tenant_id, namespace_id, run_id, workflow_id, workflow_type, build_id, state, last_seq, last_hash, created_at)
                 VALUES (@t, @n, @r, @wf, @wt, @b, 0, 1, @h, @now)
-                ON CONFLICT (tenant_id, namespace_id, workflow_id) DO NOTHING
+                ON CONFLICT (tenant_id, namespace_id, workflow_id) WHERE is_current DO NOTHING
                 RETURNING run_id),
             e AS (
                 INSERT INTO kairos.history_events (tenant_id, namespace_id, run_id, seq, body, prev_hash, hash)
@@ -56,7 +56,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             SELECT run_id, true FROM r
             UNION ALL
             SELECT run_id, false FROM kairos.runs
-            WHERE tenant_id = @t AND namespace_id = @n AND workflow_id = @wf AND NOT EXISTS (SELECT 1 FROM r)
+            WHERE tenant_id = @t AND namespace_id = @n AND workflow_id = @wf AND is_current AND NOT EXISTS (SELECT 1 FROM r)
             """;
 
         return await Retry(async () =>
@@ -88,7 +88,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             // A concurrent starter of the same workflow id committed after our snapshot: look it up.
             await reader.CloseAsync().ConfigureAwait(false);
             await using NpgsqlCommand find = new(
-                "SELECT run_id FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND workflow_id = @wf", conn);
+                "SELECT run_id FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND workflow_id = @wf AND is_current", conn);
             find.Parameters.AddWithValue("t", request.Run.TenantId);
             find.Parameters.AddWithValue("n", request.Run.NamespaceId);
             find.Parameters.AddWithValue("wf", request.WorkflowId);
@@ -213,14 +213,34 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 throw new ArgumentException("A group commit must stay within one tenant scope.", nameof(items));
             }
 
-            prepared[i] = Prepare(items[i].Task, items[i].NewEvents, now);
+            prepared[i] = Prepare(items[i].Task, items[i].NewEvents, now, _options.Limits.MaxHistoryEvents);
         }
 
+        var outcomes = new CompletionOutcome[prepared.Length];
+        var regular = new List<int>(prepared.Length);
+        for (int i = 0; i < prepared.Length; i++)
+        {
+            if (prepared[i].Continuation is { } continuation)
+            {
+                outcomes[i] = await CompleteContinuationAsync(prepared[i], continuation, now, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                regular.Add(i);
+            }
+        }
+
+        if (regular.Count == 0)
+        {
+            return outcomes;
+        }
+
+        PreparedCompletion[] group = [.. regular.Select(i => prepared[i])];
         long[] applied = await Retry(async () =>
         {
             await using NpgsqlBatch batch = Batch(scope);
             bool notify = false;
-            foreach (PreparedCompletion p in prepared)
+            foreach (PreparedCompletion p in group)
             {
                 batch.BatchCommands.Add(p.ToCommand(Clk(CompleteWorkflowSql), scope, now));
                 notify |= p.HasActivities;
@@ -235,7 +255,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             batch.Connection = conn;
             await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await reader.NextResultAsync(cancellationToken).ConfigureAwait(false); // set_config
-            var counts = new long[prepared.Length];
+            var counts = new long[group.Length];
             for (int i = 0; i < counts.Length; i++)
             {
                 await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
@@ -246,24 +266,134 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             return counts;
         }).ConfigureAwait(false);
 
-        var outcomes = new CompletionOutcome[prepared.Length];
-        for (int i = 0; i < outcomes.Length; i++)
+        for (int k = 0; k < group.Length; k++)
         {
-            outcomes[i] = applied[i] == 1
+            outcomes[regular[k]] = applied[k] == 1
                 ? CompletionOutcome.Applied
-                : await ResolveUnappliedAsync(prepared[i].Task, now, cancellationToken).ConfigureAwait(false);
+                : await ResolveUnappliedAsync(group[k].Task, now, cancellationToken).ConfigureAwait(false);
         }
 
         return outcomes;
     }
 
+    /// <summary>
+    /// Continue-as-new, the rare path: in one transaction close the run (state 3), clear its work, and create the next run of the same
+    /// workflow id with an empty history that starts with the carried input. The same fencing guards as the single-statement path apply.
+    /// </summary>
+    private async Task<CompletionOutcome> CompleteContinuationAsync(PreparedCompletion p, WorkflowContinued continuation, DateTimeOffset now, CancellationToken ct)
+    {
+        RunKey run = p.Task.Run;
+        bool applied = await InTransaction(run.Scope, async (conn, tx) =>
+        {
+            RunHead? head = await LockRunAsync(conn, tx, run, ct).ConfigureAwait(false);
+            if (head is not { State: 0 } || head.LastSeq != p.Head.Sequence || !head.LastHash.AsSpan().SequenceEqual(p.Head.Hash))
+            {
+                return false;
+            }
+
+            await using (var owns = new NpgsqlCommand(
+                """
+                SELECT r.wf_lease_token = @token AND w.leased
+                FROM kairos.runs r JOIN kairos.workflow_tasks w
+                  ON w.tenant_id = r.tenant_id AND w.namespace_id = r.namespace_id AND w.run_id = r.run_id
+                WHERE r.tenant_id = @t AND r.namespace_id = @n AND r.run_id = @r
+                """, conn, tx))
+            {
+                owns.Parameters.AddWithValue("t", run.TenantId);
+                owns.Parameters.AddWithValue("n", run.NamespaceId);
+                owns.Parameters.AddWithValue("r", run.RunId);
+                owns.Parameters.AddWithValue("token", p.Task.LeaseToken);
+                if (await owns.ExecuteScalarAsync(ct).ConfigureAwait(false) is not true)
+                {
+                    return false;
+                }
+            }
+
+            await AppendAsync(conn, tx, run, head, p.Events, ct).ConfigureAwait(false);
+            foreach (string sql in ContinueStatements)
+            {
+                await using var cmd = new NpgsqlCommand(sql, conn, tx);
+                cmd.Parameters.AddWithValue("t", run.TenantId);
+                cmd.Parameters.AddWithValue("n", run.NamespaceId);
+                cmd.Parameters.AddWithValue("r", run.RunId);
+                await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            // The next run: same workflow id, type and build; history restarts at sequence 1.
+            var next = new RunKey(run.TenantId, run.NamespaceId, continuation.NewRunId);
+            var started = new WorkflowStarted(next.TenantId, next.NamespaceId, next.RunId, 0, now, "", "", continuation.Input) { PreviousRunId = run.RunId };
+            string workflowType, buildId;
+            await using (var meta = new NpgsqlCommand(
+                "SELECT workflow_type, build_id FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r", conn, tx))
+            {
+                meta.Parameters.AddWithValue("t", run.TenantId);
+                meta.Parameters.AddWithValue("n", run.NamespaceId);
+                meta.Parameters.AddWithValue("r", run.RunId);
+                await using NpgsqlDataReader reader = await meta.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                await reader.ReadAsync(ct).ConfigureAwait(false);
+                workflowType = reader.GetString(0);
+                buildId = reader.GetString(1);
+            }
+
+            HistoryEvent first = StoreRules.Seal(started with { WorkflowType = workflowType, BuildId = buildId }, 1, HashChain.GenesisHash);
+            await using (var insertRun = new NpgsqlCommand(
+                Clk("""
+                INSERT INTO kairos.runs (tenant_id, namespace_id, run_id, workflow_id, workflow_type, build_id, state, last_seq, last_hash, created_at, is_current)
+                SELECT tenant_id, namespace_id, @new, workflow_id, workflow_type, build_id, 0, 1, @h, @now, true
+                FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r
+                """), conn, tx))
+            {
+                insertRun.Parameters.AddWithValue("t", run.TenantId);
+                insertRun.Parameters.AddWithValue("n", run.NamespaceId);
+                insertRun.Parameters.AddWithValue("r", run.RunId);
+                insertRun.Parameters.AddWithValue("new", next.RunId);
+                insertRun.Parameters.AddWithValue("h", first.Hash);
+                insertRun.Parameters.Add(Ts("now", now));
+                await insertRun.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            await using (var insertEvent = new NpgsqlCommand(
+                "INSERT INTO kairos.history_events (tenant_id, namespace_id, run_id, seq, body, prev_hash, hash) VALUES (@t, @n, @new, 1, @body, @prev, @h)", conn, tx))
+            {
+                insertEvent.Parameters.AddWithValue("t", run.TenantId);
+                insertEvent.Parameters.AddWithValue("n", run.NamespaceId);
+                insertEvent.Parameters.AddWithValue("new", next.RunId);
+                insertEvent.Parameters.AddWithValue("body", HistoryEventCodec.Encode(first));
+                insertEvent.Parameters.AddWithValue("prev", first.PrevHash);
+                insertEvent.Parameters.AddWithValue("h", first.Hash);
+                await insertEvent.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            await EnsureWorkflowTaskAsync(conn, tx, next, now, ct).ConfigureAwait(false);
+            await NotifyAsync(conn, tx, run.Scope, ct).ConfigureAwait(false);
+            return true;
+        }, ct).ConfigureAwait(false);
+
+        return applied ? CompletionOutcome.Applied : await ResolveUnappliedAsync(p.Task, now, ct).ConfigureAwait(false);
+    }
+
+    private static readonly string[] ContinueStatements =
+    [
+        "UPDATE kairos.runs SET state = 3, is_current = false WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
+        "DELETE FROM kairos.workflow_tasks WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
+        "DELETE FROM kairos.activity_tasks WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
+        "DELETE FROM kairos.timers WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
+    ];
+
     /// <summary>Seals the boundary + command events as one chain extension from the snapshot the worker replayed.</summary>
-    private static PreparedCompletion Prepare(WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now)
+    private static PreparedCompletion Prepare(WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now, int maxHistoryEvents)
     {
         ArgumentNullException.ThrowIfNull(task);
         StoreRules.ValidateWorkflowTaskEvents(task.Run, newEvents);
         RunKey run = task.Run;
         HistoryEvent head = task.History[^1];
+
+        // Bounded history (I9): a task that would push the run past the cap, and does not itself close or continue, ends the run.
+        bool closes = newEvents.Count > 0 && StoreRules.IsClosing(newEvents[^1]);
+        if (!closes && head.Sequence + 1 + newEvents.Count + 1 > maxHistoryEvents)
+        {
+            newEvents = [new RunTerminated(run.TenantId, run.NamespaceId, run.RunId, 0, now, StoreRules.HistoryLimitReason(maxHistoryEvents))];
+        }
 
         var sealedEvents = new List<HistoryEvent>(newEvents.Count + 1);
         long seq = head.Sequence;
@@ -289,8 +419,11 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 case WorkflowCompleted:
                     state = 1;
                     break;
-                case WorkflowFailed:
+                case WorkflowFailed or RunTerminated:
                     state = 2;
+                    break;
+                case WorkflowContinued:
+                    state = 3;
                     break;
                 case ActivityScheduled s:
                     actIds.Add(s.ActivityId);
@@ -322,6 +455,8 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         int[] ActIds, byte[][] ActBodies, int[] TimerIds, DateTime[] TimerDue, double[] TimerSecs)
     {
         public bool HasActivities => ActIds.Length > 0;
+
+        public WorkflowContinued? Continuation => Events.OfType<WorkflowContinued>().FirstOrDefault();
 
         public NpgsqlBatchCommand ToCommand(string sql, TenantScope scope, DateTimeOffset now)
         {
@@ -1064,6 +1199,24 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         }).ConfigureAwait(false);
     }
 
+    public async ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken)
+    {
+        return await Retry<RunKey?>(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(scope);
+            NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
+            cmd.CommandText = "SELECT run_id FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND workflow_id = @wf AND is_current";
+            Scope(cmd, scope);
+            cmd.Parameters.AddWithValue("wf", workflowId);
+            batch.BatchCommands.Add(cmd);
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? new RunKey(scope.TenantId, scope.NamespaceId, reader.GetGuid(0)) : null;
+        }).ConfigureAwait(false);
+    }
+
     public async ValueTask<RunState?> GetRunStateAsync(RunKey run, CancellationToken cancellationToken)
     {
         return await Retry<RunState?>(async () =>
@@ -1181,7 +1334,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
 
     /// <summary>Seals and appends events after <paramref name="head"/> in one statement (insert + head update). Returns the last event.</summary>
     private static async Task<HistoryEvent> AppendAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, RunHead head, IReadOnlyList<HistoryEvent> templates, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, RunHead head, List<HistoryEvent> templates, CancellationToken ct)
     {
         var sealedEvents = new List<HistoryEvent>(templates.Count);
         long seq = head.LastSeq;
@@ -1357,4 +1510,6 @@ public enum LeaseClock
 public sealed class PostgresStoreOptions
 {
     public LeaseClock LeaseClock { get; init; } = LeaseClock.Database;
+
+    public StoreLimits Limits { get; init; } = new();
 }

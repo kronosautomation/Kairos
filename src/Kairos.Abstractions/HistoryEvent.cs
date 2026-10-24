@@ -14,6 +14,7 @@ public enum HistoryEventType : byte
     PatchMarker = 10,
     WorkflowTaskCompleted = 11,
     RunTerminated = 12,
+    WorkflowContinued = 13,
 }
 
 /// <summary>
@@ -36,6 +37,9 @@ public sealed record WorkflowStarted(
     string WorkflowType, string BuildId, byte[] Input) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.WorkflowStarted;
+
+    /// <summary>The run this one continues (continue-as-new); <see cref="Guid.Empty"/> for a fresh start.</summary>
+    public Guid PreviousRunId { get; init; }
 }
 
 public sealed record ActivityScheduled(
@@ -75,6 +79,17 @@ public sealed record RunTerminated(
     string Reason) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.RunTerminated;
+}
+
+/// <summary>
+/// The run closed itself and handed over to a fresh run of the same workflow id with a new, empty history
+/// (<paramref name="NewRunId"/>), carrying <paramref name="Input"/> forward. This is how long-lived workflows stay bounded.
+/// </summary>
+public sealed record WorkflowContinued(
+    Guid TenantId, Guid NamespaceId, Guid RunId, long Sequence, DateTimeOffset Timestamp,
+    Guid NewRunId, byte[] Input) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
+{
+    public override HistoryEventType Type => HistoryEventType.WorkflowContinued;
 }
 
 /// <summary>Records that a patch (<see cref="IWorkflowContext.IsPatched"/>) was taken by this run, so replays take the same branch.</summary>
