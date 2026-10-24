@@ -36,15 +36,24 @@ budgets are CI gates; a change that regresses them is not done.
 - Minimal dependencies. Prefer the BCL. Npgsql for Postgres; no ORM in the hot path.
 - Tests: xUnit, Testcontainers for Postgres integration tests.
 - Run `dotnet build` and `dotnet test` before declaring any task done.
+- **Deep tests are part of every milestone:** follow `docs/TEST-STRATEGY.md` (invariants I1–I10, deterministic
+  simulation with seed replay, crash-at-every-step, Postgres fault injection, golden history corpus, authz matrix).
+  Core must take `TimeProvider`, a seeded RNG and abstract transport/store so the simulator can control them.
 - Commit in small steps with clear messages; never commit secrets, connection strings, or certificates.
 
 ## Milestones
 
-1. **Core engine (in-memory):** workflow API, event history model, replay, timers, activities with retries, signals,
-   determinism checks. Fully unit tested with no database.
-2. **Postgres persistence:** schema + migrations, RLS policies, DB roles, task queues with `SKIP LOCKED`, hash chain,
-   cross-tenant leak tests.
-3. **Server + Worker SDK:** data-plane API, worker polling, client-side payload encryption, auth.
-4. **Admin plane, analyzers, dashboard, containers.**
-5. **Hosting & integrations:** see `docs/HOSTING-AWS.md` (cell-based AWS hosting, Pulumi C# IaC, EventBridge/SQS/Lambda
-   adapters, webhooks, OpenAPI/proto clients, MCP server). AWS-specific code stays out of the core projects.
+The authoritative plan, solution layout, provider interfaces and agent requirements are in
+`docs/MULTI-CLOUD-AND-AGENTS.md` (multi-cloud + AI agents). Summary:
+
+1. Core engine — done.
+2. Postgres store + embedded mode (`services.AddKairos(o => o.UsePostgres(...))`), plus workflow versioning
+   (pin runs to their build + patch API), a .NET 10 / .NET 11 Runtime Async test matrix, and the M2 deep-test layers.
+3. Provider interfaces + conformance suite + self-hosted adapters.
+4. Kairos.Agents (durable model/tool steps, approvals, policies, budgets).
+5. MCP server + durable MCP client steps.
+6. Azure + AWS adapters, Pulumi cell stacks (see `docs/HOSTING-AWS.md`).
+7. Standalone server, admin plane, client SDK, dashboard.
+8. Agent Framework provider, Google Cloud adapters, marketplaces.
+
+No cloud SDK outside `Kairos.Cloud.*`/`infra`; no model-vendor SDK in `Kairos.Agents*` (use Microsoft.Extensions.AI).
