@@ -144,6 +144,8 @@ services:
       context: .
       dockerfile: tlc.Dockerfile
     profiles: ["ci"]
+    environment:
+      TLC_MODE: ${TLC_MODE:-quick}
     volumes:
       - ..:/src:ro
       - ../.ci-local:/results
@@ -156,8 +158,8 @@ services:
     profiles: ["agent"]
     restart: unless-stopped
     environment:
-      AZP_URL: ${AZP_URL:?Set AZP_URL in docker/.env}
-      AZP_TOKEN: ${AZP_TOKEN:?Set AZP_TOKEN in docker/.env}
+      AZP_URL: ${AZP_URL:-}          # required by the agent; checked in agent/start.sh
+      AZP_TOKEN: ${AZP_TOKEN:-}      # required by the agent; checked in agent/start.sh
       AZP_POOL: ${AZP_POOL:-Kairos-Local}
       AZP_AGENT_NAME: ${AZP_AGENT_NAME:-kronoslaptop-docker}
       AGENT_ALLOW_RUNASROOT: "true"         # needed to use the Docker socket for Testcontainers

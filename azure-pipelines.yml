@@ -95,6 +95,24 @@ stages:
         displayName: Keep failing simulation seeds and logs
         condition: failed()
 
+- stage: Model
+  displayName: TLA+ model (quick)
+  dependsOn: []
+  jobs:
+  - job: ModelQuick
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 15
+    steps:
+    - checkout: self
+      fetchDepth: 1
+    - script: |
+        set -euo pipefail
+        curl -fsSL "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar" -o "$(Agent.TempDirectory)/tla2tools.jar"
+        echo "bee4a54f3ee3d4afc347c3240ec2d9e93b075104  $(Agent.TempDirectory)/tla2tools.jar" | sha1sum -c -
+        TLC_MODE=quick TLA2TOOLS="$(Agent.TempDirectory)/tla2tools.jar" bash spec/check.sh
+      displayName: Model-check spec/ (quick config)
+
 - stage: SupplyChain
   displayName: Supply chain checks
   dependsOn: []

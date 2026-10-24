@@ -93,8 +93,20 @@ ClaimWf(r) ==
     /\ wfClaims' = wfClaims \cup {[run |-> r, token |-> wfToken[r] + 1, snap |-> hist[r]]}
     /\ UNCHANGED <<hist, actTask, actToken, actClaims, effect, calls, sigLeft, expLeft, crashLeft>>
 
+\* A lease whose holder crashed: no in-flight claim carries the current token.
+OrphanedWf(r) == wfTask[r] = "leased" /\ ~\E c \in wfClaims : c.run = r /\ c.token = wfToken[r]
+
+\* Time passes and the orphaned lease expires; the poll query re-offers it. Always eventually happens (fair),
+\* needs no budget because crashes are bounded. Mirrors "leased AND lease_expires_at <= now" in the stores.
+RecoverWf(r) ==
+    /\ OrphanedWf(r)
+    /\ wfTask' = [wfTask EXCEPT ![r] = "pending"]
+    /\ UNCHANGED <<hist, wfToken, wfClaims, actTask, actToken, actClaims, effect, calls, sigLeft, expLeft, crashLeft>>
+
+\* Premature expiry while the holder is still alive (slow worker, GC pause, clock skew): creates a zombie.
+\* Bounded and not fair: it may happen, it never has to.
 ExpireWf(r) ==
-    /\ wfTask[r] = "leased" /\ expLeft > 0
+    /\ wfTask[r] = "leased" /\ ~OrphanedWf(r) /\ expLeft > 0
     /\ wfTask'  = [wfTask EXCEPT ![r] = "pending"]
     /\ expLeft' = expLeft - 1
     /\ UNCHANGED <<hist, wfToken, wfClaims, actTask, actToken, actClaims, effect, calls, sigLeft, crashLeft>>
@@ -131,8 +143,15 @@ ClaimAct(r) ==
     /\ actClaims' = actClaims \cup {[run |-> r, token |-> actToken[r] + 1, ran |-> FALSE]}
     /\ UNCHANGED <<hist, wfTask, wfToken, wfClaims, effect, calls, sigLeft, expLeft, crashLeft>>
 
+OrphanedAct(r) == actTask[r] = "leased" /\ ~\E c \in actClaims : c.run = r /\ c.token = actToken[r]
+
+RecoverAct(r) ==
+    /\ OrphanedAct(r)
+    /\ actTask' = [actTask EXCEPT ![r] = "pending"]
+    /\ UNCHANGED <<hist, wfTask, wfToken, wfClaims, actToken, actClaims, effect, calls, sigLeft, expLeft, crashLeft>>
+
 ExpireAct(r) ==
-    /\ actTask[r] = "leased" /\ expLeft > 0
+    /\ actTask[r] = "leased" /\ ~OrphanedAct(r) /\ expLeft > 0
     /\ actTask' = [actTask EXCEPT ![r] = "pending"]
     /\ expLeft' = expLeft - 1
     /\ UNCHANGED <<hist, wfTask, wfToken, wfClaims, actToken, actClaims, effect, calls, sigLeft, crashLeft>>
@@ -172,13 +191,16 @@ CrashWorker ==
     /\ UNCHANGED <<hist, wfTask, wfToken, actTask, actToken, effect, calls, sigLeft, expLeft>>
 
 Next ==
-    \/ \E r \in Runs : StartRun(r) \/ SendSignal(r) \/ ClaimWf(r) \/ ExpireWf(r) \/ ClaimAct(r) \/ ExpireAct(r)
+    \/ \E r \in Runs : StartRun(r) \/ SendSignal(r) \/ ClaimWf(r) \/ ExpireWf(r) \/ RecoverWf(r)
+                     \/ ClaimAct(r) \/ ExpireAct(r) \/ RecoverAct(r)
     \/ \E c \in wfClaims : CompleteWf(c)
     \/ \E c \in actClaims : ExecAct(c) \/ CompleteAct(c)
     \/ CrashWorker
 
 Fairness ==
     /\ \A r \in Runs : WF_vars(StartRun(r)) /\ WF_vars(SendSignal(r)) /\ WF_vars(ClaimWf(r)) /\ WF_vars(ClaimAct(r))
+    \* Time keeps moving: orphaned leases eventually expire. Premature expiry (ExpireWf/ExpireAct) is deliberately not fair.
+    /\ \A r \in Runs : WF_vars(RecoverWf(r)) /\ WF_vars(RecoverAct(r))
     /\ WF_vars(\E c \in wfClaims : CompleteWf(c))
     /\ WF_vars(\E c \in actClaims : ExecAct(c))
     /\ WF_vars(\E c \in actClaims : CompleteAct(c))
