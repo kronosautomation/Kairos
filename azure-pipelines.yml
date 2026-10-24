@@ -138,3 +138,5 @@ stages:
         if git grep -nE "(Password|Pwd|AccountKey|SharedAccessKey|client_secret|BEGIN (RSA |EC )?PRIVATE KEY)\s*[=:]" -- . ':!docs/**' ':!*.md'; then
           echo "##vso[task.logissue type=error]Possible secret in source"; exit 1; fi
       displayName: Secret pattern scan
+    - pwsh: ./docker/pin-images.ps1 -Check
+      displayName: Every container image pinned to a digest

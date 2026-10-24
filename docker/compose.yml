@@ -22,15 +22,15 @@ x-pg: &pg
 
 services:
   # ---------- Postgres version matrix (mirrors the nightly pipeline) ----------
-  pg15: { <<: *pg, image: "postgres:15", ports: ["54315:5432"] }
-  pg16: { <<: *pg, image: "postgres:16", ports: ["54316:5432"] }
-  pg17: { <<: *pg, image: "postgres:17", ports: ["54317:5432"] }
-  pg18: { <<: *pg, image: "postgres:18", ports: ["54318:5432"] }
+  pg15: { <<: *pg, image: "postgres:15@sha256:baa22e6286bf832cb147b8bb5aa9d8bc999846d69c21d11bf63f58fbeed1fa48", ports: ["54315:5432"] }
+  pg16: { <<: *pg, image: "postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97", ports: ["54316:5432"] }
+  pg17: { <<: *pg, image: "postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe", ports: ["54317:5432"] }
+  pg18: { <<: *pg, image: "postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6", ports: ["54318:5432"] }
 
   # ---------- Failover drill: primary + streaming replica ----------
   pg-primary:
     <<: *pg
-    image: "postgres:17"
+    image: "postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe"
     ports: ["54320:5432"]
     environment:
       POSTGRES_USER: ${KAIROS_PG_USER:-kairos}
@@ -41,7 +41,7 @@ services:
     volumes:
       - ./postgres/primary-init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
   pg-replica:
-    image: "postgres:17"
+    image: "postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe"
     restart: unless-stopped
     profiles: ["deps"]
     user: postgres
@@ -58,7 +58,7 @@ services:
 
   # ---------- Fault injection: Toxiproxy in front of pg17 (proxy on 54330, API on 8474) ----------
   toxiproxy:
-    image: "ghcr.io/shopify/toxiproxy:latest"   # pin to the pulled version after first run
+    image: "ghcr.io/shopify/toxiproxy:latest@sha256:5d3dae09bc185dcc5ff6cf43abf6062a4a720aff0c4306a471e773acdcd107aa"
     profiles: ["deps"]
     command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
     ports: ["8474:8474", "54330:54330"]
@@ -69,30 +69,30 @@ services:
 
   # ---------- Cloud stand-ins for the conformance suite ----------
   azurite:            # Azure Blob/Queue/Table
-    image: "mcr.microsoft.com/azure-storage/azurite"
+    image: "mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5"
     profiles: ["emulators"]
     ports: ["10000:10000", "10001:10001", "10002:10002"]
   localstack:         # AWS S3, SQS, SNS, KMS, STS, EventBridge
     # Newer LocalStack releases need an account token (since 2026-03-23). 4.12 is the last free community tag.
     # To use a newer release, change the tag and set LOCALSTACK_AUTH_TOKEN in docker/.env.
-    image: "localstack/localstack:4.12"
+    image: "localstack/localstack:4.12@sha256:0df3a97da57de03a588c05d9b8f390f15c7033fc7c4512f94619d344bc3cd317"
     profiles: ["emulators"]
     ports: ["4566:4566"]
     environment:
       SERVICES: s3,sqs,sns,kms,sts,events
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
   seaweedfs:          # S3-compatible store for self-hosted blob offload (MinIO no longer ships images)
-    image: "chrislusf/seaweedfs:latest"
+    image: "chrislusf/seaweedfs:latest@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
     profiles: ["emulators"]
     command: ["server", "-s3", "-dir=/data"]
     ports: ["8333:8333"]
   pubsub:             # Google Cloud Pub/Sub emulator
-    image: "gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators"
+    image: "gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators@sha256:cced7aefc06898a91efcfc942e6ab98537b3ec2d15d66ec54cffa62ac6d7f19b"
     profiles: ["emulators"]
     command: ["gcloud", "beta", "emulators", "pubsub", "start", "--host-port=0.0.0.0:8085", "--project=kairos-local"]
     ports: ["8085:8085"]
   vault:              # IKeyProvider: Vault transit engine (dev mode, in-memory)
-    image: "hashicorp/vault:latest"
+    image: "hashicorp/vault:latest@sha256:962a92876e168d68eaaa24b0b8b49bbce1cb63024060a67bba95cd158a366fc2"
     profiles: ["emulators"]
     cap_add: ["IPC_LOCK"]
     environment:
@@ -100,7 +100,7 @@ services:
       VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
     ports: ["8200:8200"]
   keycloak:           # OIDC identity provider standing in for Entra ID / Okta
-    image: "quay.io/keycloak/keycloak:26.0"
+    image: "quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858"
     profiles: ["emulators"]
     command: ["start-dev"]
     environment:
@@ -108,12 +108,12 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KAIROS_KEYCLOAK_ADMIN:-admin-local-only}
     ports: ["8080:8080"]
   nats:               # event bus (JetStream on)
-    image: "nats:2.10"
+    image: "nats:2.10@sha256:5498ba57b9471840be3d15b033a4eec554d1c02fa6c2cc0ca2d888637f6c6e2f"
     profiles: ["emulators"]
     command: ["-js"]
     ports: ["4222:4222"]
   kafka:              # event bus (single-node KRaft)
-    image: "apache/kafka:3.9.0"
+    image: "apache/kafka:3.9.0@sha256:fbc7d7c428e3755cf36518d4976596002477e4c052d1f80b5b9eafd06d0fff2f"
     profiles: ["emulators"]
     ports: ["9092:9092"]
 

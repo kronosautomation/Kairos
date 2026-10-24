@@ -77,6 +77,9 @@ Requirements:
 - `ChatAsync` = an activity. Response (and token usage) recorded in history; replay never calls the model.
 - `InvokeToolAsync` = an activity with idempotency key `run_id + step_seq`; tool receives the key.
 - Tool policies per namespace: `Auto | RequireApproval | Deny`, argument-based rules, max calls per run.
+  Baseline (free, docs/LICENSING.md): every tool is read-only unless an allow policy or approval permits writes.
+- Credentials: agents never receive a user's password. Each run gets short-lived credentials scoped to its tools
+  (docs/SECURITY-ARCHITECTURE.md section 11).
 - Budgets per run: tokens, cost, wall-clock, step count. Exceeding → workflow fails or pauses for approval (configurable).
 - `RequestApprovalAsync(request)` → durable wait for a signal; approvals carry approver identity into history.
 - Streaming: model tokens may stream to a live observer, but only the final response is recorded.

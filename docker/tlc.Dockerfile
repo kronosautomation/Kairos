@@ -1,5 +1,5 @@
 # TLA+ model checker (TLC) for spec/. Pinned to tla2tools v1.7.4, verified against the published SHA-1.
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21-jre@sha256:227118764cccd3c3294617061aaa93a08309c63a395eefa83e6b35032992ea99
 ARG TLA_VERSION=v1.7.4
 ARG TLA_SHA1=bee4a54f3ee3d4afc347c3240ec2d9e93b075104
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \

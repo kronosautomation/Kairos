@@ -125,3 +125,31 @@ Dependency rule: Core depends only on Abstractions; Server/Admin never reference
 - History size caps with **continue-as-new** for long-lived workflows, so no run grows without bound.
 - Streaming reads of history pages instead of materializing full histories.
 - Allocation budgets asserted in benchmarks (`MemoryDiagnoser`), Server GC tuned, `DOTNET_GCHeapHardLimit` set in containers.
+
+## 11. Lessons from October 2026 incidents
+
+Three incidents in October 2026 share one root: credentials. Each maps to a Kairos rule.
+
+| Incident | What happened | Kairos rule |
+|---|---|---|
+| Railway (20–22 Oct) | Attacker reached build infrastructure, took CI credentials, and decrypted a subset of customers' envelope-encrypted environment variables (at most 1.85% of workspaces). Everyone told to rotate keys. | **The platform must not be able to decrypt.** Payload keys are unwrapped only by the customer's worker via the customer's KMS/Vault. The Kairos server, its CI and its operators hold no unwrap rights. |
+| US banks (Oct) | Customers gave AI agents their bank passwords; banks found unvetted agents acting inside accounts. | **Agents never hold a user's password.** Each agent run gets short-lived, scoped credentials; tools are read-only by default; writes need a policy or an approval. |
+| South Korean financial firms (Sept–Oct) | Credential stuffing, accelerated by the open-source ARTEX AI agent, against weakly authenticated side systems (loan-agent portals, staff support apps); about 68,000 records exposed. | **No passwords anywhere.** Every Kairos endpoint uses SSO, mTLS or short-lived tokens; rate limiting and lockout on anything that accepts credentials; side systems (dashboards, admin, MCP) held to the same bar as the core. |
+
+Requirements derived from these:
+1. **Decryption-boundary test (Milestone 3):** with client-side encryption on, a test acting as a fully compromised server
+   (database, server process, CI identity) must fail to decrypt any payload. Canary scans already cover storage, logs and traces.
+2. **No long-lived CI secrets:** pipelines authenticate to clouds and registries with workload identity / OIDC federation
+   only. Hosted Kairos Cloud builds are single-tenant and rebuilt from verified source.
+3. **Bulk revocation:** an operator can revoke every worker credential and API key for a namespace (or all) in one action,
+   and every credential has an expiry.
+4. **Agent credentials:** `Kairos.Agents` issues per-run, per-tool scoped credentials with expiry; default tool policy is
+   read-only; side-effecting tools require an explicit allow policy or a human approval. This baseline is free (see
+   docs/LICENSING.md); budgets and the policy console are commercial.
+5. **Authentication everywhere:** no password login on any Kairos surface; rate limiting and lockout on token endpoints;
+   MCP endpoints use enterprise-managed authorization.
+6. **Pinned and checked:** NuGet lock files, checksum-verified tool downloads, and every container image pinned to a digest
+   (`docker/pin-images.ps1`; CI fails on unpinned images). Upgrades are deliberate: re-pin, re-run the full test suite.
+
+Sources: Railway preliminary report (blog.railway.com, 22 Oct 2026); TechCrunch, 22 Oct 2026; CBS News, 23 Oct 2026;
+Seoul Economic Daily, 7 Oct 2026; Tech Times, 5 Oct 2026.

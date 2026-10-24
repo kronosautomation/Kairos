@@ -23,12 +23,12 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Persistence.Postgres | Apache 2.0 | Community | RLS, roles, leases, fencing, audit log, Resume/Fail store APIs |
 | Kairos.Hosting | Apache 2.0 | Community | Embedded mode (`AddKairos`), stuck-task monitor, health check |
 | Kairos.Client, Kairos.Worker | Apache 2.0 | Community | Start/signal/query; remote worker SDK incl. client-side payload encryption |
-| Kairos.Agents | Apache 2.0 | Community | Durable model and tool steps, approvals primitive, sagas/compensation |
+| Kairos.Agents | Apache 2.0 | Community | Durable model and tool steps, approvals primitive, sagas/compensation, per-run scoped credentials, baseline tool policy (read-only by default; writes need an allow policy or approval) |
 | Kairos.Cloud.SelfHosted | Apache 2.0 | Community | Vault, mTLS/SPIFFE, file/S3-compatible offload, Kafka/NATS/webhooks |
 | Kairos.Analyzers | Apache 2.0 | Community | Determinism and secret-handling analyzers |
 | Kairos.Testing, Kairos.Conformance | Apache 2.0 | Community | Simulator test kit and provider conformance suite (customers test their own workflows) |
 | Kairos.Dashboard | Commercial | Pro | Run list, history and replay view, approval inbox |
-| Kairos.Agents.Policies | Commercial | Pro | Per-tool policies, token/cost/step budgets |
+| Kairos.Agents.Policies | Commercial | Pro | Argument-level policy rules, token/cost/step budgets, policy console (the read-only baseline is free) |
 | Kairos.Agents.Mcp | Commercial | Pro | MCP server (workflows as tools, Tasks mapping) |
 | Kairos.Cloud.Azure, .Aws, .Gcp | Commercial | Pro | Managed key, identity, blob and event adapters (self-hosted equivalents stay free) |
 | Kairos.Telemetry | Commercial | Pro | Packaged OpenTelemetry/GenAI exporters and dashboards (raw metrics stay in Core) |
