@@ -15,7 +15,9 @@ counterpart of the deterministic simulator (`tests/Kairos.Testing/Simulation`); 
 
 Run: `TLA2TOOLS=/path/to/tla2tools.jar ./check.sh` (Java 11+). `Kairos.cfg` must pass; `KairosUnfenced.cfg` must fail.
 
-**Status:** written alongside Milestone 2 but not yet run through TLC (the jar could not be fetched in the authoring
+**Status:** first TLC run (2026-10-24) found a liveness counterexample caused by the model, not the engine: orphaned
+leases (holder crashed) had no fair expiry, so TLC could stop time. Fixed by splitting expiry into fair `Recover*` (orphaned)
+and bounded, unfair `Expire*` (premature, creates zombies). Earlier note: written alongside Milestone 2 but not yet run through TLC (the jar could not be fetched in the authoring
 environment). Treat it as unverified until `check.sh` is green; fix the spec, not the invariants, if TLC disagrees.
 
 Not yet modelled: cancel (not implemented in the engine), compensation / I11 (Milestone 4 sagas), continue-as-new, child workflows.
