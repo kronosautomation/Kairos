@@ -75,4 +75,47 @@ public sealed class ClockSkewTests(PostgresFixture fixture)
 
         Assert.Equal(1, await store.ReapExpiredLeasesAsync(Scope, now + Skew, CancellationToken.None));
     }
+
+    // ---- F3: timers follow the same clock ------------------------------------------------------------------------
+
+    private static async Task StartTimerRunAsync(PostgresKairosStore store, TimeSpan duration, DateTimeOffset workerClock)
+    {
+        StartRunResult start = await new KairosClient(store, TimeProvider.System).StartAsync(Scope, "timer-" + Guid.NewGuid(), "wf", []);
+        WorkflowTask task = (await store.PollWorkflowTaskAsync(Scope, Builds, workerClock + TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1), CancellationToken.None))!;
+        var timer = new TimerStarted(Scope.TenantId, Scope.NamespaceId, start.RunId, 0, workerClock, 1, duration);
+        Assert.Equal(CompletionOutcome.Applied, await store.CompleteWorkflowTaskAsync(task, [timer], workerClock, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_worker_with_a_fast_clock_does_not_fire_timers_early()
+    {
+        await using TestDatabase db = await fixture.NewDatabaseAsync();
+        PostgresKairosStore store = db.NewDatabaseClockStore();
+        await StartTimerRunAsync(store, TimeSpan.FromHours(1), DateTimeOffset.UtcNow);
+
+        Assert.Equal(0, await store.FireDueTimersAsync(Scope, DateTimeOffset.UtcNow + TimeSpan.FromHours(2), CancellationToken.None)); // two hours ahead
+    }
+
+    [Fact]
+    public async Task A_timer_set_by_a_slow_clock_still_fires_after_its_duration_on_database_time()
+    {
+        await using TestDatabase db = await fixture.NewDatabaseAsync();
+        PostgresKairosStore store = db.NewDatabaseClockStore();
+        await StartTimerRunAsync(store, TimeSpan.FromSeconds(2), DateTimeOffset.UtcNow - Skew); // the worker's clock is ten minutes slow
+
+        // Judged by the slow clock the timer would long be due; by the database clock it is not due for two seconds.
+        Assert.Equal(0, await store.FireDueTimersAsync(Scope, DateTimeOffset.UtcNow, CancellationToken.None));
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        Assert.Equal(1, await store.FireDueTimersAsync(Scope, DateTimeOffset.UtcNow, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Control_when_the_callers_clock_is_trusted_skew_fires_timers_early()
+    {
+        await using TestDatabase db = await fixture.NewDatabaseAsync();
+        PostgresKairosStore store = db.NewStore(); // LeaseClock.Caller
+        await StartTimerRunAsync(store, TimeSpan.FromHours(1), DateTimeOffset.UtcNow);
+
+        Assert.Equal(1, await store.FireDueTimersAsync(Scope, DateTimeOffset.UtcNow + TimeSpan.FromHours(2), CancellationToken.None));
+    }
 }

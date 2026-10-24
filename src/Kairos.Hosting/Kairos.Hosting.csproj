@@ -8,6 +8,7 @@
     <ProjectReference Include="..\Kairos.Core\Kairos.Core.csproj" />
     <ProjectReference Include="..\Kairos.Persistence.Postgres\Kairos.Persistence.Postgres.csproj" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
 

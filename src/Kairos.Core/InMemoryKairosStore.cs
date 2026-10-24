@@ -332,6 +332,73 @@ public sealed class InMemoryKairosStore : IKairosStore
         }
     }
 
+    public ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            var stuck = new List<StuckWorkflowTask>();
+            if (Scope(scope, create: false) is { } data)
+            {
+                foreach (WorkflowTaskRow row in data.WorkflowTasks.Values)
+                {
+                    if (row.Stuck)
+                    {
+                        Run run = data.Runs[row.RunId];
+                        stuck.Add(new StuckWorkflowTask(run.Key, run.WorkflowType, run.BuildId, row.Attempt - 1));
+                    }
+                }
+            }
+
+            stuck.Sort(static (a, b) => a.Run.RunId.CompareTo(b.Run.RunId));
+            return ValueTask.FromResult<IReadOnlyList<StuckWorkflowTask>>(stuck);
+        }
+    }
+
+    public ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (Scope(run.Scope, create: false) is not { } data ||
+                !data.WorkflowTasks.TryGetValue(run.RunId, out WorkflowTaskRow? row) || !row.Stuck)
+            {
+                return ValueTask.FromResult(false);
+            }
+
+            row.Stuck = false;
+            row.Leased = false;
+            row.Attempt = 1;
+            row.VisibleAt = now;
+            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, "ResumeWorkflowTask", actor, now, "unparked after repeated lease expiry"));
+            return ValueTask.FromResult(true);
+        }
+    }
+
+    public ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (Scope(run.Scope, create: false) is not { } data || FindRun(run) is not { State: RunState.Running } r)
+            {
+                return ValueTask.FromResult(false);
+            }
+
+            Append(r, new RunTerminated(run.TenantId, run.NamespaceId, run.RunId, 0, now, reason));
+            Close(data, r, RunState.Failed);
+            data.WorkflowTasks.Remove(run.RunId);
+            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, "FailRun", actor, now, reason));
+            return ValueTask.FromResult(true);
+        }
+    }
+
+    public ValueTask<IReadOnlyList<AuditEntry>> GetAuditLogAsync(TenantScope scope, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            IReadOnlyList<AuditEntry> entries = Scope(scope, create: false) is { } data ? [.. data.Audit] : [];
+            return ValueTask.FromResult(entries);
+        }
+    }
+
     public ValueTask<int> FireDueTimersAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
     {
         lock (_gate)
@@ -461,7 +528,7 @@ public sealed class InMemoryKairosStore : IKairosStore
                     case WorkflowCompleted:
                         run.State = RunState.Completed;
                         break;
-                    case WorkflowFailed:
+                    case WorkflowFailed or RunTerminated:
                         run.State = RunState.Failed;
                         break;
                 }
@@ -633,6 +700,8 @@ public sealed class InMemoryKairosStore : IKairosStore
         public Dictionary<(Guid RunId, int ActivityId), ActivityTaskRow> ActivityTasks { get; } = [];
 
         public Dictionary<(Guid RunId, int TimerId), DateTimeOffset> Timers { get; } = [];
+
+        public List<AuditEntry> Audit { get; } = [];
     }
 
     private sealed class Run(RunKey key, string workflowType, string buildId)

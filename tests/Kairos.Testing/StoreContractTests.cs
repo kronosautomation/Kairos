@@ -571,4 +571,92 @@ public abstract class StoreContractTests
         Assert.DoesNotContain(await client.GetHistoryAsync(run, Ct), e => e is ActivityCompleted);
         Assert.Single((await client.GetHistoryAsync(run, Ct)).OfType<ActivityFailed>(), f => f.ErrorType == StoreRules.LeaseExpiredError);
     }
+
+    // ---- F1: parked workflow tasks are visible and recoverable ---------------------------------------------------------
+
+    /// <summary>Starts a run and lets its workflow task expire until the store parks it.</summary>
+    private async Task<(IKairosStore Store, KairosClient Client, RunKey Run)> ParkedRunAsync()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "parked-" + Guid.NewGuid(), "wf", [], cancellationToken: Ct);
+        for (int i = 0; i < StoreRules.MaxWorkflowTaskAttempts + 2; i++)
+        {
+            await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct);
+            Time.Advance(TimeSpan.FromSeconds(31));
+            await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct);
+            Time.Advance(TimeSpan.FromSeconds(70)); // past any back-off
+        }
+
+        Assert.Equal(1, (await StatsAsync(store, A)).StuckWorkflowTasks);
+        return (store, client, new RunKey(A.TenantId, A.NamespaceId, start.RunId));
+    }
+
+    [Fact]
+    public async Task Parked_tasks_are_listed_and_a_resume_lets_the_run_finish()
+    {
+        (IKairosStore store, KairosClient client, RunKey run) = await ParkedRunAsync();
+
+        StuckWorkflowTask stuck = Assert.Single(await store.GetStuckWorkflowTasksAsync(A, Ct));
+        Assert.Equal((run, "wf", "default", StoreRules.MaxWorkflowTaskAttempts), (stuck.Run, stuck.WorkflowType, stuck.BuildId, stuck.Attempts));
+        Assert.Empty(await store.GetStuckWorkflowTasksAsync(B, Ct)); // another tenant sees nothing
+
+        Assert.False(await store.ResumeWorkflowTaskAsync(new RunKey(B.TenantId, B.NamespaceId, run.RunId), "mallory", Time.GetUtcNow(), Ct));
+        Assert.True(await store.ResumeWorkflowTaskAsync(run, "ops@example.com", Time.GetUtcNow(), Ct));
+        Assert.False(await store.ResumeWorkflowTaskAsync(run, "ops@example.com", Time.GetUtcNow(), Ct)); // nothing left to resume
+        Assert.Empty(await store.GetStuckWorkflowTasksAsync(A, Ct));
+
+        await DriveAsync(store, A, Workflows("default", (_, _) => Task.FromResult(B8("recovered"))), Activities());
+
+        Assert.Equal(RunState.Completed, await client.GetStateAsync(run, Ct));
+        AuditEntry audit = Assert.Single(await store.GetAuditLogAsync(A, Ct));
+        Assert.Equal(("ResumeWorkflowTask", "ops@example.com", run.RunId), (audit.Action, audit.Actor, audit.RunId));
+        Assert.Empty(await store.GetAuditLogAsync(B, Ct));
+    }
+
+    [Fact]
+    public async Task A_parked_run_can_be_failed_by_an_operator_leaving_no_work_behind()
+    {
+        (IKairosStore store, KairosClient client, RunKey run) = await ParkedRunAsync();
+
+        Assert.False(await store.FailRunAsync(new RunKey(B.TenantId, B.NamespaceId, run.RunId), "x", "mallory", Time.GetUtcNow(), Ct));
+        Assert.True(await store.FailRunAsync(run, "bad build 1.2.3; replay cannot succeed", "ops@example.com", Time.GetUtcNow(), Ct));
+        Assert.False(await store.FailRunAsync(run, "again", "ops@example.com", Time.GetUtcNow(), Ct));
+
+        Assert.Equal(RunState.Failed, await client.GetStateAsync(run, Ct));
+        IReadOnlyList<HistoryEvent> history = await client.GetHistoryAsync(run, Ct);
+        Assert.Equal("bad build 1.2.3; replay cannot succeed", Assert.IsType<RunTerminated>(history[^1]).Reason);
+        AssertChainIntact(history);
+        ReplayResult replay = WorkflowReplayer.Replay(async (ctx, _) => await ctx.WaitForSignalAsync("never"), history);
+        Assert.True(replay.IsClosed);
+
+        StoreStats stats = await StatsAsync(store, A); // I9: nothing left behind
+        Assert.Equal((0, 0, 0, 0, 0), (stats.OpenRuns, stats.WorkflowTasks, stats.ActivityTasks, stats.Timers, stats.StuckWorkflowTasks));
+        Assert.Null(await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow().AddDays(1), TimeSpan.FromSeconds(30), Ct));
+        Assert.False(await client.SignalAsync(run, "late", [], Ct));
+        Assert.Equal(["FailRun"], (await store.GetAuditLogAsync(A, Ct)).Select(a => a.Action));
+    }
+
+    [Fact]
+    public async Task Failing_a_run_removes_its_activity_tasks_and_timers_too()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "busy", "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        WorkflowRegistry wf = Workflows("default", async (ctx, input) =>
+        {
+            Task<byte[]> work = ctx.ExecuteActivityAsync("echo", input);
+            await ctx.DelayAsync(TimeSpan.FromHours(1));
+            return await work;
+        });
+        await new WorkerRuntime(store, A, wf, Activities(), Time).ProcessWorkflowTaskAsync(Ct);
+        StoreStats before = await StatsAsync(store, A);
+        Assert.Equal((1, 1), (before.ActivityTasks, before.Timers));
+
+        Assert.True(await store.FailRunAsync(run, "operator stop", "ops", Time.GetUtcNow(), Ct));
+
+        StoreStats after = await StatsAsync(store, A);
+        Assert.Equal((0, 0, 0, 0), (after.ActivityTasks, after.Timers, after.WorkflowTasks, after.OpenRuns));
+        Assert.Null(await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct));
+        Assert.Equal(0, await store.FireDueTimersAsync(A, Time.GetUtcNow().AddDays(1), Ct));
+    }
 }

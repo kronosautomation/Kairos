@@ -27,6 +27,12 @@ public enum CompletionOutcome
     SequenceConflict,
 }
 
+/// <summary>A workflow task parked after too many lease expiries. It is never offered again until an operator resumes or fails the run.</summary>
+public sealed record StuckWorkflowTask(RunKey Run, string WorkflowType, string BuildId, int Attempts);
+
+/// <summary>One privileged action (resume, fail run). Append-only.</summary>
+public sealed record AuditEntry(Guid TenantId, Guid NamespaceId, Guid? RunId, string Action, string Actor, DateTimeOffset At, string Detail);
+
 /// <param name="WorkflowId">Caller-chosen business id, unique per namespace; starting an existing id is deduplicated.</param>
 public sealed record StartRunRequest(RunKey Run, string WorkflowId, string WorkflowType, string BuildId, byte[] Input, DateTimeOffset Now);
 
@@ -100,6 +106,20 @@ public interface IKairosStore
     /// until an operator intervenes). Returns the number of leases handled.
     /// </summary>
     ValueTask<int> ReapExpiredLeasesAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>Parked workflow tasks in this scope (see <see cref="StuckWorkflowTask"/>). The hosting layer logs and meters these.</summary>
+    ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken);
+
+    /// <summary>Unparks a stuck workflow task: attempts reset, runnable now. False when the run has no parked task. Audited.</summary>
+    ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Closes an open run as failed (<see cref="RunTerminated"/>) and removes every task and timer it owns. False when the run is
+    /// unknown or already closed. Audited.
+    /// </summary>
+    ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+
+    ValueTask<IReadOnlyList<AuditEntry>> GetAuditLogAsync(TenantScope scope, CancellationToken cancellationToken);
 
     /// <summary>Appends TimerFired for every due timer in scope and makes their workflows runnable. Returns the count.</summary>
     ValueTask<int> FireDueTimersAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken);

@@ -19,6 +19,7 @@ public sealed class CodecTests
         new PatchMarker(T, N, R, 8, Ts, "add-b"),
         new WorkflowCompleted(T, N, R, 9, Ts, [0]),
         new WorkflowFailed(T, N, R, 10, Ts, "Boom", "message"),
+        new RunTerminated(T, N, R, 11, Ts, "operator: stuck after bad deploy"),
     ];
 
     [Theory]

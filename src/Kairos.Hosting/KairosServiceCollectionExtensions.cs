@@ -25,13 +25,16 @@ public static class KairosServiceCollectionExtensions
         services.AddSingleton(sp => options.StoreFactory(sp));
         services.AddSingleton(sp => sp.GetRequiredService<KairosOptions.StoreHandle>().Store);
         services.AddSingleton(sp => new KairosClient(sp.GetRequiredService<IKairosStore>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new StuckTaskMonitor(
+            sp.GetRequiredService<KairosOptions.StoreHandle>(), options, sp.GetRequiredService<ILogger<StuckTaskMonitor>>()));
+        services.AddSingleton<KairosHealthCheck>();
         services.AddSingleton<IHostedService, KairosWorkerService>();
         return services;
     }
 }
 
 internal sealed partial class KairosWorkerService(
-    KairosOptions.StoreHandle handle, KairosOptions options, TimeProvider time, ILogger<KairosWorkerService> logger)
+    KairosOptions.StoreHandle handle, KairosOptions options, TimeProvider time, StuckTaskMonitor monitor, ILogger<KairosWorkerService> logger)
     : BackgroundService
 {
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
@@ -43,7 +46,8 @@ internal sealed partial class KairosWorkerService(
             {
                 OnFault = fault => LogReplayFault(logger, fault.Error, fault.Run.RunId),
             };
-            loops[i] = Task.Run(() => RunLoopAsync(worker, stoppingToken), stoppingToken);
+            StuckTaskMonitor? watcher = i == 0 ? monitor : null; // one loop watches for parked work
+            loops[i] = Task.Run(() => RunLoopAsync(worker, watcher, stoppingToken), stoppingToken);
         }
 
         return Task.WhenAll(loops);
@@ -65,12 +69,19 @@ internal sealed partial class KairosWorkerService(
     }
 
 #pragma warning disable CA1031 // A worker loop must survive any store/activity error; it is logged and retried.
-    private async Task RunLoopAsync(WorkerRuntime worker, CancellationToken ct)
+    private async Task RunLoopAsync(WorkerRuntime worker, StuckTaskMonitor? watcher, CancellationToken ct)
     {
+        long lastWatch = long.MinValue;
         while (!ct.IsCancellationRequested)
         {
             try
             {
+                if (watcher is not null && (lastWatch == long.MinValue || time.GetElapsedTime(lastWatch) >= TimeSpan.FromSeconds(1)))
+                {
+                    lastWatch = time.GetTimestamp();
+                    await watcher.RefreshAsync(ct).ConfigureAwait(false);
+                }
+
                 bool didWork = await worker.ProcessWorkflowTaskAsync(ct).ConfigureAwait(false);
                 didWork |= await worker.ProcessActivityTaskAsync(ct).ConfigureAwait(false);
                 didWork |= await worker.FireTimersAsync(ct).ConfigureAwait(false) > 0;

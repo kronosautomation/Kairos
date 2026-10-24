@@ -22,7 +22,8 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
     /// steal live leases; the caller's clock (the <c>@now</c> parameter) for simulations and tests with virtual time.
     /// </summary>
     private string Clk(string sql) =>
-        sql.Replace("@clock", _options.LeaseClock == LeaseClock.Database ? "clock_timestamp()" : "@now", StringComparison.Ordinal);
+        sql.Replace("@clock", _options.LeaseClock == LeaseClock.Database ? "clock_timestamp()" : "@now", StringComparison.Ordinal)
+           .Replace("{{timer_due}}", _options.LeaseClock == LeaseClock.Database ? "clock_timestamp() + make_interval(secs => x.dur)" : "x.due", StringComparison.Ordinal);
 
     public const string NotifyChannel = "kairos_work";
 
@@ -280,6 +281,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         var actBodies = new List<byte[]>();
         var timerIds = new List<int>();
         var timerDue = new List<DateTime>();
+        var timerSecs = new List<double>();
         foreach (HistoryEvent e in sealedEvents)
         {
             switch (e)
@@ -297,6 +299,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 case TimerStarted t:
                     timerIds.Add(t.TimerId);
                     timerDue.Add((t.Timestamp + t.Duration).UtcDateTime);
+                    timerSecs.Add(t.Duration.TotalSeconds);
                     break;
             }
         }
@@ -308,14 +311,15 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             actBodies.Clear();
             timerIds.Clear();
             timerDue.Clear();
+            timerSecs.Clear();
         }
 
-        return new PreparedCompletion(task, head, sealedEvents, state, actIds.ToArray(), actBodies.ToArray(), timerIds.ToArray(), timerDue.ToArray());
+        return new PreparedCompletion(task, head, sealedEvents, state, actIds.ToArray(), actBodies.ToArray(), timerIds.ToArray(), timerDue.ToArray(), timerSecs.ToArray());
     }
 
     private sealed record PreparedCompletion(
         WorkflowTask Task, HistoryEvent Head, List<HistoryEvent> Events, short State,
-        int[] ActIds, byte[][] ActBodies, int[] TimerIds, DateTime[] TimerDue)
+        int[] ActIds, byte[][] ActBodies, int[] TimerIds, DateTime[] TimerDue, double[] TimerSecs)
     {
         public bool HasActivities => ActIds.Length > 0;
 
@@ -340,6 +344,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             cmd.Parameters.Add(Arr("actbodies", NpgsqlDbType.Bytea, ActBodies));
             cmd.Parameters.Add(Arr("timerids", NpgsqlDbType.Integer, TimerIds));
             cmd.Parameters.Add(Arr("timerdue", NpgsqlDbType.TimestampTz, TimerDue));
+            cmd.Parameters.Add(Arr("timersecs", NpgsqlDbType.Double, TimerSecs));
             return cmd;
         }
     }
@@ -363,7 +368,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 WHERE EXISTS (SELECT 1 FROM guard) RETURNING 1),
             tm AS (
                 INSERT INTO kairos.timers (tenant_id, namespace_id, run_id, timer_id, due_at)
-                SELECT @t, @n, @r, x.id, x.due FROM unnest(@timerids, @timerdue) AS x(id, due)
+                SELECT @t, @n, @r, x.id, {{timer_due}} FROM unnest(@timerids, @timerdue, @timersecs) AS x(id, due, dur)
                 WHERE EXISTS (SELECT 1 FROM guard) RETURNING 1),
             wt AS (
                 DELETE FROM kairos.workflow_tasks
@@ -601,203 +606,435 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         }, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Upper bound on batches a single maintenance call processes, so one tick never monopolises a worker.</summary>
+    private const int MaintenanceMaxBatches = 20;
+
+    /// <summary>Runs handled per maintenance transaction. Small transactions hold few locks for a short time.</summary>
+    private const int MaintenanceBatchRuns = 50;
+
     public async ValueTask<int> ReapExpiredLeasesAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        return await InTransaction(scope, async (conn, tx) =>
+        int total = 0;
+        for (int batch = 0; batch < MaintenanceMaxBatches; batch++)
         {
-            int handled = 0;
+            int handled = await InTransaction(scope, (conn, tx) => ReapActivityBatchAsync(conn, tx, scope, now, cancellationToken), cancellationToken).ConfigureAwait(false);
+            total += handled;
+            if (handled == 0)
+            {
+                break;
+            }
+        }
 
-            // Activities: candidates first without locks, then run -> task lock order per candidate (same as completions).
-            var candidates = new List<(Guid RunId, int ActivityId)>();
-            await using (var find = new NpgsqlCommand(
+        for (int batch = 0; batch < MaintenanceMaxBatches; batch++)
+        {
+            int handled = await InTransaction(scope, (conn, tx) => ReapWorkflowBatchAsync(conn, tx, scope, now, cancellationToken), cancellationToken).ConfigureAwait(false);
+            total += handled;
+            if (handled < MaintenanceBatchRuns * 4)
+            {
+                break;
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// One transaction: take a bounded set of expired attempts ordered by run, lock their runs with SKIP LOCKED (a busy run is simply
+    /// left for the next tick), then record and requeue or fail each one. Competing reapers split the work instead of queueing.
+    /// </summary>
+    private async Task<int> ReapActivityBatchAsync(NpgsqlConnection conn, NpgsqlTransaction tx, TenantScope scope, DateTimeOffset now, CancellationToken ct)
+    {
+        var candidates = new List<(Guid RunId, int ActivityId)>();
+        await using (var find = new NpgsqlCommand(
+            Clk("""
+            SELECT run_id, activity_id FROM kairos.activity_tasks
+            WHERE tenant_id = @t AND namespace_id = @n AND leased AND lease_expires_at <= @clock
+            ORDER BY run_id, activity_id LIMIT @limit
+            """), conn, tx))
+        {
+            find.Parameters.AddWithValue("t", scope.TenantId);
+            find.Parameters.AddWithValue("n", scope.NamespaceId);
+            find.Parameters.AddWithValue("limit", MaintenanceBatchRuns);
+            find.Parameters.Add(Ts("now", now));
+            await using NpgsqlDataReader reader = await find.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                candidates.Add((reader.GetGuid(0), reader.GetInt32(1)));
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return 0;
+        }
+
+        Dictionary<Guid, RunHead> heads = await LockRunsSkipLockedAsync(conn, tx, scope, candidates.Select(c => c.RunId).Distinct().ToArray(), ct).ConfigureAwait(false);
+        int handled = 0;
+        foreach ((Guid runId, int activityId) in candidates)
+        {
+            if (!heads.TryGetValue(runId, out RunHead? head))
+            {
+                continue; // another worker is busy with this run; it will be handled next tick
+            }
+
+            var run = new RunKey(scope.TenantId, scope.NamespaceId, runId);
+            byte[]? body = null;
+            int attempt = 0;
+            await using (var row = new NpgsqlCommand(
                 Clk("""
-                SELECT run_id, activity_id FROM kairos.activity_tasks
-                WHERE tenant_id = @t AND namespace_id = @n AND leased AND lease_expires_at <= @clock
-                ORDER BY ord LIMIT 200
+                SELECT scheduled_body, attempt FROM kairos.activity_tasks
+                WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r AND activity_id = @a AND leased AND lease_expires_at <= @clock
+                FOR UPDATE
                 """), conn, tx))
             {
-                find.Parameters.AddWithValue("t", scope.TenantId);
-                find.Parameters.AddWithValue("n", scope.NamespaceId);
-                find.Parameters.Add(Ts("now", now));
-                await using NpgsqlDataReader reader = await find.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                row.Parameters.AddWithValue("t", scope.TenantId);
+                row.Parameters.AddWithValue("n", scope.NamespaceId);
+                row.Parameters.AddWithValue("r", runId);
+                row.Parameters.AddWithValue("a", activityId);
+                row.Parameters.Add(Ts("now", now));
+                await using NpgsqlDataReader reader = await row.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                if (await reader.ReadAsync(ct).ConfigureAwait(false))
                 {
-                    candidates.Add((reader.GetGuid(0), reader.GetInt32(1)));
+                    body = reader.GetFieldValue<byte[]>(0);
+                    attempt = reader.GetInt32(1);
                 }
             }
 
-            var heads = new Dictionary<Guid, RunHead?>();
-            foreach ((Guid runId, int activityId) in candidates)
+            if (body is null)
             {
-                var run = new RunKey(scope.TenantId, scope.NamespaceId, runId);
-                if (!heads.TryGetValue(runId, out RunHead? head))
-                {
-                    head = await LockRunAsync(conn, tx, run, cancellationToken).ConfigureAwait(false);
-                }
+                continue; // renewed or completed in the meantime
+            }
 
-                byte[]? body = null;
-                int attempt = 0;
-                await using (var row = new NpgsqlCommand(
+            handled++;
+            if (head.State != 0)
+            {
+                await DeleteActivityTaskAsync(conn, tx, run, activityId, ct).ConfigureAwait(false);
+                continue;
+            }
+
+            var scheduled = (ActivityScheduled)HistoryEventCodec.Decode(body, NoHash, NoHash);
+            bool retry = scheduled.RetryPolicy.ShouldRetry(attempt, StoreRules.LeaseExpiredError);
+            HistoryEvent failed = await AppendAsync(
+                conn, tx, run, head,
+                [new ActivityFailed(scope.TenantId, scope.NamespaceId, runId, 0, now, activityId, attempt,
+                    StoreRules.LeaseExpiredError, "The attempt lease expired before it completed.", retry)],
+                ct).ConfigureAwait(false);
+            heads[runId] = head with { LastSeq = failed.Sequence, LastHash = failed.Hash };
+
+            if (retry)
+            {
+                await using var requeue = new NpgsqlCommand(
                     Clk("""
-                    SELECT scheduled_body, attempt FROM kairos.activity_tasks
-                    WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r AND activity_id = @a AND leased AND lease_expires_at <= @clock
-                    FOR UPDATE
-                    """), conn, tx))
-                {
-                    row.Parameters.AddWithValue("t", scope.TenantId);
-                    row.Parameters.AddWithValue("n", scope.NamespaceId);
-                    row.Parameters.AddWithValue("r", runId);
-                    row.Parameters.AddWithValue("a", activityId);
-                    row.Parameters.Add(Ts("now", now));
-                    await using NpgsqlDataReader reader = await row.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                    if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                    {
-                        body = reader.GetFieldValue<byte[]>(0);
-                        attempt = reader.GetInt32(1);
-                    }
-                }
-
-                if (body is null)
-                {
-                    heads[runId] = head;
-                    continue; // renewed or completed in the meantime
-                }
-
-                handled++;
-                if (head is not { State: 0 })
-                {
-                    await DeleteActivityTaskAsync(conn, tx, run, activityId, cancellationToken).ConfigureAwait(false);
-                    heads[runId] = head;
-                    continue;
-                }
-
-                var scheduled = (ActivityScheduled)HistoryEventCodec.Decode(body, NoHash, NoHash);
-                bool retry = scheduled.RetryPolicy.ShouldRetry(attempt, StoreRules.LeaseExpiredError);
-                HistoryEvent failed = await AppendAsync(
-                    conn, tx, run, head,
-                    [new ActivityFailed(scope.TenantId, scope.NamespaceId, runId, 0, now, activityId, attempt,
-                        StoreRules.LeaseExpiredError, "The attempt lease expired before it completed.", retry)],
-                    cancellationToken).ConfigureAwait(false);
-                heads[runId] = head with { LastSeq = failed.Sequence, LastHash = failed.Hash };
-
-                if (retry)
-                {
-                    await using var requeue = new NpgsqlCommand(
-                        Clk("""
-                        UPDATE kairos.activity_tasks SET leased = false, attempt = attempt + 1, visible_at = @clock + make_interval(secs => @delay)
-                        WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r AND activity_id = @a
-                        """), conn, tx);
-                    requeue.Parameters.AddWithValue("t", scope.TenantId);
-                    requeue.Parameters.AddWithValue("n", scope.NamespaceId);
-                    requeue.Parameters.AddWithValue("r", runId);
-                    requeue.Parameters.AddWithValue("a", activityId);
-                    requeue.Parameters.AddWithValue("delay", scheduled.RetryPolicy.GetBackoff(attempt).TotalSeconds);
-                    requeue.Parameters.Add(Ts("now", now));
-                    await requeue.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-                }
-                else
-                {
-                    await DeleteActivityTaskAsync(conn, tx, run, activityId, cancellationToken).ConfigureAwait(false);
-                    await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false);
-                }
+                    UPDATE kairos.activity_tasks SET leased = false, attempt = attempt + 1, visible_at = @clock + make_interval(secs => @delay)
+                    WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r AND activity_id = @a
+                    """), conn, tx);
+                requeue.Parameters.AddWithValue("t", scope.TenantId);
+                requeue.Parameters.AddWithValue("n", scope.NamespaceId);
+                requeue.Parameters.AddWithValue("r", runId);
+                requeue.Parameters.AddWithValue("a", activityId);
+                requeue.Parameters.AddWithValue("delay", scheduled.RetryPolicy.GetBackoff(attempt).TotalSeconds);
+                requeue.Parameters.Add(Ts("now", now));
+                await requeue.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
+            else
+            {
+                await DeleteActivityTaskAsync(conn, tx, run, activityId, ct).ConfigureAwait(false);
+                await EnsureWorkflowTaskAsync(conn, tx, run, now, ct).ConfigureAwait(false);
+            }
+        }
 
-            // Workflow tasks: count the expiry, back off, and park (never drop) after too many.
-            await using (var wf = new NpgsqlCommand(
-                Clk("""
-                UPDATE kairos.workflow_tasks
-                SET leased = false,
-                    attempt = attempt + 1,
-                    stuck = (attempt + 1 > @max),
-                    visible_at = CASE WHEN attempt + 1 > @max THEN 'infinity'::timestamptz
-                                      ELSE @clock + make_interval(secs => least(60, power(2, attempt - 1))) END
+        if (handled > 0)
+        {
+            await NotifyAsync(conn, tx, scope, ct).ConfigureAwait(false);
+        }
+
+        return handled;
+    }
+
+    /// <summary>Workflow tasks: count the expiry, back off, and park (never drop) after too many. SKIP LOCKED, bounded.</summary>
+    private async Task<int> ReapWorkflowBatchAsync(NpgsqlConnection conn, NpgsqlTransaction tx, TenantScope scope, DateTimeOffset now, CancellationToken ct)
+    {
+        await using var wf = new NpgsqlCommand(
+            Clk("""
+            UPDATE kairos.workflow_tasks w
+            SET leased = false,
+                attempt = w.attempt + 1,
+                stuck = (w.attempt + 1 > @max),
+                visible_at = CASE WHEN w.attempt + 1 > @max THEN 'infinity'::timestamptz
+                                  ELSE @clock + make_interval(secs => least(60, power(2, w.attempt - 1))) END
+            WHERE (w.tenant_id, w.namespace_id, w.run_id) IN (
+                SELECT tenant_id, namespace_id, run_id FROM kairos.workflow_tasks
                 WHERE tenant_id = @t AND namespace_id = @n AND leased AND lease_expires_at <= @clock
-                """), conn, tx))
+                ORDER BY run_id LIMIT @limit
+                FOR UPDATE SKIP LOCKED)
+            """), conn, tx);
+        wf.Parameters.AddWithValue("t", scope.TenantId);
+        wf.Parameters.AddWithValue("n", scope.NamespaceId);
+        wf.Parameters.AddWithValue("max", StoreRules.MaxWorkflowTaskAttempts);
+        wf.Parameters.AddWithValue("limit", MaintenanceBatchRuns * 4);
+        wf.Parameters.Add(Ts("now", now));
+        int handled = await wf.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        if (handled > 0)
+        {
+            await NotifyAsync(conn, tx, scope, ct).ConfigureAwait(false);
+        }
+
+        return handled;
+    }
+
+    /// <summary>Locks the given runs in run_id order, skipping any that another transaction holds. Returns heads of the locked ones.</summary>
+    private static async Task<Dictionary<Guid, RunHead>> LockRunsSkipLockedAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, TenantScope scope, Guid[] runIds, CancellationToken ct)
+    {
+        var heads = new Dictionary<Guid, RunHead>();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT run_id, state, last_seq, last_hash FROM kairos.runs
+            WHERE tenant_id = @t AND namespace_id = @n AND run_id = ANY(@ids)
+            ORDER BY run_id FOR UPDATE SKIP LOCKED
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("t", scope.TenantId);
+        cmd.Parameters.AddWithValue("n", scope.NamespaceId);
+        cmd.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = runIds });
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            heads[reader.GetGuid(0)] = new RunHead(reader.GetInt16(1), reader.GetInt64(2), reader.GetFieldValue<byte[]>(3));
+        }
+
+        return heads;
+    }
+
+    // ---- operator actions on parked work --------------------------------------------------------------------------
+
+    public async ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken)
+    {
+        return await Retry<IReadOnlyList<StuckWorkflowTask>>(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(scope);
+            NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
+            cmd.CommandText = """
+                SELECT w.run_id, r.workflow_type, r.build_id, w.attempt - 1
+                FROM kairos.workflow_tasks w
+                JOIN kairos.runs r ON r.tenant_id = w.tenant_id AND r.namespace_id = w.namespace_id AND r.run_id = w.run_id
+                WHERE w.tenant_id = @t AND w.namespace_id = @n AND w.stuck
+                ORDER BY w.run_id
+                """;
+            Scope(cmd, scope);
+            batch.BatchCommands.Add(cmd);
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            var stuck = new List<StuckWorkflowTask>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                wf.Parameters.AddWithValue("t", scope.TenantId);
-                wf.Parameters.AddWithValue("n", scope.NamespaceId);
-                wf.Parameters.AddWithValue("max", StoreRules.MaxWorkflowTaskAttempts);
-                wf.Parameters.Add(Ts("now", now));
-                handled += await wf.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                stuck.Add(new StuckWorkflowTask(new RunKey(scope.TenantId, scope.NamespaceId, reader.GetGuid(0)), reader.GetString(1), reader.GetString(2), reader.GetInt32(3)));
             }
 
-            if (handled > 0)
+            return stuck;
+        }).ConfigureAwait(false);
+    }
+
+    public async ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        return await InTransaction(run.Scope, async (conn, tx) =>
+        {
+            await using var cmd = new NpgsqlCommand(
+                Clk("""
+                UPDATE kairos.workflow_tasks SET stuck = false, leased = false, attempt = 1, visible_at = @clock
+                WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r AND stuck
+                """), conn, tx);
+            cmd.Parameters.AddWithValue("t", run.TenantId);
+            cmd.Parameters.AddWithValue("n", run.NamespaceId);
+            cmd.Parameters.AddWithValue("r", run.RunId);
+            cmd.Parameters.Add(Ts("now", now));
+            if (await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
             {
-                await NotifyAsync(conn, tx, scope, cancellationToken).ConfigureAwait(false);
+                return false;
             }
 
-            return handled;
+            await AuditAsync(conn, tx, run, "ResumeWorkflowTask", actor, now, "unparked after repeated lease expiry", cancellationToken).ConfigureAwait(false);
+            await NotifyAsync(conn, tx, run.Scope, cancellationToken).ConfigureAwait(false);
+            return true;
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static readonly string[] FailRunStatements =
+    [
+        "UPDATE kairos.runs SET state = 2 WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
+        "DELETE FROM kairos.workflow_tasks WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
+        "DELETE FROM kairos.activity_tasks WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
+        "DELETE FROM kairos.timers WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
+    ];
+
+    public async ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        return await InTransaction(run.Scope, async (conn, tx) =>
+        {
+            RunHead? head = await LockRunAsync(conn, tx, run, cancellationToken).ConfigureAwait(false);
+            if (head is not { State: 0 })
+            {
+                return false;
+            }
+
+            await AppendAsync(conn, tx, run, head, [new RunTerminated(run.TenantId, run.NamespaceId, run.RunId, 0, now, reason)], cancellationToken).ConfigureAwait(false);
+            foreach (string sql in FailRunStatements)
+            {
+                await using var cmd = new NpgsqlCommand(sql, conn, tx);
+                cmd.Parameters.AddWithValue("t", run.TenantId);
+                cmd.Parameters.AddWithValue("n", run.NamespaceId);
+                cmd.Parameters.AddWithValue("r", run.RunId);
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await AuditAsync(conn, tx, run, "FailRun", actor, now, reason, cancellationToken).ConfigureAwait(false);
+            return true;
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<IReadOnlyList<AuditEntry>> GetAuditLogAsync(TenantScope scope, CancellationToken cancellationToken)
+    {
+        return await Retry<IReadOnlyList<AuditEntry>>(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(scope);
+            NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
+            cmd.CommandText = "SELECT run_id, action, actor, at, detail FROM kairos.audit_log WHERE tenant_id = @t AND namespace_id = @n ORDER BY id";
+            Scope(cmd, scope);
+            batch.BatchCommands.Add(cmd);
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            var entries = new List<AuditEntry>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                entries.Add(new AuditEntry(
+                    scope.TenantId, scope.NamespaceId, reader.IsDBNull(0) ? null : reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
+                    new DateTimeOffset(reader.GetDateTime(3), TimeSpan.Zero), reader.GetString(4)));
+            }
+
+            return entries;
+        }).ConfigureAwait(false);
+    }
+
+    private static async Task AuditAsync(NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, string action, string actor, DateTimeOffset at, string detail, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "INSERT INTO kairos.audit_log (tenant_id, namespace_id, run_id, at, action, actor, detail) VALUES (@t, @n, @r, @at, @action, @actor, @detail)", conn, tx);
+        cmd.Parameters.AddWithValue("t", run.TenantId);
+        cmd.Parameters.AddWithValue("n", run.NamespaceId);
+        cmd.Parameters.AddWithValue("r", run.RunId);
+        cmd.Parameters.Add(Ts("at", at));
+        cmd.Parameters.AddWithValue("action", action);
+        cmd.Parameters.AddWithValue("actor", actor);
+        cmd.Parameters.AddWithValue("detail", detail);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     // ---- timers -----------------------------------------------------------------------------------------------
 
     public async ValueTask<int> FireDueTimersAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        return await InTransaction(scope, async (conn, tx) =>
+        int total = 0;
+        for (int batch = 0; batch < MaintenanceMaxBatches; batch++)
         {
-            var due = new List<(DateTime At, Guid RunId, int TimerId)>();
-            await using (var take = new NpgsqlCommand(
-                """
-                DELETE FROM kairos.timers
-                WHERE (tenant_id, namespace_id, run_id, timer_id) IN (
-                    SELECT tenant_id, namespace_id, run_id, timer_id FROM kairos.timers
-                    WHERE tenant_id = @t AND namespace_id = @n AND due_at <= @now
-                    ORDER BY due_at, run_id, timer_id LIMIT 1000
-                    FOR UPDATE SKIP LOCKED)
-                RETURNING due_at, run_id, timer_id
-                """, conn, tx))
+            int fired = await InTransaction(scope, (conn, tx) => FireTimerBatchAsync(conn, tx, scope, now, cancellationToken), cancellationToken).ConfigureAwait(false);
+            total += fired;
+            if (fired == 0)
             {
-                take.Parameters.AddWithValue("t", scope.TenantId);
-                take.Parameters.AddWithValue("n", scope.NamespaceId);
-                take.Parameters.Add(Ts("now", now));
-                await using NpgsqlDataReader reader = await take.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    due.Add((reader.GetDateTime(0), reader.GetGuid(1), reader.GetInt32(2)));
-                }
+                break;
+            }
+        }
+
+        return total;
+    }
+
+    private async Task<int> FireTimerBatchAsync(NpgsqlConnection conn, NpgsqlTransaction tx, TenantScope scope, DateTimeOffset now, CancellationToken ct)
+    {
+        var runIds = new List<Guid>();
+        await using (var find = new NpgsqlCommand(
+            Clk("""
+            SELECT DISTINCT run_id FROM kairos.timers
+            WHERE tenant_id = @t AND namespace_id = @n AND due_at <= @clock
+            ORDER BY run_id LIMIT @limit
+            """), conn, tx))
+        {
+            find.Parameters.AddWithValue("t", scope.TenantId);
+            find.Parameters.AddWithValue("n", scope.NamespaceId);
+            find.Parameters.AddWithValue("limit", MaintenanceBatchRuns);
+            find.Parameters.Add(Ts("now", now));
+            await using NpgsqlDataReader reader = await find.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                runIds.Add(reader.GetGuid(0));
+            }
+        }
+
+        if (runIds.Count == 0)
+        {
+            return 0;
+        }
+
+        // Lock the runs first (skipping busy ones), then take only the timers of runs we hold: lock order is always run, then children.
+        Dictionary<Guid, RunHead> heads = await LockRunsSkipLockedAsync(conn, tx, scope, [.. runIds], ct).ConfigureAwait(false);
+        if (heads.Count == 0)
+        {
+            return 0;
+        }
+
+        var due = new List<(DateTime At, Guid RunId, int TimerId)>();
+        await using (var take = new NpgsqlCommand(
+            Clk("""
+            DELETE FROM kairos.timers
+            WHERE tenant_id = @t AND namespace_id = @n AND run_id = ANY(@ids) AND due_at <= @clock
+            RETURNING due_at, run_id, timer_id
+            """), conn, tx))
+        {
+            take.Parameters.AddWithValue("t", scope.TenantId);
+            take.Parameters.AddWithValue("n", scope.NamespaceId);
+            take.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = heads.Keys.ToArray() });
+            take.Parameters.Add(Ts("now", now));
+            await using NpgsqlDataReader reader = await take.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                due.Add((reader.GetDateTime(0), reader.GetGuid(1), reader.GetInt32(2)));
+            }
+        }
+
+        due.Sort(static (a, b) =>
+        {
+            int c = a.At.CompareTo(b.At);
+            if (c != 0)
+            {
+                return c;
             }
 
-            due.Sort(static (a, b) =>
+            c = a.RunId.CompareTo(b.RunId);
+            return c != 0 ? c : a.TimerId.CompareTo(b.TimerId);
+        });
+
+        foreach ((DateTime _, Guid runId, int timerId) in due)
+        {
+            var run = new RunKey(scope.TenantId, scope.NamespaceId, runId);
+            RunHead head = heads[runId];
+            if (head.State != 0)
             {
-                int c = a.At.CompareTo(b.At);
-                if (c != 0)
-                {
-                    return c;
-                }
-
-                c = a.RunId.CompareTo(b.RunId);
-                return c != 0 ? c : a.TimerId.CompareTo(b.TimerId);
-            });
-
-            var heads = new Dictionary<Guid, RunHead?>();
-            foreach ((DateTime _, Guid runId, int timerId) in due)
-            {
-                var run = new RunKey(scope.TenantId, scope.NamespaceId, runId);
-                if (!heads.TryGetValue(runId, out RunHead? head))
-                {
-                    head = await LockRunAsync(conn, tx, run, cancellationToken).ConfigureAwait(false);
-                }
-
-                if (head is not { State: 0 })
-                {
-                    heads[runId] = head;
-                    continue;
-                }
-
-                HistoryEvent fired = await AppendAsync(
-                    conn, tx, run, head, [new TimerFired(scope.TenantId, scope.NamespaceId, runId, 0, now, timerId)], cancellationToken).ConfigureAwait(false);
-                heads[runId] = head with { LastSeq = fired.Sequence, LastHash = fired.Hash };
-                await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false);
+                continue;
             }
 
-            if (due.Count > 0)
-            {
-                await NotifyAsync(conn, tx, scope, cancellationToken).ConfigureAwait(false);
-            }
+            HistoryEvent fired = await AppendAsync(
+                conn, tx, run, head, [new TimerFired(scope.TenantId, scope.NamespaceId, runId, 0, now, timerId)], ct).ConfigureAwait(false);
+            heads[runId] = head with { LastSeq = fired.Sequence, LastHash = fired.Hash };
+            await EnsureWorkflowTaskAsync(conn, tx, run, now, ct).ConfigureAwait(false);
+        }
 
-            return due.Count;
-        }, cancellationToken).ConfigureAwait(false);
+        if (due.Count > 0)
+        {
+            await NotifyAsync(conn, tx, scope, ct).ConfigureAwait(false);
+        }
+
+        return due.Count;
     }
 
     // ---- reads ------------------------------------------------------------------------------------------------
@@ -1075,6 +1312,15 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         }).ConfigureAwait(false);
     }
 
+    private static long s_deadlockRetries;
+    private static long s_retriesExhausted;
+
+    /// <summary>Deadlocks / serialization failures that were retried successfully, process-wide (also exported as a metric).</summary>
+    public static long DeadlockRetries => Interlocked.Read(ref s_deadlockRetries);
+
+    /// <summary>Operations that failed because retries ran out. Must stay zero; an alert condition.</summary>
+    public static long RetriesExhausted => Interlocked.Read(ref s_retriesExhausted);
+
     private static async Task<T> Retry<T>(Func<Task<T>> operation)
     {
         for (int attempt = 1; ; attempt++)
@@ -1085,7 +1331,14 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             }
             catch (PostgresException ex) when (attempt < MaxAttempts && ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure)
             {
+                Interlocked.Increment(ref s_deadlockRetries);
+                KairosMetrics.StoreRetries.Add(1);
                 await Task.Delay(TimeSpan.FromMilliseconds(5 * attempt)).ConfigureAwait(false);
+            }
+            catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure)
+            {
+                Interlocked.Increment(ref s_retriesExhausted);
+                throw;
             }
         }
     }

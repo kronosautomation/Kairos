@@ -56,6 +56,7 @@ public static class HistoryEventCodec
             HistoryEventType.ActivityFailed => new ActivityFailed(
                 tenant, ns, run, seq, ts, r.ReadInt32(), r.ReadInt32(), r.ReadString(), r.ReadString(), r.ReadByte() != 0),
             HistoryEventType.TimerStarted => new TimerStarted(tenant, ns, run, seq, ts, r.ReadInt32(), TimeSpan.FromTicks(r.ReadInt64())),
+            HistoryEventType.RunTerminated => new RunTerminated(tenant, ns, run, seq, ts, r.ReadString()),
             HistoryEventType.WorkflowTaskCompleted => new WorkflowTaskCompleted(tenant, ns, run, seq, ts),
             HistoryEventType.TimerFired => new TimerFired(tenant, ns, run, seq, ts, r.ReadInt32()),
             HistoryEventType.SignalReceived => new SignalReceived(tenant, ns, run, seq, ts, r.ReadString(), r.ReadBytes()),

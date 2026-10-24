@@ -179,6 +179,10 @@ public sealed class WorkflowExecution : IWorkflowContext
                 _scheduler.Post(_ => StartWorkflow(input), null);
                 break;
 
+            case RunTerminated:
+                _closed = true;
+                break;
+
             case WorkflowTaskCompleted:
                 RequireNoPendingCommands(e);
                 RunBatch(isReplaying: true);

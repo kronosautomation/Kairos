@@ -13,6 +13,7 @@ public enum HistoryEventType : byte
     WorkflowFailed = 9,
     PatchMarker = 10,
     WorkflowTaskCompleted = 11,
+    RunTerminated = 12,
 }
 
 /// <summary>
@@ -63,6 +64,17 @@ public sealed record WorkflowTaskCompleted(
     : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.WorkflowTaskCompleted;
+}
+
+/// <summary>
+/// An operator closed the run from outside the workflow (<c>FailRunAsync</c>), for example a run parked after repeated lease
+/// expiry. The run ends as failed; workflow code is not replayed to produce this event.
+/// </summary>
+public sealed record RunTerminated(
+    Guid TenantId, Guid NamespaceId, Guid RunId, long Sequence, DateTimeOffset Timestamp,
+    string Reason) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
+{
+    public override HistoryEventType Type => HistoryEventType.RunTerminated;
 }
 
 /// <summary>Records that a patch (<see cref="IWorkflowContext.IsPatched"/>) was taken by this run, so replays take the same branch.</summary>

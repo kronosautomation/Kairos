@@ -36,6 +36,18 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
         ActivityTask task, HistoryEvent outcome, DateTimeOffset? retryAt, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.CompleteActivityTaskAsync(task, outcome, retryAt, now, cancellationToken);
 
+    public virtual ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken) =>
+        inner.GetStuckWorkflowTasksAsync(scope, cancellationToken);
+
+    public virtual ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        inner.ResumeWorkflowTaskAsync(run, actor, now, cancellationToken);
+
+    public virtual ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        inner.FailRunAsync(run, reason, actor, now, cancellationToken);
+
+    public virtual ValueTask<IReadOnlyList<AuditEntry>> GetAuditLogAsync(TenantScope scope, CancellationToken cancellationToken) =>
+        inner.GetAuditLogAsync(scope, cancellationToken);
+
     public virtual ValueTask<int> FireDueTimersAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.FireDueTimersAsync(scope, now, cancellationToken);
 

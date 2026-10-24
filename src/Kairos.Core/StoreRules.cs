@@ -68,5 +68,5 @@ public static class StoreRules
     public static HistoryEvent Seal(HistoryEvent template, long sequence, ReadOnlySpan<byte> prevHash) =>
         HashChain.Seal(template with { Sequence = sequence }, prevHash);
 
-    public static bool IsClosing(HistoryEvent e) => e.Type is HistoryEventType.WorkflowCompleted or HistoryEventType.WorkflowFailed;
+    public static bool IsClosing(HistoryEvent e) => e.Type is HistoryEventType.WorkflowCompleted or HistoryEventType.WorkflowFailed or HistoryEventType.RunTerminated;
 }

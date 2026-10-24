@@ -23,6 +23,7 @@ internal static class EventEncoder
         TimerStarted => 4 + 8,
         TimerFired => 4,
         WorkflowTaskCompleted => 0,
+        RunTerminated x => StringMax(x.Reason),
         SignalReceived x => StringMax(x.SignalName) + BytesMax(x.Payload),
         WorkflowCompleted x => BytesMax(x.Result),
         WorkflowFailed x => StringMax(x.ErrorType) + StringMax(x.Message),
@@ -85,6 +86,9 @@ internal static class EventEncoder
                 w.WriteInt32(x.TimerId);
                 break;
             case WorkflowTaskCompleted:
+                break;
+            case RunTerminated x:
+                w.WriteString(x.Reason);
                 break;
             case SignalReceived x:
                 w.WriteString(x.SignalName);

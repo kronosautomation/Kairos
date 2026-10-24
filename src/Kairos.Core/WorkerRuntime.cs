@@ -228,7 +228,11 @@ public sealed class WorkerRuntime
         return fired + reaped;
     }
 
-    private void Fault(WorkflowTask task, Exception error) => OnFault?.Invoke(new TaskFault(task.Run, error));
+    private void Fault(WorkflowTask task, Exception error)
+    {
+        KairosMetrics.WorkflowTaskFaults.Add(1, new KeyValuePair<string, object?>("error", error.GetType().Name));
+        OnFault?.Invoke(new TaskFault(task.Run, error));
+    }
 
     private static HistoryEvent ToEvent(RunKey r, WorkflowCommand command, DateTimeOffset ts) => command switch
     {
