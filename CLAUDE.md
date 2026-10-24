@@ -47,6 +47,12 @@ budgets are CI gates; a change that regresses them is not done.
   Core must take `TimeProvider`, a seeded RNG and abstract transport/store so the simulator can control them.
 - Commit in small steps with clear messages; never commit secrets, connection strings, or certificates.
 
+## Documentation
+Product docs live in `docs-site/` (DocFX), planned in `docs/DOCS-SITE.md`. Follow `docs/DISCLOSURE-POLICY.md`:
+never copy or link anything under `docs/` into `docs-site/`, `samples/`, READMEs or package descriptions; no roadmap,
+strategy, pricing rationale, review findings or commercial internals in anything public. Any change to public behaviour updates the
+affected pages in the same commit. Code snippets come only from compiling `samples/` projects.
+
 ## CI conventions (Azure DevOps: `azure-pipelines.yml`, `build/azure-pipelines-nightly.yml`)
 
 Test categories (xUnit `[Trait("Category", "...")]`). Untagged tests run on every commit:
