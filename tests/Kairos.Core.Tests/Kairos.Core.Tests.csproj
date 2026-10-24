@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <None Update="sim-regression-seeds.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Corpus\**\*.khist" CopyToOutputDirectory="PreserveNewest" LinkBase="Corpus" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="CsCheck" />
     <PackageReference Include="coverlet.collector">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

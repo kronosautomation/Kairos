@@ -191,6 +191,9 @@ public sealed class WorkflowExecution : IWorkflowContext
                 break;
 
             case RunTerminated:
+                // The store ended the run instead of recording what the last batch asked for (history cap) or an operator closed it:
+                // commands that never made it into history are discarded, not a divergence.
+                _pending.Clear();
                 _closed = true;
                 break;
 

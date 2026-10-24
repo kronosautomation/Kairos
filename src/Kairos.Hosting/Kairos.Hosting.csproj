@@ -7,8 +7,13 @@
   <ItemGroup>
     <ProjectReference Include="..\Kairos.Core\Kairos.Core.csproj" />
     <ProjectReference Include="..\Kairos.Persistence.Postgres\Kairos.Persistence.Postgres.csproj" />
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+  </ItemGroup>
+
+  <!-- .NET 11+ supplies these, and an explicit reference there is NU1510 (an error under TreatWarningsAsErrors).
+       Keep them only for frameworks that still need the packages. -->
+  <ItemGroup Condition="!$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net11.0'))">
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
 

@@ -17,6 +17,9 @@ public sealed class SimOptions
     /// <summary>Ship the patched build mid-simulation, with runs in flight.</summary>
     public bool Deploy { get; init; } = true;
 
+    /// <summary>Start with the patched build already deployed (used to record histories written by patched code).</summary>
+    public bool StartPatched { get; init; }
+
     /// <summary>Share of activities that run for about three leases and must heartbeat to survive (L1).</summary>
     public double SlowActivityProbability { get; init; } = 0.1;
 
@@ -63,6 +66,7 @@ public sealed class SimWorld
         StoreUnderTest? backend = null)
     {
         backend ??= StoreUnderTest.InMemory();
+        _patched = options?.StartPatched ?? false;
         _inner = backend.Store;
         _diag = backend.Diagnostics;
         _options = options ?? new SimOptions();
@@ -103,6 +107,34 @@ public sealed class SimWorld
         {
             throw new InvariantViolationException(ex.Invariant, $"seed={seed}: {ex.Message[(ex.Message.IndexOf(']') + 2)..]}");
         }
+    }
+
+    /// <summary>The seeded chaos run for explicit programs (property tests generate the programs; the seed drives everything else).</summary>
+    public static async Task<SimResult> RunChaosAsync(ulong seed, SimOptions options, IReadOnlyList<SimProgram> programs)
+    {
+        var world = new SimWorld(seed, options, programs);
+        try
+        {
+            await world.ChaosAsync();
+            await world.QuiesceAsync();
+            return await world.CheckInvariantsAsync();
+        }
+        catch (InvariantViolationException ex)
+        {
+            throw new InvariantViolationException(ex.Invariant, $"seed={seed} programs=[{string.Join("; ", programs)}]: {ex.Message[(ex.Message.IndexOf(']') + 2)..]}");
+        }
+    }
+
+    /// <summary>Every run's history as stored (for property tests that replay or tamper with them).</summary>
+    public async Task<IReadOnlyList<IReadOnlyList<HistoryEvent>>> GetHistoriesAsync()
+    {
+        var all = new List<IReadOnlyList<HistoryEvent>>();
+        foreach (RunInfo r in _runs)
+        {
+            all.Add(await _inner.GetHistoryAsync(r.Key!.Value, CancellationToken.None));
+        }
+
+        return all;
     }
 
     /// <summary>Faultless drive of the given programs; used for crash-at-every-step (set <see cref="Store"/>.ForcedFault first).</summary>

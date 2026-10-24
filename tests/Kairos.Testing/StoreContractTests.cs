@@ -664,28 +664,9 @@ public abstract class StoreContractTests
 
     // ---- continue-as-new and the history cap ---------------------------------------------------------------------------
 
-    /// <summary>Sums 1..n, one activity per number, handing over to a fresh run whenever the history reaches <paramref name="handoverAt"/> events.</summary>
-    private static WorkflowFunc Summer(int handoverAt) => async (ctx, input) =>
-    {
-        int next = BitConverter.ToInt32(input, 0), total = BitConverter.ToInt32(input, 4), last = BitConverter.ToInt32(input, 8);
-        while (next <= last)
-        {
-            if (ctx.HistoryLength >= handoverAt)
-            {
-                throw ctx.ContinueAsNew(Pack(next, total, last));
-            }
+    private static WorkflowFunc Summer(int handoverAt) => ReferenceWorkflows.Summer(handoverAt);
 
-            byte[] r = await ctx.ExecuteActivityAsync("echo", BitConverter.GetBytes(next));
-            total += BitConverter.ToInt32(r, 0);
-            next++;
-        }
-
-        return BitConverter.GetBytes(total);
-    };
-
-    private static byte[] Pack(params int[] values) => [.. values.SelectMany(BitConverter.GetBytes)];
-
-    private static byte[] SumInput(int first, int last) => Pack(first, 0, last);
+    private static byte[] SumInput(int first, int last) => ReferenceWorkflows.SumInput(first, last);
 
     [Fact]
     public async Task Continue_as_new_hands_over_to_a_fresh_run_and_keeps_every_history_short()
