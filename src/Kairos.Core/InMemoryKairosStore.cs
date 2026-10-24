@@ -1,6 +1,6 @@
 namespace Kairos;
 
-public readonly record struct InMemoryStoreStats(int Runs, int OpenRuns, int WorkflowTasks, int ActivityTasks, int Timers);
+public readonly record struct StoreStats(int Runs, int OpenRuns, int WorkflowTasks, int ActivityTasks, int Timers);
 
 /// <summary>
 /// Reference implementation of <see cref="IKairosStore"/> held in memory. Thread-safe (one lock). Semantics here are the
@@ -380,7 +380,7 @@ public sealed class InMemoryKairosStore : IKairosStore
     }
 
     /// <summary>Resource counters for bounded-resource checks (I9): everything should drain to zero once runs close.</summary>
-    public InMemoryStoreStats GetStats()
+    public StoreStats GetStats()
     {
         lock (_gate)
         {
@@ -400,7 +400,7 @@ public sealed class InMemoryKairosStore : IKairosStore
                 }
             }
 
-            return new InMemoryStoreStats(runs, open, wf, act, timers);
+            return new StoreStats(runs, open, wf, act, timers);
         }
     }
 

@@ -64,6 +64,7 @@ public sealed class SimulationTests
     }
 
     [Fact]
+    [Trait("Category", "Simulation")]
     public async Task Different_seeds_explore_different_executions()
     {
         var fingerprints = new HashSet<string>();
@@ -76,6 +77,7 @@ public sealed class SimulationTests
     }
 
     [Fact]
+    [Trait("Category", "Simulation")]
     public async Task Regression_corpus_of_previously_failing_seeds_stays_green()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "sim-regression-seeds.txt");
@@ -90,6 +92,7 @@ public sealed class SimulationTests
     }
 
     [Fact]
+    [Trait("Category", "Simulation")]
     public async Task Simulation_catches_a_store_that_loses_signals()
     {
         // Meta-test: a simulator is only worth anything if it can fail. A store that acknowledges but drops signals strands
@@ -98,6 +101,7 @@ public sealed class SimulationTests
     }
 
     [Fact]
+    [Trait("Category", "Simulation")]
     public async Task Simulation_catches_a_store_that_corrupts_history()
     {
         await AssertCaughtAsync(null, inner => new TamperingStore(inner));

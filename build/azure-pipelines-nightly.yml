@@ -4,6 +4,13 @@
 trigger: none
 pr: none
 
+parameters:
+- name: agentPool
+  displayName: Agent pool
+  type: string
+  default: 'Azure Pipelines'      # change to Kairos-Local to run nightly on the Docker agent on your laptop
+  values: [ 'Azure Pipelines', 'Kairos-Local' ]
+
 schedules:
 - cron: '17 9 * * *'                # 02:17 Pacific (UTC 09:17), daily
   displayName: Nightly deep tests
@@ -31,7 +38,10 @@ stages:
   - job: Simulation
     displayName: Deterministic simulation (time-boxed, millions of seeds)
     pool:
-      vmImage: ubuntu-latest
+      ${{ if eq(parameters.agentPool, 'Kairos-Local') }}:
+        name: Kairos-Local
+      ${{ else }}:
+        vmImage: ubuntu-latest
     timeoutInMinutes: 180
     variables:
       KAIROS_SIM_SEEDS: '0'               # 0 = unlimited, bounded by duration
@@ -50,7 +60,10 @@ stages:
   - job: Integration
     displayName: Postgres matrix, fault injection, crash-at-every-step (full)
     pool:
-      vmImage: ubuntu-latest
+      ${{ if eq(parameters.agentPool, 'Kairos-Local') }}:
+        name: Kairos-Local
+      ${{ else }}:
+        vmImage: ubuntu-latest
     timeoutInMinutes: 120
     strategy:
       matrix:
@@ -71,7 +84,10 @@ stages:
   - job: Benchmarks
     displayName: Benchmarks (trend only until a dedicated agent exists)
     pool:
-      vmImage: ubuntu-latest
+      ${{ if eq(parameters.agentPool, 'Kairos-Local') }}:
+        name: Kairos-Local
+      ${{ else }}:
+        vmImage: ubuntu-latest
     timeoutInMinutes: 60
     steps:
     - template: steps-setup.yml
@@ -85,7 +101,10 @@ stages:
     displayName: Soak (enabled once Server exists, M7)
     condition: and(succeeded(), eq(variables['KAIROS_SOAK_ENABLED'], 'true'))
     pool:
-      vmImage: ubuntu-latest
+      ${{ if eq(parameters.agentPool, 'Kairos-Local') }}:
+        name: Kairos-Local
+      ${{ else }}:
+        vmImage: ubuntu-latest
     timeoutInMinutes: 360
     steps:
     - template: steps-setup.yml
@@ -103,7 +122,10 @@ stages:
   jobs:
   - job: Stryker
     pool:
-      vmImage: ubuntu-latest
+      ${{ if eq(parameters.agentPool, 'Kairos-Local') }}:
+        name: Kairos-Local
+      ${{ else }}:
+        vmImage: ubuntu-latest
     timeoutInMinutes: 240
     steps:
     - template: steps-setup.yml

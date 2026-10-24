@@ -1,0 +1,163 @@
+# Kairos local environment. Run from the repo root:
+#   docker compose -f docker/compose.yml --profile deps up -d        Postgres matrix, HA pair, Toxiproxy
+#   docker compose -f docker/compose.yml --profile emulators up -d   cloud stand-ins
+#   .\ci-local.ps1 -Stage Fast                                       same stages as Azure DevOps, in a container
+#   docker compose -f docker/compose.yml --profile agent up -d       self-hosted Azure Pipelines agent
+# Local development only: credentials come from docker/.env (copy .env.example). Never reuse them anywhere real.
+
+name: kairos
+
+x-pg: &pg
+  restart: unless-stopped
+  environment:
+    POSTGRES_USER: ${KAIROS_PG_USER:-kairos}
+    POSTGRES_PASSWORD: ${KAIROS_PG_PASSWORD:-kairos-local-only}
+    POSTGRES_DB: kairos
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U ${KAIROS_PG_USER:-kairos} -d kairos"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+  profiles: ["deps"]
+
+services:
+  # ---------- Postgres version matrix (mirrors the nightly pipeline) ----------
+  pg15: { <<: *pg, image: "postgres:15", ports: ["54315:5432"] }
+  pg16: { <<: *pg, image: "postgres:16", ports: ["54316:5432"] }
+  pg17: { <<: *pg, image: "postgres:17", ports: ["54317:5432"] }
+  pg18: { <<: *pg, image: "postgres:18", ports: ["54318:5432"] }
+
+  # ---------- Failover drill: primary + streaming replica ----------
+  pg-primary:
+    <<: *pg
+    image: "postgres:17"
+    ports: ["54320:5432"]
+    environment:
+      POSTGRES_USER: ${KAIROS_PG_USER:-kairos}
+      POSTGRES_PASSWORD: ${KAIROS_PG_PASSWORD:-kairos-local-only}
+      POSTGRES_DB: kairos
+      REPLICATION_PASSWORD: ${KAIROS_REPLICATION_PASSWORD:-replica-local-only}
+    command: ["postgres", "-c", "wal_level=replica", "-c", "max_wal_senders=10", "-c", "hot_standby=on"]
+    volumes:
+      - ./postgres/primary-init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+  pg-replica:
+    image: "postgres:17"
+    restart: unless-stopped
+    profiles: ["deps"]
+    user: postgres
+    depends_on:
+      pg-primary: { condition: service_healthy }
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      REPLICATION_PASSWORD: ${KAIROS_REPLICATION_PASSWORD:-replica-local-only}
+    entrypoint: ["bash", "/scripts/replica-entrypoint.sh"]
+    ports: ["54321:5432"]
+    volumes:
+      - ./postgres/replica-entrypoint.sh:/scripts/replica-entrypoint.sh:ro
+      - pg-replica-data:/var/lib/postgresql/data
+
+  # ---------- Fault injection: Toxiproxy in front of pg17 (proxy on 54330, API on 8474) ----------
+  toxiproxy:
+    image: "ghcr.io/shopify/toxiproxy:latest"   # pin to the pulled version after first run
+    profiles: ["deps"]
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    ports: ["8474:8474", "54330:54330"]
+    volumes:
+      - ./toxiproxy/toxiproxy.json:/config/toxiproxy.json:ro
+    depends_on:
+      pg17: { condition: service_healthy }
+
+  # ---------- Cloud stand-ins for the conformance suite ----------
+  azurite:            # Azure Blob/Queue/Table
+    image: "mcr.microsoft.com/azure-storage/azurite"
+    profiles: ["emulators"]
+    ports: ["10000:10000", "10001:10001", "10002:10002"]
+  localstack:         # AWS S3, SQS, SNS, KMS, STS, EventBridge
+    # Newer LocalStack releases need an account token (since 2026-03-23). 4.12 is the last free community tag.
+    # To use a newer release, change the tag and set LOCALSTACK_AUTH_TOKEN in docker/.env.
+    image: "localstack/localstack:4.12"
+    profiles: ["emulators"]
+    ports: ["4566:4566"]
+    environment:
+      SERVICES: s3,sqs,sns,kms,sts,events
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
+  seaweedfs:          # S3-compatible store for self-hosted blob offload (MinIO no longer ships images)
+    image: "chrislusf/seaweedfs:latest"
+    profiles: ["emulators"]
+    command: ["server", "-s3", "-dir=/data"]
+    ports: ["8333:8333"]
+  pubsub:             # Google Cloud Pub/Sub emulator
+    image: "gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators"
+    profiles: ["emulators"]
+    command: ["gcloud", "beta", "emulators", "pubsub", "start", "--host-port=0.0.0.0:8085", "--project=kairos-local"]
+    ports: ["8085:8085"]
+  vault:              # IKeyProvider: Vault transit engine (dev mode, in-memory)
+    image: "hashicorp/vault:latest"
+    profiles: ["emulators"]
+    cap_add: ["IPC_LOCK"]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${KAIROS_VAULT_TOKEN:-kairos-dev-root}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports: ["8200:8200"]
+  keycloak:           # OIDC identity provider standing in for Entra ID / Okta
+    image: "quay.io/keycloak/keycloak:26.0"
+    profiles: ["emulators"]
+    command: ["start-dev"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KAIROS_KEYCLOAK_ADMIN:-admin-local-only}
+    ports: ["8080:8080"]
+  nats:               # event bus (JetStream on)
+    image: "nats:2.10"
+    profiles: ["emulators"]
+    command: ["-js"]
+    ports: ["4222:4222"]
+  kafka:              # event bus (single-node KRaft)
+    image: "apache/kafka:3.9.0"
+    profiles: ["emulators"]
+    ports: ["9092:9092"]
+
+  # ---------- Local CI runner: same stages as azure-pipelines.yml ----------
+  ci:
+    build:
+      context: .
+      dockerfile: ci.Dockerfile
+    profiles: ["ci"]
+    working_dir: /src
+    environment:
+      CI: "true"
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal   # reach containers Testcontainers starts on the host daemon
+      KAIROS_SIM_SEEDS: ${KAIROS_SIM_SEEDS:-1000}
+      KAIROS_SIM_DURATION_MINUTES: ${KAIROS_SIM_DURATION_MINUTES:-0}
+      KAIROS_SIM_START_SEED: ${KAIROS_SIM_START_SEED:-1}
+      KAIROS_PG_IMAGE: ${KAIROS_PG_IMAGE:-postgres:17}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ..:/src:ro                         # repo is read-only; the build runs on a copy (no clash with Windows bin/obj)
+      - ../.ci-local:/results              # test results, failing seeds, coverage
+      - nuget-cache:/root/.nuget/packages
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # ---------- Self-hosted Azure Pipelines agent (pool: Kairos-Local) ----------
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    profiles: ["agent"]
+    restart: unless-stopped
+    environment:
+      AZP_URL: ${AZP_URL:?Set AZP_URL in docker/.env}
+      AZP_TOKEN: ${AZP_TOKEN:?Set AZP_TOKEN in docker/.env}
+      AZP_POOL: ${AZP_POOL:-Kairos-Local}
+      AZP_AGENT_NAME: ${AZP_AGENT_NAME:-kronoslaptop-docker}
+      AGENT_ALLOW_RUNASROOT: "true"         # needed to use the Docker socket for Testcontainers
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-work:/azp/_work
+
+volumes:
+  pg-replica-data:
+  nuget-cache:
+  agent-work:

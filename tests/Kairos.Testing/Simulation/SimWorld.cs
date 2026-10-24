@@ -384,7 +384,7 @@ public sealed class SimWorld
         }
 
         // I9 + I1: no leaked work.
-        InMemoryStoreStats s = _inner.GetStats();
+        StoreStats s = _inner.GetStats();
         if (s.WorkflowTasks != 0 || s.ActivityTasks != 0 || s.Timers != 0 || s.OpenRuns != 0)
         {
             throw new InvariantViolationException("I9", $"Store still holds work after all runs closed: {s}.");
