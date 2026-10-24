@@ -5,8 +5,8 @@ namespace Kairos.Core.Tests;
 
 /// <summary>
 /// Layer 2 (deterministic simulation). Every failure names its seed; to reproduce, run that single seed:
-/// <c>KAIROS_SIM_START=&lt;seed&gt; KAIROS_SIM_SEEDS=1 dotnet test --filter Simulation</c>.
-/// CI default is 1,000 seeds; nightly sets KAIROS_SIM_SEEDS to millions.
+/// <c>KAIROS_SIM_START_SEED=&lt;seed&gt; KAIROS_SIM_SEEDS=1 dotnet test --filter Category=Simulation</c>.
+/// Per commit: 1,000 seeds. Nightly: KAIROS_SIM_SEEDS=0 (unlimited) bounded by KAIROS_SIM_DURATION_MINUTES.
 /// </summary>
 public sealed class SimulationTests
 {
@@ -14,15 +14,23 @@ public sealed class SimulationTests
         ulong.TryParse(Environment.GetEnvironmentVariable(name), out ulong v) ? v : fallback;
 
     [Fact]
+    [Trait("Category", "Simulation")]
     public async Task Seeded_chaos_holds_invariants_I1_to_I4_and_I9()
     {
-        ulong start = EnvU64("KAIROS_SIM_START", 1);
-        ulong count = EnvU64("KAIROS_SIM_SEEDS", 1000);
+        ulong start = EnvU64("KAIROS_SIM_START_SEED", 1);
+        ulong count = EnvU64("KAIROS_SIM_SEEDS", 1000); // 0 = unlimited (bounded by the duration)
+        ulong minutes = EnvU64("KAIROS_SIM_DURATION_MINUTES", 0);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         var failures = new List<string>();
         var total = new SimStats();
 
-        for (ulong seed = start; seed < start + count; seed++)
+        for (ulong seed = start; count == 0 || seed < start + count; seed++)
         {
+            if (minutes > 0 && clock.Elapsed.TotalMinutes >= minutes)
+            {
+                break;
+            }
+
             try
             {
                 SimResult result = await SimWorld.RunSeedAsync(seed);
@@ -42,6 +50,7 @@ public sealed class SimulationTests
     }
 
     [Fact]
+    [Trait("Category", "Simulation")]
     public async Task Same_seed_reproduces_the_run_bit_for_bit()
     {
         foreach (ulong seed in new ulong[] { 1, 2, 3, 42, 977, 123456789 })
