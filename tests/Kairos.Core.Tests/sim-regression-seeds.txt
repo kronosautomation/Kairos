@@ -1,0 +1,3 @@
+# Seeds that once failed. Each line: seed  # what it found.
+# (empty so far -- add seeds here when a simulation failure is fixed)
+1  # smoke

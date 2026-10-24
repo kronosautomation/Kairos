@@ -12,6 +12,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="sim-regression-seeds.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 

@@ -1,5 +1,7 @@
 namespace Kairos;
 
+public readonly record struct InMemoryStoreStats(int Runs, int OpenRuns, int WorkflowTasks, int ActivityTasks, int Timers);
+
 /// <summary>
 /// Reference implementation of <see cref="IKairosStore"/> held in memory. Thread-safe (one lock). Semantics here are the
 /// contract the PostgreSQL store must match; both run the same store contract tests.
@@ -104,6 +106,7 @@ public sealed class InMemoryKairosStore : IKairosStore
                 return ValueTask.FromResult(CompletionOutcome.SequenceConflict);
             }
 
+            Append(run, new WorkflowTaskCompleted(task.Run.TenantId, task.Run.NamespaceId, task.Run.RunId, 0, now));
             for (int i = 0; i < newEvents.Count; i++)
             {
                 HistoryEvent sealedEvent = Append(run, newEvents[i]);
@@ -277,6 +280,169 @@ public sealed class InMemoryKairosStore : IKairosStore
         lock (_gate)
         {
             return ValueTask.FromResult(FindRun(run)?.State);
+        }
+    }
+
+    /// <summary>
+    /// Restores a run from persisted history (a process restart): verifies the hash chain, then rebuilds the derived state
+    /// (open activity tasks, timers, runnable workflow task) from the events alone.
+    /// </summary>
+    public RunKey Import(IReadOnlyList<HistoryEvent> history, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        if (history.Count == 0 || history[0] is not WorkflowStarted started)
+        {
+            throw new ArgumentException("History must begin with WorkflowStarted.", nameof(history));
+        }
+
+        HashChain.Verify(history);
+        var key = new RunKey(started.TenantId, started.NamespaceId, started.RunId);
+        lock (_gate)
+        {
+            ScopeData scope = Scope(key.Scope, create: true)!;
+            if (scope.Runs.ContainsKey(key.RunId))
+            {
+                throw new InvalidOperationException("Run already exists.");
+            }
+
+            var run = new Run(key, started.WorkflowType, started.BuildId);
+            run.History.AddRange(history);
+            scope.Runs.Add(key.RunId, run);
+            scope.WorkflowIds.Add($"imported-{key.RunId:N}", key.RunId);
+
+            var scheduled = new Dictionary<int, ActivityScheduled>();
+            var failures = new Dictionary<int, int>();
+            var startedTimers = new Dictionary<int, TimerStarted>();
+            bool newExternal = false;
+            foreach (HistoryEvent e in history)
+            {
+                switch (e)
+                {
+                    case ActivityScheduled s:
+                        scheduled[s.ActivityId] = s;
+                        break;
+                    case ActivityCompleted c:
+                        scheduled.Remove(c.ActivityId);
+                        newExternal = true;
+                        break;
+                    case ActivityFailed f when f.WillRetry:
+                        failures[f.ActivityId] = f.Attempt;
+                        break;
+                    case ActivityFailed f:
+                        scheduled.Remove(f.ActivityId);
+                        newExternal = true;
+                        break;
+                    case TimerStarted t:
+                        startedTimers[t.TimerId] = t;
+                        break;
+                    case TimerFired t:
+                        startedTimers.Remove(t.TimerId);
+                        newExternal = true;
+                        break;
+                    case SignalReceived or WorkflowStarted:
+                        newExternal = true;
+                        break;
+                    case WorkflowTaskCompleted:
+                        newExternal = false;
+                        break;
+                    case WorkflowCompleted:
+                        run.State = RunState.Completed;
+                        break;
+                    case WorkflowFailed:
+                        run.State = RunState.Failed;
+                        break;
+                }
+            }
+
+            if (run.State == RunState.Running)
+            {
+                foreach (ActivityScheduled s in scheduled.Values)
+                {
+                    scope.ActivityTasks.Add((key.RunId, s.ActivityId), new ActivityTaskRow(key.RunId, s, now, ++_order)
+                    {
+                        Attempt = failures.GetValueOrDefault(s.ActivityId) + 1,
+                    });
+                }
+
+                foreach (TimerStarted t in startedTimers.Values)
+                {
+                    scope.Timers.Add((key.RunId, t.TimerId), t.Timestamp + t.Duration);
+                }
+
+                if (newExternal)
+                {
+                    EnsureWorkflowTask(scope, run, now);
+                }
+            }
+
+            return key;
+        }
+    }
+
+    /// <summary>Resource counters for bounded-resource checks (I9): everything should drain to zero once runs close.</summary>
+    public InMemoryStoreStats GetStats()
+    {
+        lock (_gate)
+        {
+            int runs = 0, wf = 0, act = 0, timers = 0, open = 0;
+            foreach (ScopeData s in _scopes.Values)
+            {
+                runs += s.Runs.Count;
+                wf += s.WorkflowTasks.Count;
+                act += s.ActivityTasks.Count;
+                timers += s.Timers.Count;
+                foreach (Run r in s.Runs.Values)
+                {
+                    if (r.State == RunState.Running)
+                    {
+                        open++;
+                    }
+                }
+            }
+
+            return new InMemoryStoreStats(runs, open, wf, act, timers);
+        }
+    }
+
+    /// <summary>
+    /// The earliest moment after <paramref name="now"/> at which something becomes runnable (a timer is due, a retry becomes
+    /// visible, a lease expires), or null. Lets simulators and test engines jump virtual time instead of waiting.
+    /// </summary>
+    public DateTimeOffset? NextWakeup(TenantScope scope, DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            if (Scope(scope, create: false) is not { } data)
+            {
+                return null;
+            }
+
+            DateTimeOffset? best = null;
+
+            void Consider(DateTimeOffset at)
+            {
+                if (at > now && (best is null || at < best))
+                {
+                    best = at;
+                }
+            }
+
+            foreach (DateTimeOffset due in data.Timers.Values)
+            {
+                Consider(due);
+            }
+
+            foreach (WorkflowTaskRow row in data.WorkflowTasks.Values)
+            {
+                Consider(row.Leased ? row.LeaseExpires : row.VisibleAt);
+            }
+
+            foreach (ActivityTaskRow row in data.ActivityTasks.Values)
+            {
+                Consider(row.Leased ? row.LeaseExpires : row.VisibleAt);
+            }
+
+            return best;
         }
     }
 

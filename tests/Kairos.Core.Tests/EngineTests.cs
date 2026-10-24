@@ -1,5 +1,7 @@
 using System.Text;
 
+using Kairos.Testing;
+
 namespace Kairos.Core.Tests;
 
 public sealed class EngineTests
@@ -18,21 +20,24 @@ public sealed class EngineTests
     [Fact]
     public async Task Happy_path_runs_activity_and_completes()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("greet", input => Task.FromResult(B("hello " + S(input))));
         engine.RegisterWorkflow("wf", async (ctx, input) => await ctx.ExecuteActivityAsync("greet", input));
 
         Guid run = engine.StartWorkflow("wf", B("world"), Tenant, Namespace);
-        WorkflowStatus status = await engine.RunAsync(run);
+        RunState status = await engine.RunAsync(run);
 
-        Assert.Equal(WorkflowStatus.Completed, status);
+        Assert.Equal(RunState.Completed, status);
         IReadOnlyList<HistoryEvent> history = engine.GetHistory(run);
         Assert.Equal(
-            [HistoryEventType.WorkflowStarted, HistoryEventType.ActivityScheduled, HistoryEventType.ActivityCompleted, HistoryEventType.WorkflowCompleted],
+            [
+                HistoryEventType.WorkflowStarted, HistoryEventType.WorkflowTaskCompleted, HistoryEventType.ActivityScheduled,
+                HistoryEventType.ActivityCompleted, HistoryEventType.WorkflowTaskCompleted, HistoryEventType.WorkflowCompleted,
+            ],
             Types(history));
         Assert.Equal("hello world", ResultOf(history));
         Assert.All(history, e => Assert.Equal((Tenant, Namespace, run), (e.TenantId, e.NamespaceId, e.RunId)));
-        Assert.Equal([1L, 2, 3, 4], history.Select(e => e.Sequence));
+        Assert.Equal([1L, 2, 3, 4, 5, 6], history.Select(e => e.Sequence));
         HashChain.Verify(history);
     }
 
@@ -40,7 +45,7 @@ public sealed class EngineTests
     public async Task Activity_retries_with_backoff_then_succeeds()
     {
         int calls = 0;
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         DateTimeOffset start = engine.Now;
         engine.RegisterActivity("flaky", _ => ++calls < 3
             ? throw new InvalidOperationException("boom " + calls)
@@ -48,7 +53,7 @@ public sealed class EngineTests
         engine.RegisterWorkflow("wf", async (ctx, input) => await ctx.ExecuteActivityAsync("flaky", input));
 
         Guid run = engine.StartWorkflow("wf", [], Tenant, Namespace);
-        Assert.Equal(WorkflowStatus.Completed, await engine.RunAsync(run));
+        Assert.Equal(RunState.Completed, await engine.RunAsync(run));
 
         IReadOnlyList<HistoryEvent> history = engine.GetHistory(run);
         ActivityFailed[] failures = [.. history.OfType<ActivityFailed>()];
@@ -64,7 +69,7 @@ public sealed class EngineTests
     [Fact]
     public async Task Exhausted_retries_surface_to_workflow_as_activity_failure()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("bad", _ => throw new TimeoutException("nope"));
         engine.RegisterWorkflow("wf", async (ctx, input) =>
         {
@@ -79,7 +84,7 @@ public sealed class EngineTests
         });
 
         Guid run = engine.StartWorkflow("wf", [], Tenant, Namespace);
-        Assert.Equal(WorkflowStatus.Completed, await engine.RunAsync(run));
+        Assert.Equal(RunState.Completed, await engine.RunAsync(run));
 
         IReadOnlyList<HistoryEvent> history = engine.GetHistory(run);
         Assert.Equal([true, false], history.OfType<ActivityFailed>().Select(f => f.WillRetry));
@@ -89,13 +94,13 @@ public sealed class EngineTests
     [Fact]
     public async Task Non_retryable_error_fails_workflow_without_retry()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("bad", _ => throw new ArgumentException("fatal"));
         engine.RegisterWorkflow("wf", async (ctx, input) =>
             await ctx.ExecuteActivityAsync("bad", input, RetryPolicy.Default with { NonRetryableErrorTypes = ["ArgumentException"] }));
 
         Guid run = engine.StartWorkflow("wf", [], Tenant, Namespace);
-        Assert.Equal(WorkflowStatus.Failed, await engine.RunAsync(run));
+        Assert.Equal(RunState.Failed, await engine.RunAsync(run));
 
         IReadOnlyList<HistoryEvent> history = engine.GetHistory(run);
         Assert.Single(history.OfType<ActivityFailed>());
@@ -105,7 +110,7 @@ public sealed class EngineTests
     [Fact]
     public async Task Timer_advances_workflow_time()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterWorkflow("wf", async (ctx, _) =>
         {
             DateTimeOffset before = ctx.Now;
@@ -114,11 +119,14 @@ public sealed class EngineTests
         });
 
         Guid run = engine.StartWorkflow("wf", [], Tenant, Namespace);
-        Assert.Equal(WorkflowStatus.Completed, await engine.RunAsync(run));
+        Assert.Equal(RunState.Completed, await engine.RunAsync(run));
 
         IReadOnlyList<HistoryEvent> history = engine.GetHistory(run);
         Assert.Equal(
-            [HistoryEventType.WorkflowStarted, HistoryEventType.TimerStarted, HistoryEventType.TimerFired, HistoryEventType.WorkflowCompleted],
+            [
+                HistoryEventType.WorkflowStarted, HistoryEventType.WorkflowTaskCompleted, HistoryEventType.TimerStarted,
+                HistoryEventType.TimerFired, HistoryEventType.WorkflowTaskCompleted, HistoryEventType.WorkflowCompleted,
+            ],
             Types(history));
         Assert.Equal(TimeSpan.FromHours(1).ToString(), ResultOf(history));
     }
@@ -126,7 +134,7 @@ public sealed class EngineTests
     [Fact]
     public async Task Signal_unblocks_waiting_workflow_and_early_signals_are_buffered()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterWorkflow("wf", async (ctx, _) =>
         {
             byte[] first = await ctx.WaitForSignalAsync("go");
@@ -136,13 +144,13 @@ public sealed class EngineTests
         });
 
         Guid run = engine.StartWorkflow("wf", [], Tenant, Namespace);
-        Assert.Equal(WorkflowStatus.Running, await engine.RunAsync(run));
+        Assert.Equal(RunState.Running, await engine.RunAsync(run));
 
         engine.Signal(run, "go", B("a"));
-        Assert.Equal(WorkflowStatus.Running, await engine.RunAsync(run)); // blocked on the second signal
+        Assert.Equal(RunState.Running, await engine.RunAsync(run)); // blocked on the second signal
 
         engine.Signal(run, "go", B("b"));
-        Assert.Equal(WorkflowStatus.Completed, await engine.RunAsync(run));
+        Assert.Equal(RunState.Completed, await engine.RunAsync(run));
         Assert.Equal("a+b", ResultOf(engine.GetHistory(run)));
     }
 
@@ -151,9 +159,9 @@ public sealed class EngineTests
     {
         int stepACalls = 0, stepBCalls = 0;
 
-        InMemoryWorkflowEngine NewEngine()
+        TestEngine NewEngine()
         {
-            var e = new InMemoryWorkflowEngine();
+            var e = new TestEngine();
             e.RegisterActivity("a", _ => { stepACalls++; return Task.FromResult(B("A")); });
             e.RegisterActivity("b", _ => { stepBCalls++; return Task.FromResult(B("B")); });
             e.RegisterWorkflow("wf", async (ctx, _) =>
@@ -167,17 +175,17 @@ public sealed class EngineTests
             return e;
         }
 
-        InMemoryWorkflowEngine before = NewEngine();
+        TestEngine before = NewEngine();
         Guid run = before.StartWorkflow("wf", [], Tenant, Namespace);
-        Assert.Equal(WorkflowStatus.Running, await before.RunAsync(run));
+        Assert.Equal(RunState.Running, await before.RunAsync(run));
         HistoryEvent[] persisted = [.. before.GetHistory(run)]; // what survives the "crash"
 
         Assert.Equal(1, stepACalls);
 
-        InMemoryWorkflowEngine after = NewEngine(); // brand-new process, only the history carries over
+        TestEngine after = NewEngine(); // brand-new process, only the history carries over
         after.Load(persisted);
         after.Signal(run, "approve", B("Y"));
-        Assert.Equal(WorkflowStatus.Completed, await after.RunAsync(run));
+        Assert.Equal(RunState.Completed, await after.RunAsync(run));
 
         Assert.Equal(1, stepACalls); // not re-executed after recovery
         Assert.Equal(1, stepBCalls);
@@ -203,7 +211,7 @@ public sealed class EngineTests
     [Fact]
     public async Task Changed_activity_is_detected_as_non_determinism()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("a", _ => Task.FromResult(B("x")));
         engine.RegisterWorkflow("wf", async (ctx, input) => await ctx.ExecuteActivityAsync("a", input));
         Guid run = engine.StartWorkflow("wf", [], Tenant, Namespace);
@@ -217,7 +225,7 @@ public sealed class EngineTests
     [Fact]
     public async Task Activity_replaced_by_timer_is_detected_as_non_determinism()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("a", _ => Task.FromResult(B("x")));
         engine.RegisterWorkflow("wf", async (ctx, input) => await ctx.ExecuteActivityAsync("a", input));
         Guid run = engine.StartWorkflow("wf", [], Tenant, Namespace);
@@ -234,7 +242,7 @@ public sealed class EngineTests
     [Fact]
     public async Task Workflow_that_stops_emitting_commands_is_detected_as_non_determinism()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("a", _ => Task.FromResult(B("x")));
         engine.RegisterWorkflow("wf", async (ctx, input) => await ctx.ExecuteActivityAsync("a", input));
         Guid run = engine.StartWorkflow("wf", [], Tenant, Namespace);
@@ -247,7 +255,7 @@ public sealed class EngineTests
     [Fact]
     public async Task Changed_activity_input_is_detected_as_non_determinism()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("a", _ => Task.FromResult(B("x")));
         engine.RegisterWorkflow("wf", async (ctx, input) => await ctx.ExecuteActivityAsync("a", input));
         Guid run = engine.StartWorkflow("wf", B("one"), Tenant, Namespace);

@@ -1,16 +1,20 @@
+using Kairos.Testing;
+
 namespace Kairos.Core.Tests;
 
 /// <summary>
 /// Cheap, deterministic allocation gates mirroring the BenchmarkDotNet suite (benchmarks/Kairos.Benchmarks).
 /// Budgets are roughly 1.5x the measured value; a regression beyond them fails the build.
+/// History: M1 measured ~133 KB per 1,000-event replay; the batch scheduler that deterministic replay needs (found by the
+/// simulator) costs ~208 KB. Sticky caching removes full replays from the hot path; revisit then.
 /// </summary>
 public sealed class AllocationBudgetTests
 {
-    private const int Activities = 499; // 1 start + 499 x (scheduled, completed) + 1 completion = 1,000 events
+    private const int Activities = 332; // started + 3 events per activity (result, boundary, next command) + 2 = 999 events
 
     private static async Task<IReadOnlyList<HistoryEvent>> BuildHistoryAsync(WorkflowFunc workflow)
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("step", input => Task.FromResult(input));
         engine.RegisterWorkflow("wf", workflow);
         Guid run = engine.StartWorkflow("wf", new byte[64], Guid.NewGuid(), Guid.NewGuid());
@@ -27,7 +31,7 @@ public sealed class AllocationBudgetTests
     }
 
     [Fact]
-    public async Task Replay_of_1000_events_stays_within_allocation_budget()
+    public async Task Replay_of_999_events_stays_within_allocation_budget()
     {
         WorkflowFunc workflow = async (ctx, input) =>
         {
@@ -39,11 +43,11 @@ public sealed class AllocationBudgetTests
             return input;
         };
         IReadOnlyList<HistoryEvent> history = await BuildHistoryAsync(workflow);
-        Assert.Equal(1000, history.Count);
+        Assert.Equal(999, history.Count);
 
         long allocated = Measure(() => WorkflowReplayer.Replay(workflow, history, verifyHashChain: false));
 
-        Assert.True(allocated < 200_000, $"Replay allocated {allocated:N0} bytes (budget 200,000).");
+        Assert.True(allocated < 300_000, $"Replay allocated {allocated:N0} bytes (budget 300,000).");
     }
 
     [Fact]

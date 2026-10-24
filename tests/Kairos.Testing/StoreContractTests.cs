@@ -177,7 +177,7 @@ public abstract class StoreContractTests
         Assert.Equal(CompletionOutcome.StaleLease, await store.CompleteWorkflowTaskAsync(second, [done], Time.GetUtcNow(), Ct)); // no double apply
 
         IReadOnlyList<HistoryEvent> history = await client.GetHistoryAsync(first.Run, Ct);
-        Assert.Equal(2, history.Count);
+        Assert.Equal(3, history.Count); // started, task boundary, completed
         AssertChainIntact(history);
     }
 

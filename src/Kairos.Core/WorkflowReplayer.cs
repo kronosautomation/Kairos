@@ -35,11 +35,12 @@ public static class WorkflowReplayer
             }
         }
 
-        int last = history.Count - 1;
-        for (int i = 0; i <= last; i++)
+        for (int i = 0; i < history.Count; i++)
         {
-            execution.Apply(history[i], isReplaying: i < last);
+            execution.Apply(history[i]);
         }
+
+        execution.FinishHistory();
 
         var commands = new List<WorkflowCommand>(execution.PendingCommandCount);
         execution.DrainCommands(commands);

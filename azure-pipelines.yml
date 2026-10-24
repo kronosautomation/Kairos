@@ -1,0 +1,122 @@
+# Kairos CI — runs on every pull request and every push to main.
+# Fast, deterministic layers of docs/TEST-STRATEGY.md. Long runs live in build/azure-pipelines-nightly.yml.
+
+trigger:
+  branches:
+    include: [ main ]
+pr:
+  branches:
+    include: [ main ]
+
+parameters:
+- name: targets
+  type: object
+  default:
+  - { name: net10, label: '10', sdk: '10.0.x', tfm: net10.0, locked: 'true', blocking: true }
+  # Non-blocking until .NET 11 GA (expected Nov 2026). Lock files are generated for net10.0, so restore unlocked here.
+  - { name: net11, label: '11 (Runtime Async)', sdk: '11.0.x', tfm: net11.0, locked: 'false', blocking: false }
+
+variables:
+  CI: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  NUGET_PACKAGES: $(Pipeline.Workspace)/.nuget/packages
+  KAIROS_SIM_SEEDS: '1000'          # deterministic simulation seeds per commit
+  BuildConfiguration: Release
+
+stages:
+- stage: Test
+  displayName: Build and test
+  jobs:
+  - ${{ each t in parameters.targets }}:
+    - job: Test_${{ t.name }}
+      displayName: Test (.NET ${{ t.label }})
+      continueOnError: ${{ not(t.blocking) }}
+      pool:
+        vmImage: ubuntu-latest        # Docker is available, so Testcontainers (Postgres) works
+      timeoutInMinutes: 45
+      steps:
+      - checkout: self
+        fetchDepth: 1
+
+      - task: UseDotNet@2
+        displayName: Install .NET 10 SDK
+        inputs:
+          packageType: sdk
+          version: '10.0.x'
+
+      - ${{ if ne(t.sdk, '10.0.x') }}:
+        - task: UseDotNet@2
+          displayName: Install .NET ${{ t.label }} SDK
+          inputs:
+            packageType: sdk
+            version: ${{ t.sdk }}
+            includePreviewVersions: true
+
+      - task: Cache@2
+        displayName: Cache NuGet packages
+        inputs:
+          key: 'nuget | "$(Agent.OS)" | ${{ t.tfm }} | **/packages.lock.json,!**/bin/**,!**/obj/**'
+          restoreKeys: |
+            nuget | "$(Agent.OS)" | ${{ t.tfm }}
+          path: $(NUGET_PACKAGES)
+
+      - script: dotnet restore Kairos.sln -p:TargetFramework=${{ t.tfm }} -p:RestoreLockedMode=${{ t.locked }}
+        displayName: Restore
+
+      - script: dotnet build Kairos.sln -c $(BuildConfiguration) --no-restore -p:TargetFramework=${{ t.tfm }}
+        displayName: Build (warnings are errors)
+
+      - script: >
+          dotnet test Kairos.sln -c $(BuildConfiguration) --no-build -p:TargetFramework=${{ t.tfm }}
+          --filter "Category!=Nightly&Category!=Soak&Category!=CloudSandbox"
+          --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+          --collect "XPlat Code Coverage"
+        displayName: Unit, property, simulation (1,000 seeds), crash-at-every-step, Postgres integration
+
+      - task: PublishTestResults@2
+        displayName: Publish test results
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: VSTest
+          testResultsFiles: '$(Agent.TempDirectory)/TestResults/**/*.trx'
+          testRunTitle: 'Kairos .NET ${{ t.label }}'
+          failTaskOnFailedTests: true
+
+      - ${{ if eq(t.tfm, 'net10.0') }}:
+        - task: PublishCodeCoverageResults@2
+          displayName: Publish coverage
+          condition: succeededOrFailed()
+          inputs:
+            summaryFileLocation: '$(Agent.TempDirectory)/TestResults/**/coverage.cobertura.xml'
+
+      - publish: $(Agent.TempDirectory)/TestResults
+        artifact: test-failures-${{ t.name }}-$(System.JobAttempt)
+        displayName: Keep failing simulation seeds and logs
+        condition: failed()
+
+- stage: SupplyChain
+  displayName: Supply chain checks
+  dependsOn: []
+  jobs:
+  - job: Audit
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        version: '10.0.x'
+    - script: dotnet restore Kairos.sln -p:RestoreLockedMode=true
+      displayName: Locked restore (NuGetAudit fails on high/critical)
+    - script: |
+        set -euo pipefail
+        dotnet list Kairos.sln package --vulnerable --include-transitive | tee vuln.txt
+        if grep -qE "\b(High|Critical)\b" vuln.txt; then echo "##vso[task.logissue type=error]High/critical vulnerable package"; exit 1; fi
+      displayName: Vulnerable package report
+    - script: |
+        set -euo pipefail
+        # Fail if anything that looks like a secret was committed.
+        if git grep -nE "(Password|Pwd|AccountKey|SharedAccessKey|client_secret|BEGIN (RSA |EC )?PRIVATE KEY)\s*[=:]" -- . ':!docs/**' ':!*.md'; then
+          echo "##vso[task.logissue type=error]Possible secret in source"; exit 1; fi
+      displayName: Secret pattern scan

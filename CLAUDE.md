@@ -41,6 +41,17 @@ budgets are CI gates; a change that regresses them is not done.
   Core must take `TimeProvider`, a seeded RNG and abstract transport/store so the simulator can control them.
 - Commit in small steps with clear messages; never commit secrets, connection strings, or certificates.
 
+## CI conventions (Azure DevOps: `azure-pipelines.yml`, `build/azure-pipelines-nightly.yml`)
+
+Test categories (xUnit `[Trait("Category", "...")]`). Untagged tests run on every commit:
+- `Simulation`: deterministic simulation. Read `KAIROS_SIM_SEEDS` (seed count, 0 = unlimited), `KAIROS_SIM_DURATION_MINUTES`
+  (time box) and `KAIROS_SIM_START_SEED`. Every failure must print its seed. Short runs also run per commit.
+- `Integration`, `CrashMatrix`, `FaultInjection`: Postgres via Testcontainers; read the image from `KAIROS_PG_IMAGE`
+  (default `postgres:17`). Small cases run per commit; the full matrix nightly.
+- `Nightly`: anything too slow for per-commit. `Soak`: long runs (M7+). `CloudSandbox`: real cloud accounts (M6+).
+- The pipeline builds with `-p:TargetFramework=net11.0` as a non-blocking .NET 11 / Runtime Async check, so keep code
+  compiling on both; never depend on compiler-generated async state machines.
+
 ## Milestones
 
 The authoritative plan, solution layout, provider interfaces and agent requirements are in

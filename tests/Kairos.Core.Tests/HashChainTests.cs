@@ -1,4 +1,5 @@
 using System.Text;
+using Kairos.Testing;
 
 namespace Kairos.Core.Tests;
 
@@ -9,7 +10,7 @@ public sealed class HashChainTests
 
     private static async Task<List<HistoryEvent>> SampleHistoryAsync()
     {
-        var engine = new InMemoryWorkflowEngine();
+        var engine = new TestEngine();
         engine.RegisterActivity("a", i => Task.FromResult(i));
         engine.RegisterWorkflow("wf", async (ctx, input) =>
         {
@@ -39,21 +40,21 @@ public sealed class HashChainTests
     public async Task Modified_payload_is_detected()
     {
         List<HistoryEvent> history = await SampleHistoryAsync();
-        history[1] = ((ActivityScheduled)history[1]) with { Input = Encoding.UTF8.GetBytes("tampered") };
+        history[2] = ((ActivityScheduled)history[2]) with { Input = Encoding.UTF8.GetBytes("tampered") };
 
         var ex = Assert.Throws<HistoryIntegrityException>(() => HashChain.Verify(history));
-        Assert.Equal(2, ex.Sequence);
+        Assert.Equal(3, ex.Sequence);
     }
 
     [Fact]
     public async Task Modified_event_with_recomputed_hash_breaks_the_next_link()
     {
         List<HistoryEvent> history = await SampleHistoryAsync();
-        HistoryEvent forged = history[1] with { Timestamp = history[1].Timestamp.AddDays(1) };
-        history[1] = HashChain.Seal(forged, history[1].PrevHash);
+        HistoryEvent forged = history[2] with { Timestamp = history[2].Timestamp.AddDays(1) };
+        history[2] = HashChain.Seal(forged, history[2].PrevHash);
 
         var ex = Assert.Throws<HistoryIntegrityException>(() => HashChain.Verify(history));
-        Assert.Equal(3, ex.Sequence);
+        Assert.Equal(4, ex.Sequence);
     }
 
     [Fact]
@@ -101,6 +102,6 @@ public sealed class HashChainTests
 
         WorkflowFunc wf = (_, input) => Task.FromResult(input);
         Assert.Throws<HistoryIntegrityException>(() => WorkflowReplayer.Replay(wf, history));
-        Assert.Throws<HistoryIntegrityException>(() => new InMemoryWorkflowEngine().Load(history));
+        Assert.Throws<HistoryIntegrityException>(() => new TestEngine().Load(history));
     }
 }

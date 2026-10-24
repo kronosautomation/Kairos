@@ -12,6 +12,7 @@ public enum HistoryEventType : byte
     WorkflowCompleted = 8,
     WorkflowFailed = 9,
     PatchMarker = 10,
+    WorkflowTaskCompleted = 11,
 }
 
 /// <summary>
@@ -49,6 +50,19 @@ public sealed record ActivityCompleted(
     int ActivityId, byte[] Result) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.ActivityCompleted;
+}
+
+/// <summary>
+/// Batch boundary, appended by the store each time a workflow task completes. All external events (start, results, timers,
+/// signals) since the previous boundary were processed together by one run of workflow code; the command events that follow
+/// are what that run produced. Replay reproduces the same batches, which is what makes it deterministic when several
+/// events arrive between two tasks.
+/// </summary>
+public sealed record WorkflowTaskCompleted(
+    Guid TenantId, Guid NamespaceId, Guid RunId, long Sequence, DateTimeOffset Timestamp)
+    : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
+{
+    public override HistoryEventType Type => HistoryEventType.WorkflowTaskCompleted;
 }
 
 /// <summary>Records that a patch (<see cref="IWorkflowContext.IsPatched"/>) was taken by this run, so replays take the same branch.</summary>

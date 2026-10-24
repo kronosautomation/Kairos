@@ -1,0 +1,15 @@
+parameters:
+- name: title
+  type: string
+steps:
+- task: PublishTestResults@2
+  condition: succeededOrFailed()
+  inputs:
+    testResultsFormat: VSTest
+    testResultsFiles: '$(Agent.TempDirectory)/TestResults/**/*.trx'
+    testRunTitle: ${{ parameters.title }}
+    failTaskOnFailedTests: true
+- publish: $(Agent.TempDirectory)/TestResults
+  artifact: results-$(System.JobName)-$(System.JobAttempt)
+  condition: failed()
+  displayName: Keep failing seeds and logs

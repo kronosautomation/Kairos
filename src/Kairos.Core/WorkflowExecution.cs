@@ -4,13 +4,19 @@ using System.Security.Cryptography;
 namespace Kairos;
 
 /// <summary>
-/// One live (or replaying) workflow run. History events are applied in order; workflow code runs inline on the caller's
-/// thread, to its next suspension point, after each event. Commands the code emits must then match the command-bearing
-/// events that follow in history, otherwise <see cref="NonDeterminismException"/> is thrown. Not thread-safe.
+/// One live (or replaying) workflow run.
+/// <para>
+/// History is applied in order. External events (start, activity results, timers, signals) only <i>resolve</i> things; workflow
+/// code runs when a <see cref="WorkflowTaskCompleted"/> boundary is reached (and once more at the end of history), exactly once
+/// per batch, on a private FIFO scheduler so continuations run in the order their events were applied. The commands a batch
+/// produces must then match, one for one, the command events that follow the boundary, otherwise
+/// <see cref="NonDeterminismException"/> is thrown. Not thread-safe.
+/// </para>
 /// </summary>
 public sealed class WorkflowExecution : IWorkflowContext
 {
     private readonly WorkflowFunc _workflow;
+    private readonly Scheduler _scheduler = new();
     private readonly Queue<WorkflowCommand> _pending = new();
     private readonly Dictionary<int, PendingActivity> _activities = [];
     private readonly Dictionary<int, TaskCompletionSource> _timers = [];
@@ -19,6 +25,7 @@ public sealed class WorkflowExecution : IWorkflowContext
     private Task<byte[]>? _task;
     private int _nextCommandId;
     private int _guidCounter;
+    private bool _started;
     private bool _completionQueued;
     private bool _closed;
 
@@ -46,7 +53,7 @@ public sealed class WorkflowExecution : IWorkflowContext
     /// <summary>True once a WorkflowCompleted/WorkflowFailed event has been applied.</summary>
     public bool IsClosed => _closed;
 
-    /// <summary>Number of commands emitted by workflow code that history has not yet confirmed.</summary>
+    /// <summary>Commands emitted by workflow code that history has not yet confirmed.</summary>
     public int PendingCommandCount => _pending.Count;
 
     /// <summary>Pre-registers a patch marker found anywhere in the history about to be replayed.</summary>
@@ -111,12 +118,7 @@ public sealed class WorkflowExecution : IWorkflowContext
     public Task<byte[]> WaitForSignalAsync(string signalName)
     {
         ArgumentException.ThrowIfNullOrEmpty(signalName);
-        if (!_signals.TryGetValue(signalName, out SignalSlot? slot))
-        {
-            slot = new SignalSlot();
-            _signals.Add(signalName, slot);
-        }
-
+        SignalSlot slot = Slot(signalName);
         if (slot.Buffered.TryDequeue(out byte[]? payload))
         {
             return Task.FromResult(payload);
@@ -137,10 +139,8 @@ public sealed class WorkflowExecution : IWorkflowContext
         }
     }
 
-    /// <summary>Applies one history event, then runs workflow code until it next suspends.</summary>
-    /// <param name="e">The next event, in sequence order.</param>
-    /// <param name="isReplaying">False only for the final event of the history being processed.</param>
-    public void Apply(HistoryEvent e, bool isReplaying)
+    /// <summary>Applies the next history event. A <see cref="WorkflowTaskCompleted"/> runs the batch that preceded it.</summary>
+    public void Apply(HistoryEvent e)
     {
         ArgumentNullException.ThrowIfNull(e);
 
@@ -149,26 +149,17 @@ public sealed class WorkflowExecution : IWorkflowContext
             throw new NonDeterminismException($"Event {e.Sequence} ({e.Type}) follows the workflow's closing event.");
         }
 
-        // Continuations must run inline on this thread; a captured SynchronizationContext would defer them.
-        SynchronizationContext? previous = SynchronizationContext.Current;
-        if (previous is not null)
-        {
-            SynchronizationContext.SetSynchronizationContext(null);
-        }
+        Dispatch(e);
+    }
 
-        try
-        {
-            Now = e.Timestamp;
-            IsReplaying = isReplaying;
-            Dispatch(e);
-        }
-        finally
-        {
-            if (previous is not null)
-            {
-                SynchronizationContext.SetSynchronizationContext(previous);
-            }
-        }
+    /// <summary>
+    /// Ends the history: the events since the last boundary form the batch being executed now. Leftover commands from the
+    /// previous batch mean the code now does more than the recorded run did; anything produced here is genuinely new.
+    /// </summary>
+    public void FinishHistory()
+    {
+        RequireNoPendingCommands("end of history");
+        RunBatch(isReplaying: false);
     }
 
     private void Dispatch(HistoryEvent e)
@@ -176,13 +167,21 @@ public sealed class WorkflowExecution : IWorkflowContext
         switch (e)
         {
             case WorkflowStarted started:
-                if (_task is not null)
+                if (_started)
                 {
                     throw new NonDeterminismException($"Event {e.Sequence}: workflow already started.");
                 }
 
+                _started = true;
                 BuildId = started.BuildId;
-                StartWorkflow(started.Input);
+                Now = started.Timestamp;
+                byte[] input = started.Input;
+                _scheduler.Post(_ => StartWorkflow(input), null);
+                break;
+
+            case WorkflowTaskCompleted:
+                RequireNoPendingCommands(e);
+                RunBatch(isReplaying: true);
                 break;
 
             case PatchMarker marker:
@@ -245,42 +244,44 @@ public sealed class WorkflowExecution : IWorkflowContext
 
             case ActivityCompleted done:
                 RequireNoPendingCommands(e);
-                TakeActivity(done.ActivityId, e).tcs.SetResult(done.Result);
-                AfterResolution();
+                Now = Max(Now, e.Timestamp);
+                TakeActivity(done.ActivityId, e).Completion.SetResult(done.Result);
                 break;
 
             case ActivityFailed failure:
                 if (!failure.WillRetry)
                 {
                     RequireNoPendingCommands(e);
-                    (string activityType, TaskCompletionSource<byte[]> tcs) = TakeActivity(failure.ActivityId, e);
-                    tcs.SetException(new ActivityFailureException(activityType, failure.ErrorType, failure.Message));
-                    AfterResolution();
+                    Now = Max(Now, e.Timestamp);
+                    PendingActivity activity = TakeActivity(failure.ActivityId, e);
+                    activity.Completion.SetException(new ActivityFailureException(activity.ActivityType, failure.ErrorType, failure.Message));
                 }
 
                 break;
 
             case TimerFired fired:
                 RequireNoPendingCommands(e);
+                Now = Max(Now, e.Timestamp);
                 if (!_timers.Remove(fired.TimerId, out TaskCompletionSource? timerTcs))
                 {
                     throw new NonDeterminismException($"Event {e.Sequence}: timer {fired.TimerId} fired but the workflow never started it.");
                 }
 
                 timerTcs.SetResult();
-                AfterResolution();
                 break;
 
             case SignalReceived signal:
                 RequireNoPendingCommands(e);
+                Now = Max(Now, e.Timestamp);
                 DeliverSignal(signal);
-                AfterResolution();
                 break;
 
             default:
                 throw new NonDeterminismException($"Event {e.Sequence}: unsupported event {e.GetType().Name}.");
         }
     }
+
+    private static DateTimeOffset Max(DateTimeOffset a, DateTimeOffset b) => a >= b ? a : b;
 
     private void StartWorkflow(byte[] input)
     {
@@ -292,13 +293,14 @@ public sealed class WorkflowExecution : IWorkflowContext
         {
             _task = Task.FromException<byte[]>(ex);
         }
-
-        AfterResolution();
     }
 
-    /// <summary>Called after workflow code has run: if it finished, queue the closing command exactly once.</summary>
-    private void AfterResolution()
+    /// <summary>Runs every continuation made ready by the events applied since the last batch, then queues a closing command if the code finished.</summary>
+    private void RunBatch(bool isReplaying)
     {
+        IsReplaying = isReplaying;
+        _scheduler.Drain();
+
         if (_completionQueued || _task is not { IsCompleted: true } task)
         {
             return;
@@ -316,14 +318,20 @@ public sealed class WorkflowExecution : IWorkflowContext
         }
     }
 
-    private void DeliverSignal(SignalReceived signal)
+    private SignalSlot Slot(string name)
     {
-        if (!_signals.TryGetValue(signal.SignalName, out SignalSlot? slot))
+        if (!_signals.TryGetValue(name, out SignalSlot? slot))
         {
             slot = new SignalSlot();
-            _signals.Add(signal.SignalName, slot);
+            _signals.Add(name, slot);
         }
 
+        return slot;
+    }
+
+    private void DeliverSignal(SignalReceived signal)
+    {
+        SignalSlot slot = Slot(signal.SignalName);
         if (slot.Waiters.TryDequeue(out TaskCompletionSource<byte[]>? waiter))
         {
             waiter.SetResult(signal.Payload);
@@ -334,15 +342,10 @@ public sealed class WorkflowExecution : IWorkflowContext
         }
     }
 
-    private (string tcsType, TaskCompletionSource<byte[]> tcs) TakeActivity(int activityId, HistoryEvent e)
-    {
-        if (!_activities.Remove(activityId, out PendingActivity? activity))
-        {
-            throw new NonDeterminismException($"Event {e.Sequence}: activity {activityId} resolved but the workflow never scheduled it.");
-        }
-
-        return (activity.ActivityType, activity.Completion);
-    }
+    private PendingActivity TakeActivity(int activityId, HistoryEvent e) =>
+        _activities.Remove(activityId, out PendingActivity? activity)
+            ? activity
+            : throw new NonDeterminismException($"Event {e.Sequence}: activity {activityId} resolved but the workflow never scheduled it.");
 
     private T Expect<T>(HistoryEvent e)
         where T : WorkflowCommand
@@ -356,12 +359,14 @@ public sealed class WorkflowExecution : IWorkflowContext
         return command as T ?? throw Mismatch(e, command.GetType().Name);
     }
 
-    private void RequireNoPendingCommands(HistoryEvent e)
+    private void RequireNoPendingCommands(HistoryEvent e) => RequireNoPendingCommands($"event {e.Sequence} ({e.Type})");
+
+    private void RequireNoPendingCommands(string at)
     {
         if (_pending.Count > 0)
         {
             throw new NonDeterminismException(
-                $"Event {e.Sequence} ({e.Type}) arrived while the workflow's {_pending.Peek().GetType().Name} has no matching history event.");
+                $"At {at} the workflow still has an unconfirmed {_pending.Peek().GetType().Name}: the code does more than the recorded run did.");
         }
     }
 
@@ -375,5 +380,42 @@ public sealed class WorkflowExecution : IWorkflowContext
         public Queue<byte[]> Buffered { get; } = new();
 
         public Queue<TaskCompletionSource<byte[]>> Waiters { get; } = new();
+    }
+
+    /// <summary>
+    /// FIFO single-threaded scheduler. Workflow continuations are posted here instead of running inline when an event
+    /// resolves a task, so their order depends only on the order of events in history.
+    /// </summary>
+    private sealed class Scheduler : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> _queue = new();
+
+        public override void Post(SendOrPostCallback d, object? state) => _queue.Enqueue((d, state));
+
+        public override void Send(SendOrPostCallback d, object? state) => throw new NotSupportedException("Workflow code must not block on other threads.");
+
+        public override SynchronizationContext CreateCopy() => this;
+
+        public void Drain()
+        {
+            if (_queue.Count == 0)
+            {
+                return;
+            }
+
+            SynchronizationContext? previous = Current;
+            SetSynchronizationContext(this);
+            try
+            {
+                while (_queue.TryDequeue(out (SendOrPostCallback Callback, object? State) item))
+                {
+                    item.Callback(item.State);
+                }
+            }
+            finally
+            {
+                SetSynchronizationContext(previous);
+            }
+        }
     }
 }

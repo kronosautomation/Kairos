@@ -1,0 +1,116 @@
+# Kairos nightly — the long, slow layers of docs/TEST-STRATEGY.md.
+# Create as a separate pipeline in Azure DevOps pointing at this file.
+
+trigger: none
+pr: none
+
+schedules:
+- cron: '17 9 * * *'                # 02:17 Pacific (UTC 09:17), daily
+  displayName: Nightly deep tests
+  branches:
+    include: [ main ]
+  always: true
+- cron: '43 10 * * 0'               # Sundays 03:43 Pacific: weekly mutation testing
+  displayName: Weekly mutation testing
+  branches:
+    include: [ main ]
+  always: true
+
+variables:
+  CI: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  BuildConfiguration: Release
+  IsWeekly: $[ eq(variables['Build.CronSchedule.DisplayName'], 'Weekly mutation testing') ]
+
+stages:
+- stage: DeepTests
+  displayName: Deep tests
+  condition: ne(variables['IsWeekly'], 'True')
+  jobs:
+  - job: Simulation
+    displayName: Deterministic simulation (time-boxed, millions of seeds)
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 180
+    variables:
+      KAIROS_SIM_SEEDS: '0'               # 0 = unlimited, bounded by duration
+      KAIROS_SIM_DURATION_MINUTES: '150'
+      KAIROS_SIM_START_SEED: $(Build.BuildId)   # new seeds every night; failures print their seed
+    steps:
+    - template: steps-setup.yml
+    - script: >
+        dotnet test Kairos.sln -c $(BuildConfiguration) --no-build
+        --filter "Category=Simulation|Category=Nightly"
+        --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+      displayName: Run simulation
+    - template: steps-publish.yml
+      parameters: { title: 'Nightly simulation' }
+
+  - job: Integration
+    displayName: Postgres matrix, fault injection, crash-at-every-step (full)
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 120
+    strategy:
+      matrix:
+        pg15: { KAIROS_PG_IMAGE: 'postgres:15' }
+        pg16: { KAIROS_PG_IMAGE: 'postgres:16' }
+        pg17: { KAIROS_PG_IMAGE: 'postgres:17' }
+        pglatest: { KAIROS_PG_IMAGE: 'postgres:latest' }
+    steps:
+    - template: steps-setup.yml
+    - script: >
+        dotnet test Kairos.sln -c $(BuildConfiguration) --no-build
+        --filter "Category=Integration|Category=CrashMatrix|Category=FaultInjection"
+        --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+      displayName: Integration on $(KAIROS_PG_IMAGE)
+    - template: steps-publish.yml
+      parameters: { title: 'Integration $(KAIROS_PG_IMAGE)' }
+
+  - job: Benchmarks
+    displayName: Benchmarks (trend only until a dedicated agent exists)
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 60
+    steps:
+    - template: steps-setup.yml
+    - script: dotnet run -c $(BuildConfiguration) --project benchmarks/Kairos.Benchmarks -- --filter "*" --exporters json markdown --memory --artifacts $(Build.ArtifactStagingDirectory)/bench
+      displayName: Run BenchmarkDotNet
+    - publish: $(Build.ArtifactStagingDirectory)/bench
+      artifact: benchmarks
+      displayName: Publish benchmark results
+
+  - job: Soak
+    displayName: Soak (enabled once Server exists, M7)
+    condition: and(succeeded(), eq(variables['KAIROS_SOAK_ENABLED'], 'true'))
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 360
+    steps:
+    - template: steps-setup.yml
+    - script: >
+        dotnet test Kairos.sln -c $(BuildConfiguration) --no-build
+        --filter "Category=Soak"
+        --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+      displayName: Soak with fault injection
+    - template: steps-publish.yml
+      parameters: { title: 'Soak' }
+
+- stage: Mutation
+  displayName: Weekly mutation testing
+  condition: eq(variables['IsWeekly'], 'True')
+  jobs:
+  - job: Stryker
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 240
+    steps:
+    - template: steps-setup.yml
+    - script: |
+        dotnet tool install --global dotnet-stryker
+        cd tests/Kairos.Core.Tests
+        dotnet stryker --project Kairos.Core.csproj --reporter html --reporter progress --output $(Build.ArtifactStagingDirectory)/stryker
+      displayName: Stryker.NET on Kairos.Core
+    - publish: $(Build.ArtifactStagingDirectory)/stryker
+      artifact: mutation-report
