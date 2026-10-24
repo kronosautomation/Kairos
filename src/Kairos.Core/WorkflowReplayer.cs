@@ -27,6 +27,14 @@ public static class WorkflowReplayer
 
         HistoryEvent first = history[0];
         var execution = new WorkflowExecution(workflow, first.TenantId, first.NamespaceId, first.RunId);
+        for (int i = 0; i < history.Count; i++)
+        {
+            if (history[i] is PatchMarker marker)
+            {
+                execution.AddRecordedPatch(marker.PatchId);
+            }
+        }
+
         int last = history.Count - 1;
         for (int i = 0; i <= last; i++)
         {

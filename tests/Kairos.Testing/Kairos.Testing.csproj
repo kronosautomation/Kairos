@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- Test support: underscored test names, no public-API polish required. -->
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA1062</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Kairos.Core\Kairos.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

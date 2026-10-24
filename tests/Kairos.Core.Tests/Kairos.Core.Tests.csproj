@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Kairos.Core\Kairos.Core.csproj" />
+    <ProjectReference Include="..\Kairos.Testing\Kairos.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

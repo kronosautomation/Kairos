@@ -19,6 +19,17 @@ public sealed record RetryPolicy
     /// <summary>Exception type names (<see cref="Type.Name"/>) that are never retried.</summary>
     public IReadOnlyList<string> NonRetryableErrorTypes { get; init; } = [];
 
+    public bool Equals(RetryPolicy? other) =>
+        other is not null &&
+        MaximumAttempts == other.MaximumAttempts &&
+        InitialInterval == other.InitialInterval &&
+        BackoffCoefficient.Equals(other.BackoffCoefficient) &&
+        MaximumInterval == other.MaximumInterval &&
+        NonRetryableErrorTypes.SequenceEqual(other.NonRetryableErrorTypes);
+
+    public override int GetHashCode() =>
+        HashCode.Combine(MaximumAttempts, InitialInterval, BackoffCoefficient, MaximumInterval, NonRetryableErrorTypes.Count);
+
     /// <summary>Delay to wait after the given failed attempt (1-based) before the next one.</summary>
     public TimeSpan GetBackoff(int failedAttempt)
     {

@@ -9,13 +9,14 @@ namespace Kairos;
 /// </summary>
 internal static class EventEncoder
 {
-    private const byte EncodingVersion = 1;
+    internal const byte EncodingVersion = 1;
     private const int HeaderSize = 1 + 1 + (3 * 16) + 8 + 8;
 
     /// <summary>Upper bound of the encoded size of <paramref name="e"/>.</summary>
     public static int MaxSize(HistoryEvent e) => HeaderSize + e switch
     {
-        WorkflowStarted x => StringMax(x.WorkflowType) + BytesMax(x.Input),
+        WorkflowStarted x => StringMax(x.WorkflowType) + StringMax(x.BuildId) + BytesMax(x.Input),
+        PatchMarker x => StringMax(x.PatchId),
         ActivityScheduled x => 4 + StringMax(x.ActivityType) + BytesMax(x.Input) + PolicyMax(x.RetryPolicy),
         ActivityCompleted x => 4 + BytesMax(x.Result),
         ActivityFailed x => 4 + 4 + StringMax(x.ErrorType) + StringMax(x.Message) + 1,
@@ -43,7 +44,11 @@ internal static class EventEncoder
         {
             case WorkflowStarted x:
                 w.WriteString(x.WorkflowType);
+                w.WriteString(x.BuildId);
                 w.WriteBytes(x.Input);
+                break;
+            case PatchMarker x:
+                w.WriteString(x.PatchId);
                 break;
             case ActivityScheduled x:
                 w.WriteInt32(x.ActivityId);

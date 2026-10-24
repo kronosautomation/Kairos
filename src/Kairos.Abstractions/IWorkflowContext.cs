@@ -12,11 +12,20 @@ public interface IWorkflowContext
 
     Guid RunId { get; }
 
+    /// <summary>The build this run is pinned to (set when the run started).</summary>
+    string BuildId { get; }
+
     /// <summary>Workflow time: the timestamp of the history event being processed. Never the wall clock.</summary>
     DateTimeOffset Now { get; }
 
     /// <summary>True while replaying events that already exist in history.</summary>
     bool IsReplaying { get; }
+
+    /// <summary>
+    /// Safe-change gate for in-flight runs. Returns true for runs that reach this point for the first time under new code
+    /// (and records a marker so replays agree), and false when replaying history written before the patch existed.
+    /// </summary>
+    bool IsPatched(string patchId);
 
     /// <summary>A deterministic GUID derived from the run id and a per-run counter.</summary>
     Guid NewGuid();

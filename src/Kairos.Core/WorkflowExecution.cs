@@ -14,6 +14,7 @@ public sealed class WorkflowExecution : IWorkflowContext
     private readonly Queue<WorkflowCommand> _pending = new();
     private readonly Dictionary<int, PendingActivity> _activities = [];
     private readonly Dictionary<int, TaskCompletionSource> _timers = [];
+    private readonly HashSet<string> _patches = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SignalSlot> _signals = new(StringComparer.Ordinal);
     private Task<byte[]>? _task;
     private int _nextCommandId;
@@ -36,6 +37,8 @@ public sealed class WorkflowExecution : IWorkflowContext
 
     public Guid RunId { get; }
 
+    public string BuildId { get; private set; } = "";
+
     public DateTimeOffset Now { get; private set; }
 
     public bool IsReplaying { get; private set; }
@@ -45,6 +48,31 @@ public sealed class WorkflowExecution : IWorkflowContext
 
     /// <summary>Number of commands emitted by workflow code that history has not yet confirmed.</summary>
     public int PendingCommandCount => _pending.Count;
+
+    /// <summary>Pre-registers a patch marker found anywhere in the history about to be replayed.</summary>
+    public void AddRecordedPatch(string patchId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(patchId);
+        _patches.Add(patchId);
+    }
+
+    public bool IsPatched(string patchId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(patchId);
+        if (_patches.Contains(patchId))
+        {
+            return true;
+        }
+
+        if (IsReplaying)
+        {
+            return false; // history predates this patch: keep the old code path
+        }
+
+        _patches.Add(patchId);
+        _pending.Enqueue(new RecordPatchCommand(patchId));
+        return true;
+    }
 
     public Guid NewGuid()
     {
@@ -153,7 +181,18 @@ public sealed class WorkflowExecution : IWorkflowContext
                     throw new NonDeterminismException($"Event {e.Sequence}: workflow already started.");
                 }
 
+                BuildId = started.BuildId;
                 StartWorkflow(started.Input);
+                break;
+
+            case PatchMarker marker:
+                _patches.Add(marker.PatchId);
+                if (_pending.TryPeek(out WorkflowCommand? head) && head is RecordPatchCommand rp &&
+                    string.Equals(rp.PatchId, marker.PatchId, StringComparison.Ordinal))
+                {
+                    _pending.Dequeue();
+                }
+
                 break;
 
             case ActivityScheduled scheduled:

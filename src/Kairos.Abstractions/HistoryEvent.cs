@@ -11,6 +11,7 @@ public enum HistoryEventType : byte
     SignalReceived = 7,
     WorkflowCompleted = 8,
     WorkflowFailed = 9,
+    PatchMarker = 10,
 }
 
 /// <summary>
@@ -30,7 +31,7 @@ public abstract record HistoryEvent(Guid TenantId, Guid NamespaceId, Guid RunId,
 
 public sealed record WorkflowStarted(
     Guid TenantId, Guid NamespaceId, Guid RunId, long Sequence, DateTimeOffset Timestamp,
-    string WorkflowType, byte[] Input) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
+    string WorkflowType, string BuildId, byte[] Input) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.WorkflowStarted;
 }
@@ -48,6 +49,14 @@ public sealed record ActivityCompleted(
     int ActivityId, byte[] Result) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.ActivityCompleted;
+}
+
+/// <summary>Records that a patch (<see cref="IWorkflowContext.IsPatched"/>) was taken by this run, so replays take the same branch.</summary>
+public sealed record PatchMarker(
+    Guid TenantId, Guid NamespaceId, Guid RunId, long Sequence, DateTimeOffset Timestamp,
+    string PatchId) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
+{
+    public override HistoryEventType Type => HistoryEventType.PatchMarker;
 }
 
 /// <summary>One failed attempt. When <see cref="WillRetry"/> is false the failure is terminal and reaches the workflow.</summary>

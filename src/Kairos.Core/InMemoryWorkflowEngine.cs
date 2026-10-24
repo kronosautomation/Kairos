@@ -46,7 +46,7 @@ public sealed class InMemoryWorkflowEngine
         Guid runId = Guid.NewGuid();
         var history = new List<HistoryEvent>();
         _runs.Add(runId, history);
-        Append(history, new WorkflowStarted(tenantId, namespaceId, runId, 1, Now, workflowType, input));
+        Append(history, new WorkflowStarted(tenantId, namespaceId, runId, 1, Now, workflowType, "default", input));
         return runId;
     }
 
@@ -158,6 +158,9 @@ public sealed class InMemoryWorkflowEngine
                 break;
             case StartTimerCommand t:
                 Append(history, new TimerStarted(tenant, ns, run, seq, Now, t.TimerId, t.Duration));
+                break;
+            case RecordPatchCommand p:
+                Append(history, new PatchMarker(tenant, ns, run, seq, Now, p.PatchId));
                 break;
             case CompleteWorkflowCommand c:
                 Append(history, new WorkflowCompleted(tenant, ns, run, seq, Now, c.Result));

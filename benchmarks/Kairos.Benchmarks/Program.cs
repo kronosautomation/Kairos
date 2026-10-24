@@ -35,7 +35,7 @@ public class ReplayBenchmarks
 
         void Add(HistoryEvent e) => list.Add(HashChain.Seal(e, list.Count == 0 ? HashChain.GenesisHash : list[^1].Hash));
 
-        Add(new WorkflowStarted(tenant, ns, run, 1, now, "wf", s_payload));
+        Add(new WorkflowStarted(tenant, ns, run, 1, now, "wf", "default", s_payload));
         for (int i = 1; i <= Activities; i++)
         {
             Add(new ActivityScheduled(tenant, ns, run, list.Count + 1, now, i, "step", s_payload, RetryPolicy.Default));
@@ -68,7 +68,7 @@ public class HashChainBenchmarks
     public void Setup()
     {
         _event = new ActivityCompleted(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 2, DateTimeOffset.UnixEpoch, 1, s_payload);
-        _prev = HashChain.Seal(new WorkflowStarted(_event.TenantId, _event.NamespaceId, _event.RunId, 1, DateTimeOffset.UnixEpoch, "wf", s_payload), HashChain.GenesisHash).Hash;
+        _prev = HashChain.Seal(new WorkflowStarted(_event.TenantId, _event.NamespaceId, _event.RunId, 1, DateTimeOffset.UnixEpoch, "wf", "default", s_payload), HashChain.GenesisHash).Hash;
     }
 
     /// <summary>Allocates the sealed event record plus its two 32-byte hash arrays; hashing itself uses pooled buffers.</summary>

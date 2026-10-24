@@ -101,6 +101,13 @@
         "dependencies": {
           "Kairos.Abstractions": "[1.0.0, )"
         }
+      },
+      "kairos.testing": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )",
+          "xunit": "[2.9.3, )"
+        }
       }
     }
   }

@@ -7,6 +7,8 @@ public sealed record ScheduleActivityCommand(int ActivityId, string ActivityType
 
 public sealed record StartTimerCommand(int TimerId, TimeSpan Duration) : WorkflowCommand;
 
+public sealed record RecordPatchCommand(string PatchId) : WorkflowCommand;
+
 public sealed record CompleteWorkflowCommand(byte[] Result) : WorkflowCommand;
 
 public sealed record FailWorkflowCommand(string ErrorType, string Message) : WorkflowCommand;
