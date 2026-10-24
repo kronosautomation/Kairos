@@ -67,4 +67,7 @@ The authoritative plan, solution layout, provider interfaces and agent requireme
 7. Standalone server, admin plane, client SDK, dashboard.
 8. Agent Framework provider, Google Cloud adapters, marketplaces.
 
+Research-driven items (sagas/compensation in M4, TLA+ model in `spec/` from M2, group-commit and reduced-logging
+benchmarks in M2) are specified in `docs/RESEARCH.md`.
+
 No cloud SDK outside `Kairos.Cloud.*`/`infra`; no model-vendor SDK in `Kairos.Agents*` (use Microsoft.Extensions.AI).

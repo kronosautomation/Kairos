@@ -79,6 +79,8 @@ Requirements:
 - Redaction hooks before persistence; payloads always client-side encrypted.
 - Model-neutral via `IChatClient`; named model aliases configured per namespace.
 - Large conversations: history compaction via continue-as-new with a summary step.
+- Durable sagas: `ctx.Compensate(...)` registers undo steps; on failure, cancel or rejected approval they run in reverse,
+  exactly once, resumable after crashes (docs/RESEARCH.md R1).
 
 MCP (Kairos.Agents.Mcp):
 - Server tools: `start_workflow`, `get_run`, `list_runs`, `signal_run`, `approve`, `reject`, `cancel_run`; scoped tokens per namespace + role; never exposes payload plaintext unless the caller holds the key.

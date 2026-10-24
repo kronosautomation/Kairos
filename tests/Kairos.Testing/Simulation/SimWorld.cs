@@ -36,7 +36,8 @@ public sealed class SimWorld
     private readonly SimRandom _rng;
     private readonly SimStats _stats = new();
     private readonly VirtualTimeProvider _time = new();
-    private readonly InMemoryKairosStore _inner = new();
+    private readonly IKairosStore _inner;
+    private readonly IStoreDiagnostics _diag;
     private readonly FaultInjectingStore _store;
     private readonly KairosClient _client;
     private readonly FakeExternalSystem _external = new();
@@ -46,8 +47,12 @@ public sealed class SimWorld
     private bool _patched;
 
     public SimWorld(
-        ulong seed, SimOptions? options = null, IReadOnlyList<SimProgram>? programs = null, Func<IKairosStore, IKairosStore>? decorate = null)
+        ulong seed, SimOptions? options = null, IReadOnlyList<SimProgram>? programs = null, Func<IKairosStore, IKairosStore>? decorate = null,
+        StoreUnderTest? backend = null)
     {
+        backend ??= StoreUnderTest.InMemory();
+        _inner = backend.Store;
+        _diag = backend.Diagnostics;
         _options = options ?? new SimOptions();
         Seed = seed;
         _rng = new SimRandom(seed);
@@ -70,14 +75,15 @@ public sealed class SimWorld
 
     public FaultInjectingStore Store => _store;
 
-    public static async Task<SimResult> RunSeedAsync(ulong seed, SimOptions? options = null, Func<IKairosStore, IKairosStore>? decorate = null)
+    public static async Task<SimResult> RunSeedAsync(
+        ulong seed, SimOptions? options = null, Func<IKairosStore, IKairosStore>? decorate = null, StoreUnderTest? backend = null)
     {
-        var world = new SimWorld(seed, options, decorate: decorate);
+        var world = new SimWorld(seed, options, decorate: decorate, backend: backend);
         try
         {
             await world.ChaosAsync();
             await world.QuiesceAsync();
-            return world.CheckInvariants();
+            return await world.CheckInvariantsAsync();
         }
         catch (InvariantViolationException ex)
         {
@@ -90,7 +96,7 @@ public sealed class SimWorld
     {
         _store.FaultsEnabled = false;
         await QuiesceAsync();
-        return CheckInvariants();
+        return await CheckInvariantsAsync();
     }
 
     // ---- chaos phase ------------------------------------------------------------------------------------------
@@ -262,12 +268,12 @@ public sealed class SimWorld
                 continue;
             }
 
-            if (_inner.GetStats().OpenRuns == 0 && _store.DelayedCount == 0)
+            if ((await _diag.GetStatsAsync(_scope)).OpenRuns == 0 && _store.DelayedCount == 0)
             {
                 return;
             }
 
-            if (_inner.NextWakeup(_scope, _time.GetUtcNow()) is { } wake)
+            if (await _diag.NextWakeupAsync(_scope, _time.GetUtcNow()) is { } wake)
             {
                 _time.AdvanceTo(wake);
             }
@@ -298,7 +304,7 @@ public sealed class SimWorld
 
     // ---- invariants -------------------------------------------------------------------------------------------
 
-    private SimResult CheckInvariants()
+    private async Task<SimResult> CheckInvariantsAsync()
     {
         var expectedKeys = new HashSet<string>(StringComparer.Ordinal);
         var results = new List<byte[]?>();
@@ -306,7 +312,7 @@ public sealed class SimWorld
 
         foreach (RunInfo r in _runs)
         {
-            IReadOnlyList<HistoryEvent> history = _inner.GetHistoryAsync(r.Key!.Value, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            IReadOnlyList<HistoryEvent> history = await _inner.GetHistoryAsync(r.Key!.Value, CancellationToken.None);
             string where = $"run {r.Index} {r.Program}";
 
             // I1: nothing silently stalls.
@@ -373,7 +379,7 @@ public sealed class SimWorld
 
         foreach (RunInfo r in _runs)
         {
-            foreach (ActivityCompleted done in _inner.GetHistoryAsync(r.Key!.Value, CancellationToken.None).AsTask().GetAwaiter().GetResult().OfType<ActivityCompleted>())
+            foreach (ActivityCompleted done in (await _inner.GetHistoryAsync(r.Key!.Value, CancellationToken.None)).OfType<ActivityCompleted>())
             {
                 string key = $"{done.RunId:N}:{done.ActivityId}";
                 if (!_external.Effects.Contains(key))
@@ -384,7 +390,7 @@ public sealed class SimWorld
         }
 
         // I9 + I1: no leaked work.
-        StoreStats s = _inner.GetStats();
+        StoreStats s = await _diag.GetStatsAsync(_scope);
         if (s.WorkflowTasks != 0 || s.ActivityTasks != 0 || s.Timers != 0 || s.OpenRuns != 0)
         {
             throw new InvariantViolationException("I9", $"Store still holds work after all runs closed: {s}.");

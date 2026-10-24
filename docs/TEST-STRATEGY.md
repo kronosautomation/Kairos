@@ -20,6 +20,7 @@ Every deep test below checks some of these. Name them in test code as `Invariant
 | I8 | **Fencing:** a node that lost its lease cannot write. |
 | I9 | **Bounded resources:** memory, history size, cache bytes and queue depth stay within configured limits under load. |
 | I10 | **Version safety:** in-flight runs keep running correctly across deploys (pinning + patch API). |
+| I11 | **Compensation completes:** every compensation started for a failed or cancelled run eventually completes, exactly once. |
 
 ## Layer 1 — Unit and property-based tests (every commit)
 
@@ -42,6 +43,12 @@ with **all non-determinism injected from a single seed**: virtual clock, seeded 
 - CI: 1,000 seeds per commit; nightly: millions of seeds for hours.
 - Design rule this forces: Core takes `TimeProvider`, a seeded RNG, and abstract transport/store. No hidden `DateTime.Now`,
   `Task.Delay`, thread pool timing, or static state in Core.
+
+## Layer 2b — Formal model (TLA+)
+
+- `spec/Kairos.tla` models runs, history append, leases with fencing, crashes, replay, signals, cancel and compensation.
+- TLC model-checks I1, I2, I3, I8, I11 at small bounds in CI (nightly). Every model invariant has a matching simulator check.
+- Basis: Microsoft's formal Durable Functions semantics (OOPSLA 2021). See docs/RESEARCH.md (R2).
 
 ## Layer 3 — Systematic concurrency testing
 

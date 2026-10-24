@@ -139,8 +139,11 @@ public sealed class FakeExternalSystem
 
     public void Apply(string idempotencyKey)
     {
-        _calls[idempotencyKey] = _calls.GetValueOrDefault(idempotencyKey) + 1;
-        _effects.Add(idempotencyKey); // set semantics: a second call with the same key has no further effect
+        lock (_calls) // real-Postgres tests call this from many threads
+        {
+            _calls[idempotencyKey] = _calls.GetValueOrDefault(idempotencyKey) + 1;
+            _effects.Add(idempotencyKey); // set semantics: a second call with the same key has no further effect
+        }
     }
 
     public ActivityFunc Activity() => (ctx, input, _) =>

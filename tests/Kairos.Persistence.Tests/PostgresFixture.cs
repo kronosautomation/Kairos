@@ -113,6 +113,9 @@ public sealed class TestDatabase(string name, PostgresFixture fixture) : IAsyncD
 
     public PostgresKairosStore NewStore() => new(DataPlane);
 
+    public string DataPlaneConnectionString =>
+        fixture.ConnectionString(Name, PostgresProvisioning.DataPlaneRole, PostgresFixture.PasswordFor(PostgresProvisioning.DataPlaneRole));
+
     private NpgsqlDataSource For(string? role)
     {
         string key = role ?? "";
