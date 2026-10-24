@@ -81,6 +81,28 @@ stages:
     - template: steps-publish.yml
       parameters: { title: 'Integration $(KAIROS_PG_IMAGE)' }
 
+  - job: Model
+    displayName: TLA+ model check (TLC)
+    pool:
+      ${{ if eq(parameters.agentPool, 'Kairos-Local') }}:
+        name: Kairos-Local
+      ${{ else }}:
+        vmImage: ubuntu-latest
+    timeoutInMinutes: 90
+    variables:
+      TLA_VERSION: v1.7.4
+      TLA_SHA1: bee4a54f3ee3d4afc347c3240ec2d9e93b075104
+    steps:
+    - checkout: self
+      fetchDepth: 1
+    - script: |
+        set -euo pipefail
+        command -v java >/dev/null || { apt-get update && apt-get install -y openjdk-21-jre-headless; }
+        curl -fsSL "https://github.com/tlaplus/tlaplus/releases/download/$(TLA_VERSION)/tla2tools.jar" -o "$(Agent.TempDirectory)/tla2tools.jar"
+        echo "$(TLA_SHA1)  $(Agent.TempDirectory)/tla2tools.jar" | sha1sum -c -
+        TLA2TOOLS="$(Agent.TempDirectory)/tla2tools.jar" bash spec/check.sh
+      displayName: Model-check spec/ (engine model passes, unfenced mutation must fail)
+
   - job: Benchmarks
     displayName: Benchmarks (trend only until a dedicated agent exists)
     pool:

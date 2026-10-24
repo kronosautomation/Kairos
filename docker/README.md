@@ -7,6 +7,7 @@
 | Postgres integration on another version | `.\ci-local.ps1 -Stage Integration -PgImage postgres:15` |
 | Long simulation (new random seeds) | `.\ci-local.ps1 -Stage Simulation -SimMinutes 30` |
 | Mutation testing | `.\ci-local.ps1 -Stage Mutation` |
+| TLA+ model check (TLC v1.7.4) | `.\ci-local.ps1 -Stage Model` |
 | Postgres 15–18, HA pair, Toxiproxy | `docker compose -f docker/compose.yml --profile deps up -d` |
 | Cloud stand-ins | `docker compose -f docker/compose.yml --profile emulators up -d` |
 | Self-hosted Azure Pipelines agent | fill `docker/.env`, then `docker compose -f docker/compose.yml --profile agent up -d` |

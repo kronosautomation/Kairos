@@ -138,6 +138,16 @@ services:
       - nuget-cache:/root/.nuget/packages
       - /var/run/docker.sock:/var/run/docker.sock
 
+  # ---------- TLA+ model checking (spec/check.sh) ----------
+  tlc:
+    build:
+      context: .
+      dockerfile: tlc.Dockerfile
+    profiles: ["ci"]
+    volumes:
+      - ..:/src:ro
+      - ../.ci-local:/results
+
   # ---------- Self-hosted Azure Pipelines agent (pool: Kairos-Local) ----------
   agent:
     build:

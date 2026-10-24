@@ -6,10 +6,11 @@
   .\ci-local.ps1 -Tfm net11.0          # Fast stage on .NET 11 / Runtime Async
   .\ci-local.ps1 -Stage Integration -PgImage postgres:15
   .\ci-local.ps1 -Stage Simulation -SimMinutes 30
+  .\ci-local.ps1 -Stage Model         # TLA+ model check (TLC) of spec/
   .\ci-local.ps1 -Stage All
 #>
 param(
-  [ValidateSet('Fast','Integration','Simulation','Mutation','Supply','All')] [string]$Stage = 'Fast',
+  [ValidateSet('Fast','Integration','Simulation','Mutation','Supply','Model','All')] [string]$Stage = 'Fast',
   [ValidateSet('net10.0','net11.0')] [string]$Tfm = 'net10.0',
   [int]$SimSeeds = 1000,
   [int]$SimMinutes = 0,
@@ -27,7 +28,12 @@ $env:KAIROS_SIM_START_SEED = if ($Stage -eq 'Simulation') { "$(Get-Random -Minim
 $env:KAIROS_PG_IMAGE = $PgImage
 
 $compose = @('compose','-f','docker/compose.yml','--profile','ci')
-if ($Rebuild) { docker @compose build --no-cache ci }
-docker @compose run --rm ci $Stage $Tfm
+if ($Stage -eq 'Model') {
+  if ($Rebuild) { docker @compose build --no-cache tlc }
+  docker @compose run --rm tlc
+} else {
+  if ($Rebuild) { docker @compose build --no-cache ci }
+  docker @compose run --rm ci $Stage $Tfm
+}
 if ($LASTEXITCODE -ne 0) { Write-Host "FAILED. See .ci-local for results and failing seeds." -ForegroundColor Red; exit $LASTEXITCODE }
 Write-Host "Passed. Results in .ci-local" -ForegroundColor Green
