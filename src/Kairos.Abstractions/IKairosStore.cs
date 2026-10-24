@@ -69,8 +69,11 @@ public interface IKairosStore
     ValueTask<CompletionOutcome> CompleteWorkflowTaskAsync(
         WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now, CancellationToken cancellationToken);
 
-    /// <summary>Gives the task back (e.g. non-determinism detected) to be retried at <paramref name="retryAt"/>.</summary>
-    ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, CancellationToken cancellationToken);
+    /// <summary>
+    /// Gives the task back to be retried at <paramref name="retryAt"/>. A failure (e.g. non-determinism) counts as an attempt;
+    /// a graceful shutdown (<paramref name="countAttempt"/> false) does not. Guarded by the lease token.
+    /// </summary>
+    ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, DateTimeOffset now, bool countAttempt, CancellationToken cancellationToken);
 
     ValueTask<ActivityTask?> PollActivityTaskAsync(TenantScope scope, DateTimeOffset now, TimeSpan lease, CancellationToken cancellationToken);
 
@@ -80,6 +83,23 @@ public interface IKairosStore
     /// </summary>
     ValueTask<CompletionOutcome> CompleteActivityTaskAsync(
         ActivityTask task, HistoryEvent outcome, DateTimeOffset? retryAt, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Extends the activity's lease by <paramref name="extendBy"/> from now (renewal). <see cref="CompletionOutcome.StaleLease"/> when
+    /// the token no longer matches, which tells the holder it lost the task and should stop.
+    /// </summary>
+    ValueTask<CompletionOutcome> HeartbeatActivityTaskAsync(ActivityTask task, DateTimeOffset now, TimeSpan extendBy, CancellationToken cancellationToken);
+
+    /// <summary>Gives the attempt back (graceful shutdown) to be claimed again at <paramref name="retryAt"/>. Not counted as an attempt. Guarded by the lease token.</summary>
+    ValueTask ReleaseActivityTaskAsync(ActivityTask task, DateTimeOffset retryAt, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Handles every lease that has expired: an activity attempt becomes a recorded <c>ActivityFailed("LeaseExpired")</c> and is
+    /// re-offered after the retry policy's backoff, or fails terminally once <c>MaximumAttempts</c> is used up; an expired workflow
+    /// task is re-offered after a backoff and, after too many expiries, parked as stuck (never dropped, never handed out again
+    /// until an operator intervenes). Returns the number of leases handled.
+    /// </summary>
+    ValueTask<int> ReapExpiredLeasesAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken);
 
     /// <summary>Appends TimerFired for every due timer in scope and makes their workflows runnable. Returns the count.</summary>
     ValueTask<int> FireDueTimersAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken);

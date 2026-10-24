@@ -1,7 +1,14 @@
 namespace Kairos;
 
 /// <summary>Everything an activity attempt may know about itself. <see cref="IdempotencyKey"/> is stable across retries.</summary>
-public sealed record ActivityContext(RunKey Run, int ActivityId, string ActivityType, int Attempt, string IdempotencyKey);
+public sealed record ActivityContext(RunKey Run, int ActivityId, string ActivityType, int Attempt, string IdempotencyKey)
+{
+    /// <summary>Set by the worker. Renews the attempt lease; if the lease was lost, the activity's cancellation token is cancelled.</summary>
+    public Func<ValueTask>? Heartbeat { get; init; }
+
+    /// <summary>Long-running activities call this regularly (the worker also heartbeats automatically while an activity runs).</summary>
+    public ValueTask HeartbeatAsync() => Heartbeat is null ? ValueTask.CompletedTask : Heartbeat();
+}
 
 public delegate Task<byte[]> ActivityFunc(ActivityContext context, byte[] input, CancellationToken cancellationToken);
 

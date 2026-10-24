@@ -17,8 +17,17 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
         WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.CompleteWorkflowTaskAsync(task, newEvents, now, cancellationToken);
 
-    public virtual ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, CancellationToken cancellationToken) =>
-        inner.ReleaseWorkflowTaskAsync(task, retryAt, cancellationToken);
+    public virtual ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, DateTimeOffset now, bool countAttempt, CancellationToken cancellationToken) =>
+        inner.ReleaseWorkflowTaskAsync(task, retryAt, now, countAttempt, cancellationToken);
+
+    public virtual ValueTask<CompletionOutcome> HeartbeatActivityTaskAsync(ActivityTask task, DateTimeOffset now, TimeSpan extendBy, CancellationToken cancellationToken) =>
+        inner.HeartbeatActivityTaskAsync(task, now, extendBy, cancellationToken);
+
+    public virtual ValueTask ReleaseActivityTaskAsync(ActivityTask task, DateTimeOffset retryAt, DateTimeOffset now, CancellationToken cancellationToken) =>
+        inner.ReleaseActivityTaskAsync(task, retryAt, now, cancellationToken);
+
+    public virtual ValueTask<int> ReapExpiredLeasesAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
+        inner.ReapExpiredLeasesAsync(scope, now, cancellationToken);
 
     public virtual ValueTask<ActivityTask?> PollActivityTaskAsync(TenantScope scope, DateTimeOffset now, TimeSpan lease, CancellationToken cancellationToken) =>
         inner.PollActivityTaskAsync(scope, now, lease, cancellationToken);

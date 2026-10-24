@@ -78,12 +78,13 @@ public sealed class PostgresSimulationTests(PostgresFixture fixture)
     private static ActStep Act(int failAttempts = 0, bool afterEffect = false, int max = 4, bool catches = false) =>
         new(failAttempts, afterEffect, max, catches);
 
-    public static TheoryData<string> CrashPrograms() => ["retry-after-effect", "timer-then-act", "signal-and-parallel"];
+    public static TheoryData<string> CrashPrograms() => ["retry-after-effect", "timer-then-act", "signal-and-parallel", "poison-then-act"];
 
     private static SimProgram CrashProgram(string name) => name switch
     {
         "retry-after-effect" => new SimProgram("p0", [Act(failAttempts: 2, afterEffect: true)], -1),
         "timer-then-act" => new SimProgram("p0", [new TimerStep(60), Act()], -1),
+        "poison-then-act" => new SimProgram("p0", [new ActStep(0, false, 2, true, Poison: true), Act()], -1),
         _ => new SimProgram("p0", [new SignalStep("sig0"), new ParStep(Act(), Act(failAttempts: 1, afterEffect: true))], -1),
     };
 

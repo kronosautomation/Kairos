@@ -6,6 +6,16 @@ namespace Kairos;
 /// </summary>
 public static class StoreRules
 {
+    /// <summary>Error type recorded when a lease expires without a completion (the worker died, hung, or was partitioned).</summary>
+    public const string LeaseExpiredError = "LeaseExpired";
+
+    /// <summary>A workflow task whose lease expires this many times is parked as stuck instead of being offered forever.</summary>
+    public const int MaxWorkflowTaskAttempts = 10;
+
+    /// <summary>Delay before an expired or failed workflow task is offered again: 1 s doubling to 60 s.</summary>
+    public static TimeSpan WorkflowTaskBackoff(int failedAttempt) =>
+        TimeSpan.FromSeconds(Math.Min(60, Math.Pow(2, Math.Max(0, failedAttempt - 1))));
+
     /// <summary>
     /// A workflow worker may only emit command-derived events for its own run. It can never forge results, signals or timer
     /// firings: those are written by the store on behalf of activity workers, clients and the timer service.

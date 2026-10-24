@@ -1,6 +1,6 @@
 namespace Kairos;
 
-public readonly record struct StoreStats(int Runs, int OpenRuns, int WorkflowTasks, int ActivityTasks, int Timers);
+public readonly record struct StoreStats(int Runs, int OpenRuns, int WorkflowTasks, int ActivityTasks, int Timers, int StuckWorkflowTasks = 0);
 
 /// <summary>
 /// Reference implementation of <see cref="IKairosStore"/> held in memory. Thread-safe (one lock). Semantics here are the
@@ -63,7 +63,7 @@ public sealed class InMemoryKairosStore : IKairosStore
             foreach (WorkflowTaskRow row in data.WorkflowTasks.Values)
             {
                 Run run = data.Runs[row.RunId];
-                bool runnable = row.Leased ? row.LeaseExpires <= now : row.VisibleAt <= now;
+                bool runnable = !row.Leased && !row.Stuck && row.VisibleAt <= now;
                 if (runnable && buildIds.Contains(run.BuildId) && (best is null || row.Order < best.Order))
                 {
                     best = row;
@@ -132,7 +132,7 @@ public sealed class InMemoryKairosStore : IKairosStore
         }
     }
 
-    public ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, CancellationToken cancellationToken)
+    public ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, DateTimeOffset now, bool countAttempt, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(task);
         lock (_gate)
@@ -143,7 +143,10 @@ public sealed class InMemoryKairosStore : IKairosStore
             {
                 row.Leased = false;
                 row.VisibleAt = retryAt;
-                row.Attempt++;
+                if (countAttempt)
+                {
+                    row.Attempt++;
+                }
             }
         }
 
@@ -160,7 +163,7 @@ public sealed class InMemoryKairosStore : IKairosStore
             {
                 foreach (ActivityTaskRow row in data.ActivityTasks.Values)
                 {
-                    bool runnable = row.Leased ? row.LeaseExpires <= now : row.VisibleAt <= now;
+                    bool runnable = !row.Leased && row.VisibleAt <= now;
                     if (runnable && (best is null || row.Order < best.Order))
                     {
                         best = row;
@@ -216,6 +219,116 @@ public sealed class InMemoryKairosStore : IKairosStore
             }
 
             return ValueTask.FromResult(CompletionOutcome.Applied);
+        }
+    }
+
+    public ValueTask<CompletionOutcome> HeartbeatActivityTaskAsync(ActivityTask task, DateTimeOffset now, TimeSpan extendBy, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        lock (_gate)
+        {
+            if (Scope(task.Run.Scope, create: false) is { } scope &&
+                scope.ActivityTasks.TryGetValue((task.Run.RunId, task.ActivityId), out ActivityTaskRow? row) &&
+                row.Leased && row.LeaseToken == task.LeaseToken)
+            {
+                DateTimeOffset renewed = now + extendBy;
+                if (renewed > row.LeaseExpires)
+                {
+                    row.LeaseExpires = renewed;
+                }
+
+                return ValueTask.FromResult(CompletionOutcome.Applied);
+            }
+
+            return ValueTask.FromResult(CompletionOutcome.StaleLease);
+        }
+    }
+
+    public ValueTask ReleaseActivityTaskAsync(ActivityTask task, DateTimeOffset retryAt, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        lock (_gate)
+        {
+            if (Scope(task.Run.Scope, create: false) is { } scope &&
+                scope.ActivityTasks.TryGetValue((task.Run.RunId, task.ActivityId), out ActivityTaskRow? row) &&
+                row.Leased && row.LeaseToken == task.LeaseToken)
+            {
+                row.Leased = false;
+                row.VisibleAt = retryAt; // not an attempt: the activity did not fail, the worker is going away
+            }
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<int> ReapExpiredLeasesAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (Scope(scope, create: false) is not { } data)
+            {
+                return ValueTask.FromResult(0);
+            }
+
+            int handled = 0;
+            var expiredActivities = new List<ActivityTaskRow>();
+            foreach (ActivityTaskRow row in data.ActivityTasks.Values)
+            {
+                if (row.Leased && row.LeaseExpires <= now)
+                {
+                    expiredActivities.Add(row);
+                }
+            }
+
+            expiredActivities.Sort(static (a, b) => a.Order.CompareTo(b.Order));
+            foreach (ActivityTaskRow row in expiredActivities)
+            {
+                handled++;
+                Run run = data.Runs[row.RunId];
+                ActivityScheduled s = row.Scheduled;
+                if (run.State != RunState.Running)
+                {
+                    data.ActivityTasks.Remove((row.RunId, s.ActivityId));
+                    continue;
+                }
+
+                bool retry = s.RetryPolicy.ShouldRetry(row.Attempt, StoreRules.LeaseExpiredError);
+                Append(run, new ActivityFailed(
+                    run.Key.TenantId, run.Key.NamespaceId, run.Key.RunId, 0, now, s.ActivityId, row.Attempt,
+                    StoreRules.LeaseExpiredError, "The attempt lease expired before it completed.", retry));
+                if (retry)
+                {
+                    row.Leased = false;
+                    row.VisibleAt = now + s.RetryPolicy.GetBackoff(row.Attempt);
+                    row.Attempt++;
+                }
+                else
+                {
+                    data.ActivityTasks.Remove((row.RunId, s.ActivityId));
+                    EnsureWorkflowTask(data, run, now);
+                }
+            }
+
+            foreach (WorkflowTaskRow row in data.WorkflowTasks.Values)
+            {
+                if (row.Leased && row.LeaseExpires <= now)
+                {
+                    handled++;
+                    int failed = row.Attempt;
+                    row.Leased = false;
+                    row.Attempt++;
+                    if (row.Attempt > StoreRules.MaxWorkflowTaskAttempts)
+                    {
+                        row.Stuck = true; // parked and visible in stats, never dropped
+                    }
+                    else
+                    {
+                        row.VisibleAt = now + StoreRules.WorkflowTaskBackoff(failed);
+                    }
+                }
+            }
+
+            return ValueTask.FromResult(handled);
         }
     }
 
@@ -384,11 +497,19 @@ public sealed class InMemoryKairosStore : IKairosStore
     {
         lock (_gate)
         {
-            int runs = 0, wf = 0, act = 0, timers = 0, open = 0;
+            int runs = 0, wf = 0, act = 0, timers = 0, open = 0, stuck = 0;
             foreach (ScopeData s in _scopes.Values)
             {
                 runs += s.Runs.Count;
                 wf += s.WorkflowTasks.Count;
+                foreach (WorkflowTaskRow t in s.WorkflowTasks.Values)
+                {
+                    if (t.Stuck)
+                    {
+                        stuck++;
+                    }
+                }
+
                 act += s.ActivityTasks.Count;
                 timers += s.Timers.Count;
                 foreach (Run r in s.Runs.Values)
@@ -400,7 +521,7 @@ public sealed class InMemoryKairosStore : IKairosStore
                 }
             }
 
-            return new StoreStats(runs, open, wf, act, timers);
+            return new StoreStats(runs, open, wf, act, timers, stuck);
         }
     }
 
@@ -434,7 +555,10 @@ public sealed class InMemoryKairosStore : IKairosStore
 
             foreach (WorkflowTaskRow row in data.WorkflowTasks.Values)
             {
-                Consider(row.Leased ? row.LeaseExpires : row.VisibleAt);
+                if (!row.Stuck)
+                {
+                    Consider(row.Leased ? row.LeaseExpires : row.VisibleAt);
+                }
             }
 
             foreach (ActivityTaskRow row in data.ActivityTasks.Values)
@@ -536,6 +660,8 @@ public sealed class InMemoryKairosStore : IKairosStore
         public long Order { get; } = order;
 
         public bool Leased { get; set; }
+
+        public bool Stuck { get; set; }
 
         public DateTimeOffset LeaseExpires { get; set; }
 

@@ -23,6 +23,9 @@ public sealed class CrashAtEveryStepTests
         ["timer"] = new("p0", [new TimerStep(90), Act()], -1),
         ["signal"] = new("p0", [new SignalStep("sig0"), Act()], -1),
         ["parallel"] = new("p0", [new ParStep(Act(), Act(failAttempts: 1, afterEffect: true))], -1),
+        ["poison-uncaught"] = new("p0", [new ActStep(0, false, 2, false, Poison: true)], -1),
+        ["poison-caught-then-more"] = new("p0", [new ActStep(0, false, 2, true, Poison: true), Act()], -1),
+        ["long-activity"] = new("p0", [new ActStep(0, false, 3, false, Slow: true), Act()], -1),
         ["mixed"] = new("p0", [Act(), new TimerStep(30), new SignalStep("sig2"), new ParStep(Act(), Act()), Act()], -1),
     };
 

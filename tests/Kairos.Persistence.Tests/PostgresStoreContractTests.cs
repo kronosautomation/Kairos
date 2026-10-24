@@ -1,3 +1,4 @@
+using Kairos.Persistence.Postgres;
 using Kairos.Testing;
 
 namespace Kairos.Persistence.Tests;
@@ -14,6 +15,9 @@ public sealed class PostgresStoreContractTests(PostgresFixture fixture) : StoreC
         _db = await fixture.NewDatabaseAsync();
         return _db.NewStore();
     }
+
+    protected override async Task<StoreStats> StatsAsync(IKairosStore store, TenantScope scope) =>
+        await ((PostgresKairosStore)store).GetStatsAsync(scope);
 
     public Task InitializeAsync() => Task.CompletedTask;
 

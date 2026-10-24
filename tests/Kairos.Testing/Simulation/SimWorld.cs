@@ -17,6 +17,18 @@ public sealed class SimOptions
     /// <summary>Ship the patched build mid-simulation, with runs in flight.</summary>
     public bool Deploy { get; init; } = true;
 
+    /// <summary>Share of activities that run for about three leases and must heartbeat to survive (L1).</summary>
+    public double SlowActivityProbability { get; init; } = 0.1;
+
+    /// <summary>Share of activities that kill their worker on every attempt (L2).</summary>
+    public double PoisonActivityProbability { get; init; } = 0.05;
+
+    /// <summary>Slow activities renew their lease. Turn off only to show what happens without it.</summary>
+    public bool HeartbeatSlowActivities { get; init; } = true;
+
+    /// <summary>Time may also pass while a slow activity runs, from other workers' steps (long pauses). Off for strict no-expiry scenarios.</summary>
+    public bool ClockJumpsDuringSlowActivities { get; init; } = true;
+
     public SimFaultOptions Faults { get; init; } = new();
 }
 
@@ -64,7 +76,9 @@ public sealed class SimWorld
         int count = programs?.Count ?? _rng.Between(_options.MinRuns, _options.MaxRuns);
         for (int i = 0; i < count; i++)
         {
-            SimProgram program = programs is null ? SimPrograms.Generate(_rng, $"p{i}") : programs[i];
+            SimProgram program = programs is null
+                ? SimPrograms.Generate(_rng, $"p{i}", _options.SlowActivityProbability, _options.PoisonActivityProbability)
+                : programs[i];
             _runs.Add(new RunInfo(i, program));
         }
 
@@ -110,14 +124,14 @@ public sealed class SimWorld
             {
                 await StepAsync();
             }
-            catch (SimulatedFaultException)
+            catch (Exception ex) when (ex is SimulatedFaultException or OutOfMemoryException)
             {
                 BuildWorkers(); // the process died; a fresh one takes over (workers keep no state between tasks)
             }
         }
     }
 
-    private async Task StepAsync()
+    private async Task StepAsync(bool allowClockJumps = true)
     {
         int roll = _rng.Next(100);
         if (roll < 28)
@@ -134,10 +148,18 @@ public sealed class SimWorld
         }
         else if (roll < 72)
         {
-            _time.Advance(TimeSpan.FromMilliseconds(_rng.Between(1, 5000)));
+            if (allowClockJumps)
+            {
+                _time.Advance(TimeSpan.FromMilliseconds(_rng.Between(1, 5000)));
+            }
         }
         else if (roll < 77)
         {
+            if (!allowClockJumps)
+            {
+                return;
+            }
+
             _stats.ClockJumps++;
             _time.Advance(TimeSpan.FromMinutes(_rng.Between(1, 120)));
         }
@@ -160,6 +182,63 @@ public sealed class SimWorld
         }
     }
 
+    private int _slowDepth;
+
+    private async Task<byte[]> SimActivity(ActivityContext ctx, byte[] input, CancellationToken ct)
+    {
+        // A nested slow activity would advance the shared clock while its host cannot heartbeat (one thread simulates the cluster).
+        bool slow = input.Length > 2 && input[2] != 0 && _slowDepth == 0;
+        bool poison = input.Length > 3 && input[3] != 0;
+        if (poison)
+        {
+#pragma warning disable CA2201 // The point: this is what a dying process looks like to the worker runtime.
+            throw new OutOfMemoryException("simulated poison task: the worker dies on every attempt");
+#pragma warning restore CA2201
+        }
+
+        if (slow)
+        {
+            TimeSpan lease = TimeSpan.FromSeconds(30);
+            for (int i = 0; i < 3; i++)
+            {
+                _time.Advance(lease * 0.9);
+                if (_options.HeartbeatSlowActivities)
+                {
+                    await ctx.HeartbeatAsync();
+                }
+
+                ct.ThrowIfCancellationRequested(); // the lease was lost: stop, someone else owns the attempt
+                if (_slowDepth < 2)
+                {
+                    _slowDepth++;
+                    try
+                    {
+                        // While this activity is "running", the rest of the cluster carries on around it.
+                        for (int k = 0; k < 3; k++)
+                        {
+                            try
+                            {
+                                await StepAsync(_options.ClockJumpsDuringSlowActivities);
+                            }
+                            catch (Exception ex) when (ex is SimulatedFaultException or OutOfMemoryException)
+                            {
+                                // a different worker died; it is not our problem
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        _slowDepth--;
+                    }
+                }
+
+                ct.ThrowIfCancellationRequested();
+            }
+        }
+
+        return await _external.Activity()(ctx, input, ct);
+    }
+
     private WorkerRuntime PickWorker() => _workers[_rng.Next(_workers.Count)];
 
     private void BuildWorkers()
@@ -170,12 +249,13 @@ public sealed class SimWorld
             workflows.Register(r.Program.Type, KairosClient.DefaultBuildId, SimPrograms.Compile(r.Program, _patched));
         }
 
-        var activities = new ActivityRegistry().Register("act", _external.Activity());
+        var activities = new ActivityRegistry().Register("act", SimActivity);
         var options = new WorkerOptions
         {
             WorkflowTaskLease = TimeSpan.FromSeconds(30),
             ActivityTaskLease = TimeSpan.FromSeconds(30),
             FailedTaskRetryDelay = TimeSpan.FromSeconds(10),
+            AutoHeartbeat = false, // virtual time has no timers; slow activities heartbeat explicitly
         };
 
         _workers = [];
@@ -262,9 +342,9 @@ public sealed class SimWorld
                     await Driver.DriveAsync(w);
                 }
             }
-            catch (SimulatedFaultException)
+            catch (Exception ex) when (ex is SimulatedFaultException or OutOfMemoryException)
             {
-                BuildWorkers(); // forced single fault during crash-at-every-step: recover and carry on
+                BuildWorkers(); // a crash (forced fault, or a poison task killing its worker): recover and carry on
                 continue;
             }
 
@@ -333,6 +413,7 @@ public sealed class SimWorld
             }
 
             CheckStructure(history, where, expectedKeys);
+            _stats.LeaseExpirations += history.OfType<ActivityFailed>().Count(f => f.ErrorType == StoreRules.LeaseExpiredError);
 
             // I4: the history replays with the current code, no divergence, nothing left to do.
             WorkflowFunc code = SimPrograms.Compile(r.Program, _patched);
@@ -391,7 +472,7 @@ public sealed class SimWorld
 
         // I9 + I1: no leaked work.
         StoreStats s = await _diag.GetStatsAsync(_scope);
-        if (s.WorkflowTasks != 0 || s.ActivityTasks != 0 || s.Timers != 0 || s.OpenRuns != 0)
+        if (s.WorkflowTasks != 0 || s.ActivityTasks != 0 || s.Timers != 0 || s.OpenRuns != 0 || s.StuckWorkflowTasks != 0)
         {
             throw new InvariantViolationException("I9", $"Store still holds work after all runs closed: {s}.");
         }
@@ -407,6 +488,7 @@ public sealed class SimWorld
     private static void CheckStructure(IReadOnlyList<HistoryEvent> history, string where, HashSet<string> expectedKeys)
     {
         var scheduled = new HashSet<int>();
+        var maxAttempts = new Dictionary<int, int>();
         var terminal = new HashSet<int>();
         var lastAttempt = new Dictionary<int, int>();
         var firedTimers = new HashSet<int>();
@@ -425,10 +507,11 @@ public sealed class SimWorld
             {
                 WorkflowStarted => i == 0,
                 WorkflowCompleted or WorkflowFailed => isLast,
-                ActivityScheduled s => scheduled.Add(s.ActivityId) && expectedKeys.Add($"{s.RunId:N}:{s.ActivityId}"),
+                ActivityScheduled s => scheduled.Add(s.ActivityId) && expectedKeys.Add($"{s.RunId:N}:{s.ActivityId}") &&
+                    maxAttempts.TryAdd(s.ActivityId, s.RetryPolicy.MaximumAttempts),
                 ActivityCompleted c => scheduled.Contains(c.ActivityId) && terminal.Add(c.ActivityId),
                 ActivityFailed f => scheduled.Contains(f.ActivityId) && !terminal.Contains(f.ActivityId) &&
-                    Advance(lastAttempt, f.ActivityId, f.Attempt) && (f.WillRetry || terminal.Add(f.ActivityId)),
+                    Advance(lastAttempt, f.ActivityId, f.Attempt) && f.Attempt <= maxAttempts[f.ActivityId] && (f.WillRetry || terminal.Add(f.ActivityId)),
                 TimerStarted t => startedTimers.Add(t.TimerId),
                 TimerFired t => startedTimers.Contains(t.TimerId) && firedTimers.Add(t.TimerId),
                 _ => true,

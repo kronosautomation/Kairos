@@ -53,6 +53,8 @@ public sealed class SimStats
 
     public long NonDeterminismFaults { get; set; }
 
+    public long LeaseExpirations { get; set; }
+
     public void Add(SimStats o)
     {
         Steps += o.Steps;
@@ -64,11 +66,12 @@ public sealed class SimStats
         RetriedAttempts += o.RetriedAttempts;
         ClockJumps += o.ClockJumps;
         NonDeterminismFaults += o.NonDeterminismFaults;
+        LeaseExpirations += o.LeaseExpirations;
     }
 
     public override string ToString() =>
         $"steps={Steps} crashes={Crashes} delayed={DelayedMessages} duplicates={DuplicateMessages} stale={StaleRejections} " +
-        $"seqConflicts={SequenceConflicts} retries={RetriedAttempts} clockJumps={ClockJumps} nonDeterminism={NonDeterminismFaults}";
+        $"seqConflicts={SequenceConflicts} retries={RetriedAttempts} clockJumps={ClockJumps} nonDeterminism={NonDeterminismFaults} leaseExpirations={LeaseExpirations}";
 }
 
 /// <summary>
@@ -122,12 +125,25 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
         return first;
     }
 
-    public ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, CancellationToken cancellationToken) =>
+    public ValueTask ReleaseWorkflowTaskAsync(WorkflowTask task, DateTimeOffset retryAt, DateTimeOffset now, bool countAttempt, CancellationToken cancellationToken) =>
         Faulty(nameof(ReleaseWorkflowTaskAsync), async () =>
         {
-            await inner.ReleaseWorkflowTaskAsync(task, retryAt, cancellationToken);
+            await inner.ReleaseWorkflowTaskAsync(task, retryAt, now, countAttempt, cancellationToken);
             return true;
         }).AsNonGeneric();
+
+    public ValueTask<CompletionOutcome> HeartbeatActivityTaskAsync(ActivityTask task, DateTimeOffset now, TimeSpan extendBy, CancellationToken cancellationToken) =>
+        Faulty(nameof(HeartbeatActivityTaskAsync), async () => Count(await inner.HeartbeatActivityTaskAsync(task, now, extendBy, cancellationToken)));
+
+    public ValueTask ReleaseActivityTaskAsync(ActivityTask task, DateTimeOffset retryAt, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Faulty(nameof(ReleaseActivityTaskAsync), async () =>
+        {
+            await inner.ReleaseActivityTaskAsync(task, retryAt, now, cancellationToken);
+            return true;
+        }).AsNonGeneric();
+
+    public ValueTask<int> ReapExpiredLeasesAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Faulty(nameof(ReapExpiredLeasesAsync), () => inner.ReapExpiredLeasesAsync(scope, now, cancellationToken));
 
     public ValueTask<ActivityTask?> PollActivityTaskAsync(TenantScope scope, DateTimeOffset now, TimeSpan lease, CancellationToken cancellationToken) =>
         Faulty(nameof(PollActivityTaskAsync), () => inner.PollActivityTaskAsync(scope, now, lease, cancellationToken));

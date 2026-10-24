@@ -18,6 +18,9 @@ public abstract class StoreContractTests
     /// <summary>A store with no data in it. Called once per test.</summary>
     protected abstract Task<IKairosStore> CreateStoreAsync();
 
+    /// <summary>Resource counters for the scope (the stuck-task checks).</summary>
+    protected abstract Task<StoreStats> StatsAsync(IKairosStore store, TenantScope scope);
+
     protected static byte[] B8(string s) => Encoding.UTF8.GetBytes(s);
 
     protected static string Str(byte[] b) => Encoding.UTF8.GetString(b);
@@ -167,9 +170,14 @@ public abstract class StoreContractTests
         Assert.Null(await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct)); // still leased
 
         Time.Advance(TimeSpan.FromSeconds(31));
+        Assert.Null(await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct)); // expired but not yet reaped
+        Assert.Equal(1, await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct));
+        Assert.Null(await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct)); // backing off
+        Time.Advance(TimeSpan.FromSeconds(2));
         WorkflowTask second = (await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct))!;
         Assert.Equal(first.Run, second.Run);
         Assert.True(second.LeaseToken > first.LeaseToken);
+        Assert.Equal(first.Attempt + 1, second.Attempt); // L2: the expiry counted as an attempt
 
         var done = new WorkflowCompleted(A.TenantId, A.NamespaceId, first.Run.RunId, 0, Time.GetUtcNow(), []);
         Assert.Equal(CompletionOutcome.StaleLease, await store.CompleteWorkflowTaskAsync(first, [done], Time.GetUtcNow(), Ct));
@@ -211,9 +219,12 @@ public abstract class StoreContractTests
 
         ActivityTask slow = (await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct))!;
         Time.Advance(TimeSpan.FromSeconds(11));
+        Assert.Equal(1, await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct));
+        Time.Advance(TimeSpan.FromSeconds(2)); // retry back-off
         ActivityTask retry = (await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct))!;
         Assert.Equal(slow.IdempotencyKey, retry.IdempotencyKey);
         Assert.True(retry.LeaseToken > slow.LeaseToken);
+        Assert.Equal(slow.Attempt + 1, retry.Attempt);
 
         var result = new ActivityCompleted(A.TenantId, A.NamespaceId, start.RunId, 0, Time.GetUtcNow(), slow.ActivityId, B8("r"));
         Assert.Equal(CompletionOutcome.StaleLease, await store.CompleteActivityTaskAsync(slow, result, null, Time.GetUtcNow(), Ct));
@@ -310,5 +321,254 @@ public abstract class StoreContractTests
         var foreign = new WorkflowCompleted(B.TenantId, B.NamespaceId, runId, 0, Time.GetUtcNow(), []);
         await Assert.ThrowsAsync<ArgumentException>(async () =>
             await store.CompleteWorkflowTaskAsync(task, [foreign], Time.GetUtcNow(), Ct));
+    }
+
+    // ---- L1: lease renewal (heartbeat) ---------------------------------------------------------------------------
+
+    private async Task<(IKairosStore Store, KairosClient Client, RunKey Run, ActivityTask Task)> ClaimedActivityAsync(
+        RetryPolicy? policy = null, TimeSpan? lease = null)
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "hb-" + Guid.NewGuid(), "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        WorkflowRegistry wf = Workflows("default", async (ctx, input) => await ctx.ExecuteActivityAsync("echo", input, policy));
+        await new WorkerRuntime(store, A, wf, Activities(), Time).ProcessWorkflowTaskAsync(Ct);
+        ActivityTask task = (await store.PollActivityTaskAsync(A, Time.GetUtcNow(), lease ?? TimeSpan.FromSeconds(10), Ct))!;
+        return (store, client, run, task);
+    }
+
+    [Fact]
+    public async Task Heartbeat_extends_the_lease_so_a_long_attempt_is_not_reaped()
+    {
+        (IKairosStore store, KairosClient client, RunKey run, ActivityTask task) = await ClaimedActivityAsync();
+
+        for (int i = 0; i < 5; i++) // five times the lease in total, renewed every 8 s
+        {
+            Time.Advance(TimeSpan.FromSeconds(8));
+            Assert.Equal(CompletionOutcome.Applied, await store.HeartbeatActivityTaskAsync(task, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct));
+            Assert.Equal(0, await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct));
+        }
+
+        var done = new ActivityCompleted(A.TenantId, A.NamespaceId, run.RunId, 0, Time.GetUtcNow(), task.ActivityId, B8("late but fine"));
+        Assert.Equal(CompletionOutcome.Applied, await store.CompleteActivityTaskAsync(task, done, null, Time.GetUtcNow(), Ct));
+        Assert.DoesNotContain(await client.GetHistoryAsync(run, Ct), e => e is ActivityFailed);
+    }
+
+    [Fact]
+    public async Task Heartbeat_from_a_holder_that_lost_the_lease_is_refused()
+    {
+        (IKairosStore store, _, _, ActivityTask task) = await ClaimedActivityAsync();
+
+        Time.Advance(TimeSpan.FromSeconds(11));
+        await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct);
+
+        Assert.Equal(CompletionOutcome.StaleLease, await store.HeartbeatActivityTaskAsync(task, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct));
+    }
+
+    [Fact]
+    public async Task Heartbeat_never_shortens_a_lease()
+    {
+        (IKairosStore store, _, _, ActivityTask task) = await ClaimedActivityAsync(lease: TimeSpan.FromSeconds(60));
+
+        Assert.Equal(CompletionOutcome.Applied, await store.HeartbeatActivityTaskAsync(task, Time.GetUtcNow(), TimeSpan.FromSeconds(1), Ct));
+        Time.Advance(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct));
+    }
+
+    // ---- L2: expiry counts as an attempt, backs off, and cannot loop forever -----------------------------------------
+
+    [Fact]
+    public async Task Expired_attempt_is_recorded_counted_and_delayed_by_the_retry_policy()
+    {
+        (IKairosStore store, KairosClient client, RunKey run, ActivityTask first) =
+            await ClaimedActivityAsync(RetryPolicy.Default with { MaximumAttempts = 3, InitialInterval = TimeSpan.FromSeconds(5) });
+
+        Time.Advance(TimeSpan.FromSeconds(11));
+        Assert.Equal(1, await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct));
+
+        ActivityFailed failure = Assert.Single((await client.GetHistoryAsync(run, Ct)).OfType<ActivityFailed>());
+        Assert.Equal((StoreRules.LeaseExpiredError, 1, true), (failure.ErrorType, failure.Attempt, failure.WillRetry));
+
+        Assert.Null(await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct)); // backing off
+        Time.Advance(TimeSpan.FromSeconds(6));
+        ActivityTask second = (await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct))!;
+        Assert.Equal(2, second.Attempt);
+        Assert.Equal(first.IdempotencyKey, second.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task A_poison_activity_that_keeps_killing_its_worker_ends_in_a_recorded_failure()
+    {
+        (IKairosStore store, KairosClient client, RunKey run, ActivityTask task) =
+            await ClaimedActivityAsync(RetryPolicy.Default with { MaximumAttempts = 3, InitialInterval = TimeSpan.FromSeconds(1) });
+
+        int attempts = 1;
+        while (true)
+        {
+            Time.Advance(TimeSpan.FromSeconds(11)); // the worker died; nobody completes or renews
+            await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct);
+            Time.Advance(TimeSpan.FromSeconds(10)); // past any back-off
+            ActivityTask? next = await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct);
+            if (next is null)
+            {
+                break;
+            }
+
+            attempts++;
+            Assert.True(attempts <= 3, "The task was handed out beyond MaximumAttempts.");
+            task = next;
+        }
+
+        Assert.Equal(3, attempts);
+        ActivityFailed[] failures = [.. (await client.GetHistoryAsync(run, Ct)).OfType<ActivityFailed>()];
+        Assert.Equal([1, 2, 3], failures.Select(f => f.Attempt));
+        Assert.Equal([true, true, false], failures.Select(f => f.WillRetry));
+        Assert.All(failures, f => Assert.Equal(StoreRules.LeaseExpiredError, f.ErrorType));
+
+        // The workflow is told: its task is runnable and sees the terminal failure.
+        WorkflowTask wf = (await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct))!;
+        Assert.Contains(wf.History, e => e is ActivityFailed { WillRetry: false });
+        HashChain.Verify(await client.GetHistoryAsync(run, Ct));
+    }
+
+    [Fact]
+    public async Task A_workflow_task_that_keeps_expiring_backs_off_then_is_parked_not_dropped()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "poison-wf", "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+
+        int claims = 0;
+        TimeSpan lastGap = TimeSpan.Zero;
+        for (int i = 0; i < 30; i++)
+        {
+            DateTimeOffset before = Time.GetUtcNow();
+            WorkflowTask? task = await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct);
+            if (task is null)
+            {
+                // Not offered right now: either backing off or parked. Let time pass and look again.
+                Time.Advance(TimeSpan.FromSeconds(70));
+                await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct);
+                if ((await StatsAsync(store, A)).StuckWorkflowTasks == 1)
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            claims++;
+            lastGap = Time.GetUtcNow() - before;
+            Time.Advance(TimeSpan.FromSeconds(31)); // the worker died holding it
+            await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct);
+        }
+
+        Assert.Equal(StoreRules.MaxWorkflowTaskAttempts, claims);
+        Assert.Equal(1, (await StatsAsync(store, A)).StuckWorkflowTasks);
+        Time.Advance(TimeSpan.FromDays(30));
+        Assert.Null(await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct)); // parked for good
+        Assert.Equal(RunState.Running, await client.GetStateAsync(run, Ct)); // never dropped: still open, visible as stuck
+        Assert.True(lastGap >= TimeSpan.Zero);
+    }
+
+    // ---- L4: graceful shutdown releases leases ----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Released_activity_is_claimable_at_once_and_the_release_is_not_an_attempt()
+    {
+        (IKairosStore store, _, _, ActivityTask task) = await ClaimedActivityAsync();
+
+        await store.ReleaseActivityTaskAsync(task, Time.GetUtcNow(), Time.GetUtcNow(), Ct);
+        ActivityTask again = (await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct))!;
+
+        Assert.Equal(task.Attempt, again.Attempt);
+        Assert.True(again.LeaseToken > task.LeaseToken);
+
+        // The old holder can neither renew nor release the new holder's attempt.
+        Assert.Equal(CompletionOutcome.StaleLease, await store.HeartbeatActivityTaskAsync(task, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct));
+        await store.ReleaseActivityTaskAsync(task, Time.GetUtcNow(), Time.GetUtcNow(), Ct);
+        Assert.Null(await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct));
+    }
+
+    [Fact]
+    public async Task Released_workflow_task_is_claimable_at_once_without_counting_an_attempt()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        await client.StartAsync(A, "rel", "wf", [], cancellationToken: Ct);
+        WorkflowTask task = (await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct))!;
+
+        await store.ReleaseWorkflowTaskAsync(task, Time.GetUtcNow(), Time.GetUtcNow(), countAttempt: false, Ct);
+        WorkflowTask again = (await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct))!;
+        Assert.Equal(task.Attempt, again.Attempt);
+
+        await store.ReleaseWorkflowTaskAsync(again, Time.GetUtcNow(), Time.GetUtcNow(), countAttempt: true, Ct);
+        WorkflowTask third = (await store.PollWorkflowTaskAsync(A, DefaultBuild, Time.GetUtcNow(), TimeSpan.FromSeconds(30), Ct))!;
+        Assert.Equal(task.Attempt + 1, third.Attempt);
+    }
+
+    [Fact]
+    public async Task Worker_shutdown_mid_activity_hands_the_attempt_to_a_peer_immediately()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "drain", "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        var started = new TaskCompletionSource();
+        ActivityRegistry slow = new ActivityRegistry().Register("echo", async (_, _, ct) =>
+        {
+            started.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+            return [];
+        });
+        WorkflowRegistry wf = Workflows("default", async (ctx, input) => await ctx.ExecuteActivityAsync("echo", input));
+        var options = new WorkerOptions { AutoHeartbeat = false };
+        var draining = new WorkerRuntime(store, A, wf, slow, Time, options);
+        await draining.ProcessWorkflowTaskAsync(Ct);
+
+        using var shutdown = new CancellationTokenSource();
+        Task<bool> running = draining.ProcessActivityTaskAsync(shutdown.Token).AsTask();
+        await started.Task;
+        await shutdown.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+
+        // No clock advance: the peer gets it right away, as the same attempt, and nothing was recorded as a failure.
+        ActivityTask? peer = await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromSeconds(10), Ct);
+        Assert.NotNull(peer);
+        Assert.Equal(1, peer.Attempt);
+        Assert.DoesNotContain(await client.GetHistoryAsync(run, Ct), e => e is ActivityFailed);
+    }
+
+    [Fact]
+    public async Task An_activity_that_loses_its_lease_is_cancelled_and_records_nothing()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "lost", "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        var gate = new TaskCompletionSource();
+        var entered = new TaskCompletionSource();
+        bool sawCancellation = false;
+        ActivityRegistry act = new ActivityRegistry().Register("echo", async (ctx, input, ct) =>
+        {
+            entered.SetResult();
+            await gate.Task;
+            await ctx.HeartbeatAsync(); // learns the lease is gone
+            sawCancellation = ct.IsCancellationRequested;
+            ct.ThrowIfCancellationRequested();
+            return input;
+        });
+        WorkflowRegistry wf = Workflows("default", async (ctx, input) => await ctx.ExecuteActivityAsync("echo", input));
+        var worker = new WorkerRuntime(store, A, wf, act, Time, new WorkerOptions { AutoHeartbeat = false });
+        await worker.ProcessWorkflowTaskAsync(Ct);
+
+        Task<bool> running = worker.ProcessActivityTaskAsync(Ct).AsTask();
+        await entered.Task;
+        Time.Advance(TimeSpan.FromMinutes(2)); // the lease (1 min) expires while the activity is "stuck in a GC pause"
+        await store.ReapExpiredLeasesAsync(A, Time.GetUtcNow(), Ct);
+        gate.SetResult();
+
+        Assert.True(await running);
+        Assert.True(sawCancellation);
+        Assert.DoesNotContain(await client.GetHistoryAsync(run, Ct), e => e is ActivityCompleted);
+        Assert.Single((await client.GetHistoryAsync(run, Ct)).OfType<ActivityFailed>(), f => f.ErrorType == StoreRules.LeaseExpiredError);
     }
 }

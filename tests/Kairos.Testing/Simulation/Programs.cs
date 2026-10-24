@@ -12,7 +12,9 @@ public abstract record SimStep;
 
 /// <param name="FailAttempts">The first N attempts throw.</param>
 /// <param name="FailAfterEffect">Throw after the external side effect happened (the nastiest case for exactly-once).</param>
-public sealed record ActStep(int FailAttempts, bool FailAfterEffect, int MaxAttempts, bool Catch) : SimStep;
+/// <param name="Slow">The attempt takes about three leases of virtual time and must keep renewing its lease (L1).</param>
+/// <param name="Poison">Every attempt kills its worker (out of memory); the engine must still end the run (L2).</param>
+public sealed record ActStep(int FailAttempts, bool FailAfterEffect, int MaxAttempts, bool Catch, bool Slow = false, bool Poison = false) : SimStep;
 
 public sealed record TimerStep(int Seconds) : SimStep;
 
@@ -22,7 +24,7 @@ public sealed record ParStep(ActStep A, ActStep B) : SimStep;
 
 public static class SimPrograms
 {
-    public static SimProgram Generate(SimRandom rng, string type)
+    public static SimProgram Generate(SimRandom rng, string type, double slowProbability = 0.1, double poisonProbability = 0.05)
     {
         int count = rng.Between(1, 7);
         var steps = new List<SimStep>(count);
@@ -31,18 +33,19 @@ public static class SimPrograms
             int roll = rng.Next(100);
             steps.Add(roll switch
             {
-                < 45 => RandomAct(rng),
+                < 45 => RandomAct(rng, slowProbability, poisonProbability),
                 < 60 => new TimerStep(rng.Between(1, 7200)),
                 < 75 => new SignalStep($"sig{i}"),
-                _ => new ParStep(RandomAct(rng), RandomAct(rng)),
+                _ => new ParStep(RandomAct(rng, slowProbability, poisonProbability), RandomAct(rng, slowProbability, poisonProbability)),
             });
         }
 
         return new SimProgram(type, steps, rng.Chance(0.5) ? rng.Next(count + 1) : -1);
     }
 
-    public static ActStep RandomAct(SimRandom rng) =>
-        new(rng.Chance(0.7) ? 0 : rng.Between(1, 4), rng.Chance(0.5), rng.Between(1, 4), rng.Chance(0.5));
+    public static ActStep RandomAct(SimRandom rng, double slowProbability = 0.1, double poisonProbability = 0.05) =>
+        new(rng.Chance(0.7) ? 0 : rng.Between(1, 4), rng.Chance(0.5), rng.Between(1, 4), rng.Chance(0.5),
+            rng.Chance(slowProbability), rng.Chance(poisonProbability));
 
     /// <summary>
     /// The interpreter. With <paramref name="patchedBuild"/> the program gains one extra activity at <see cref="SimProgram.PatchAt"/>,
@@ -93,7 +96,8 @@ public static class SimPrograms
         MaximumInterval = TimeSpan.FromSeconds(8),
     };
 
-    private static byte[] Input(ActStep a) => [(byte)a.FailAttempts, a.FailAfterEffect ? (byte)1 : (byte)0];
+    private static byte[] Input(ActStep a) =>
+        [(byte)a.FailAttempts, a.FailAfterEffect ? (byte)1 : (byte)0, a.Slow ? (byte)1 : (byte)0, a.Poison ? (byte)1 : (byte)0];
 
     private static async Task<byte> RunAct(IWorkflowContext ctx, ActStep a)
     {
