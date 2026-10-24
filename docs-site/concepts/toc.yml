@@ -1,0 +1,20 @@
+- name: Concepts
+  href: index.md
+- name: Workflows and activities
+  href: workflows-and-activities.md
+- name: Durable execution and replay
+  href: durable-execution.md
+- name: Determinism
+  href: determinism.md
+- name: History and integrity
+  href: history.md
+- name: Timers and signals
+  href: timers-and-signals.md
+- name: Retries and idempotency
+  href: retries.md
+- name: Leases and heartbeats
+  href: leases-and-heartbeats.md
+- name: Versioning
+  href: versioning.md
+- name: Long-running workflows
+  href: continue-as-new.md

@@ -614,7 +614,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
-    /// <summary>Resource counters for bounded-resource checks (I9): everything should drain to zero once runs close. Optionally for one scope only.</summary>
+    /// <summary>Resource counters for bounded-resource checks: everything should drain to zero once runs close. Optionally for one scope only.</summary>
     public StoreStats GetStats(TenantScope? only = null)
     {
         lock (_gate)

@@ -113,6 +113,38 @@ stages:
         TLC_MODE=quick TLA2TOOLS="$(Agent.TempDirectory)/tla2tools.jar" bash spec/check.sh
       displayName: Model-check spec/ (quick config)
 
+- stage: Docs
+  displayName: Documentation site
+  dependsOn: []
+  jobs:
+  - job: DocFX
+    displayName: Disclosure check, then build the site
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 20
+    steps:
+    - checkout: self
+      fetchDepth: 1
+    - pwsh: ./build/check-disclosure.ps1 -SelfTest
+      displayName: Disclosure check can fail (self-test)
+    - pwsh: ./build/check-disclosure.ps1
+      displayName: Disclosure policy check (docs-site/, samples/, public XML comments), before the site is built
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        version: '10.0.x'
+    - script: dotnet tool restore
+      displayName: Restore pinned DocFX
+    - script: dotnet restore Kairos.sln -p:RestoreLockedMode=true
+      displayName: Locked restore
+    - script: dotnet build Kairos.sln -c $(BuildConfiguration) --no-restore
+      displayName: Build (compiles every sample the pages quote; writes the XML docs)
+    - script: dotnet docfx docs-site/docfx.json --warningsAsErrors
+      displayName: Build the site (warnings, including broken links and missing snippets, are errors)
+    - publish: docs-site/_site
+      artifact: docs-site
+      displayName: Keep the built site
+
 - stage: SupplyChain
   displayName: Supply chain checks
   dependsOn: []

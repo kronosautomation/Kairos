@@ -1,0 +1,44 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "..",
+          "files": [
+            "src/Kairos.Abstractions/Kairos.Abstractions.csproj",
+            "src/Kairos.Core/Kairos.Core.csproj",
+            "src/Kairos.Persistence.Postgres/Kairos.Persistence.Postgres.csproj",
+            "src/Kairos.Hosting/Kairos.Hosting.csproj",
+            "src/Kairos.Worker/Kairos.Worker.csproj",
+            "src/Kairos.Cloud.SelfHosted/Kairos.Cloud.SelfHosted.csproj",
+            "tests/Kairos.Testing/Kairos.Testing.csproj",
+            "tests/Kairos.Conformance/Kairos.Conformance.csproj"
+          ]
+        }
+      ],
+      "dest": "api",
+      "properties": { "TargetFramework": "net10.0" },
+      "includePrivateMembers": false,
+      "disableGitFeatures": true
+    }
+  ],
+  "build": {
+    "content": [
+      { "files": [ "**/*.md", "**/toc.yml", "api/**.yml" ], "exclude": [ "obj/**", "_site/**", "README.md" ] }
+    ],
+    "resource": [
+      { "files": [ "images/**" ] }
+    ],
+    "fileMetadata": {},
+    "globalMetadata": {
+      "_appName": "Kairos",
+      "_appTitle": "Kairos documentation",
+      "_appFooter": "Kairos is a product of Kronos Automation LLC. The community packages are licensed under the Apache License 2.0.",
+      "_enableSearch": true,
+      "_disableContribution": true
+    },
+    "template": [ "default", "modern" ],
+    "dest": "_site",
+    "markdownEngineName": "markdig"
+  }
+}

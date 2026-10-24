@@ -138,6 +138,26 @@ stages:
     - template: steps-publish.yml
       parameters: { title: 'Soak' }
 
+  - job: DocsPreview
+    displayName: Documentation site preview build
+    pool:
+      ${{ if eq(parameters.agentPool, 'Kairos-Local') }}:
+        name: Kairos-Local
+      ${{ else }}:
+        vmImage: ubuntu-latest
+    timeoutInMinutes: 30
+    steps:
+    - template: steps-setup.yml
+    - pwsh: ./build/check-disclosure.ps1
+      displayName: Disclosure policy check (runs before the site is built)
+    - script: dotnet tool restore
+      displayName: Restore pinned DocFX
+    - script: dotnet docfx docs-site/docfx.json --warningsAsErrors
+      displayName: Build the site
+    - publish: docs-site/_site
+      artifact: docs-preview
+      displayName: Publish the preview build
+
 - stage: Mutation
   displayName: Weekly mutation testing
   condition: eq(variables['IsWeekly'], 'True')

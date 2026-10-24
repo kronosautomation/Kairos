@@ -12,8 +12,8 @@ public abstract record SimStep;
 
 /// <param name="FailAttempts">The first N attempts throw.</param>
 /// <param name="FailAfterEffect">Throw after the external side effect happened (the nastiest case for exactly-once).</param>
-/// <param name="Slow">The attempt takes about three leases of virtual time and must keep renewing its lease (L1).</param>
-/// <param name="Poison">Every attempt kills its worker (out of memory); the engine must still end the run (L2).</param>
+/// <param name="Slow">The attempt takes about three leases of virtual time and must keep renewing its lease.</param>
+/// <param name="Poison">Every attempt kills its worker (out of memory); the engine must still end the run.</param>
 public sealed record ActStep(int FailAttempts, bool FailAfterEffect, int MaxAttempts, bool Catch, bool Slow = false, bool Poison = false) : SimStep;
 
 public sealed record TimerStep(int Seconds) : SimStep;
@@ -129,7 +129,7 @@ public static class SimPrograms
 
 /// <summary>
 /// An external system with idempotency-key deduplication, as a payment API or tool server would have. Records every call so
-/// I3 can be checked: each key takes effect at most once, only scheduled activities produce keys, and every completed
+/// duplicate effects can be detected: each key takes effect at most once, only scheduled activities produce keys, and every completed
 /// activity's key took effect.
 /// </summary>
 public sealed class FakeExternalSystem

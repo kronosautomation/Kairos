@@ -1,7 +1,7 @@
 namespace Kairos.Testing;
 
 /// <summary>
-/// I5 for every method of <see cref="IKairosStore"/>. A rich tenant A (a leased workflow task, a leased activity, a timer, a
+/// Tenant isolation for every method of <see cref="IKairosStore"/>. A rich tenant A (a leased workflow task, a leased activity, a timer, a
 /// parked task, an audit entry, a closed run) is attacked through each method from three foreign scopes: another tenant and
 /// namespace, the right tenant with the wrong namespace, and the wrong tenant with the right namespace. Each call must fail
 /// closed (empty, false, null or StaleLease; never data), change nothing of A's, leak none of A's identifiers in errors, and

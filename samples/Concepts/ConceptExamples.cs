@@ -1,0 +1,123 @@
+using System.Text;
+
+namespace Kairos.Samples.Concepts;
+
+/// <summary>Small workflows that the concept pages quote. Each region is exercised by a test in Concepts.Tests.</summary>
+public static class DeterminismExamples
+{
+    #region wrong
+    // Do not write workflow code like this. When the workflow is replayed it generates a different id than the first run did,
+    // so the recorded step no longer matches what the code asks for.
+    public static async Task<byte[]> WrongAsync(IWorkflowContext ctx, byte[] input)
+    {
+        string requestId = Guid.NewGuid().ToString("N");
+        return await ctx.ExecuteActivityAsync("send", Encoding.UTF8.GetBytes(requestId));
+    }
+    #endregion
+
+    #region right
+    // The context hands out ids and times that are recorded, so a replay sees exactly the values the first run saw.
+    public static async Task<byte[]> RightAsync(IWorkflowContext ctx, byte[] input)
+    {
+        string requestId = ctx.NewGuid().ToString("N");
+        DateTimeOffset requestedAt = ctx.Now;
+        return await ctx.ExecuteActivityAsync("send", Encoding.UTF8.GetBytes($"{requestId}@{requestedAt:O}"));
+    }
+    #endregion
+}
+
+public static class SignalExamples
+{
+    #region approval
+    // Waits for a person's decision. While it waits it holds no thread and no memory, for as long as it takes.
+    public static async Task<byte[]> ApprovalAsync(IWorkflowContext ctx, byte[] input)
+    {
+        byte[] decision = await ctx.WaitForSignalAsync("decision");
+        return Encoding.UTF8.GetString(decision) == "approve"
+            ? await ctx.ExecuteActivityAsync("publish", input)
+            : Encoding.UTF8.GetBytes("rejected");
+    }
+    #endregion
+
+    #region send-signal
+    // The signal id makes a retried request harmless: delivering "decision-1" twice signals the run once.
+    public static ValueTask<bool> ApproveAsync(KairosClient client, RunKey run) =>
+        client.SignalAsync(run, "decision", Encoding.UTF8.GetBytes("approve"), signalId: "decision-1");
+    #endregion
+}
+
+public static class VersioningExamples
+{
+    #region version-1
+    public static async Task<byte[]> OrderV1Async(IWorkflowContext ctx, byte[] input)
+    {
+        await ctx.ExecuteActivityAsync("charge", input);
+        await ctx.WaitForSignalAsync("packed");
+        return await ctx.ExecuteActivityAsync("ship", input);
+    }
+    #endregion
+
+    #region version-2
+    // A new step between "charge" and "packed". Runs that are already past this point keep the old behaviour; new runs get the check.
+    public static async Task<byte[]> OrderV2Async(IWorkflowContext ctx, byte[] input)
+    {
+        await ctx.ExecuteActivityAsync("charge", input);
+        if (ctx.IsPatched("fraud-check"))
+        {
+            await ctx.ExecuteActivityAsync("fraud-check", input);
+        }
+
+        await ctx.WaitForSignalAsync("packed");
+        return await ctx.ExecuteActivityAsync("ship", input);
+    }
+    #endregion
+
+    #region pinned-builds
+    // Two builds side by side. A run stays on the build it started with, so a workflow can change shape freely between builds.
+    public static KairosOptions AddOrderBuilds(this KairosOptions options) => options
+        .AddWorkflow("order", OrderV1Async, buildId: "2026-10-01")
+        .AddWorkflow("order", OrderV2Async, buildId: "2026-11-01");
+    #endregion
+}
+
+public static class ActivityExamples
+{
+    #region long-activity
+    // An activity that takes minutes. It tells Kairos it is alive after each chunk, and passes the cancellation token to everything
+    // that waits or does I/O so it stops promptly if the attempt is taken away from it.
+    public static async Task<byte[]> TranscodeAsync(ActivityContext activity, byte[] input, CancellationToken cancellationToken)
+    {
+        for (int chunk = 0; chunk < 10; chunk++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(5), cancellationToken);
+            await activity.HeartbeatAsync();
+        }
+
+        return input;
+    }
+    #endregion
+}
+
+public static class LongRunningExamples
+{
+    #region batches
+    // Processes work in a loop that could run for months. Every so often it hands over to a fresh run with an empty history,
+    // carrying forward only what it needs.
+    public static async Task<byte[]> ProcessBatchesAsync(IWorkflowContext ctx, byte[] input)
+    {
+        int next = BitConverter.ToInt32(input);
+        while (next < 100)
+        {
+            await ctx.ExecuteActivityAsync("process-batch", BitConverter.GetBytes(next));
+            next++;
+
+            if (ctx.ShouldContinueAsNew)
+            {
+                throw ctx.ContinueAsNew(BitConverter.GetBytes(next));
+            }
+        }
+
+        return BitConverter.GetBytes(next);
+    }
+    #endregion
+}

@@ -18,7 +18,7 @@ public enum Operation
 }
 
 /// <summary>
-/// The role matrix of docs/SECURITY-ARCHITECTURE.md section 5 as code: least privilege per namespace. A principal acts only inside its
+/// The role matrix as code: least privilege per namespace. A principal acts only inside its
 /// own tenant and namespace, and a worker credential can neither start nor read workflows.
 /// </summary>
 public static class AccessPolicy

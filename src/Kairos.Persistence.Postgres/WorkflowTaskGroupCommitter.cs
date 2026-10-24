@@ -3,7 +3,7 @@ using System.Threading.Channels;
 namespace Kairos.Persistence.Postgres;
 
 /// <summary>
-/// Experimental group commit (docs/RESEARCH.md R3): concurrent workers hand their workflow-task completions to one writer that
+/// Experimental group commit: concurrent workers hand their workflow-task completions to one writer that
 /// commits up to <c>maxBatch</c> of them in a single round trip (several writers keep batches in flight concurrently) and transaction, waiting at most <c>linger</c> for the batch to
 /// fill. Trades a little latency for far fewer commits under load. Not wired into <c>AddKairos</c> by default; the benchmark
 /// (benchmarks/Kairos.Benchmarks, <c>groupcommit</c>) decides whether and when it should be.

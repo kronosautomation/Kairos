@@ -9,8 +9,12 @@ public static class WorkflowReplayer
     /// Runs <paramref name="workflow"/> against an existing history. Commands that history already confirms are checked
     /// (<see cref="NonDeterminismException"/> on mismatch); commands beyond the end of history are returned as new.
     /// </summary>
+    /// <param name="workflow">The workflow code to run.</param>
+    /// <param name="history">The run's history, starting with its start event.</param>
     /// <param name="verifyHashChain">Verify the SHA-256 chain first; disable only when the caller verified it already.</param>
-    public static ReplayResult Replay(WorkflowFunc workflow, IReadOnlyList<HistoryEvent> history, bool verifyHashChain = true)
+    /// <param name="continueAsNewSuggestedAt">History length at which <see cref="IWorkflowContext.ShouldContinueAsNew"/> turns true.</param>
+    public static ReplayResult Replay(
+        WorkflowFunc workflow, IReadOnlyList<HistoryEvent> history, bool verifyHashChain = true, int continueAsNewSuggestedAt = HistoryLimits.ContinueAsNewSuggestedAt)
     {
         ArgumentNullException.ThrowIfNull(workflow);
         ArgumentNullException.ThrowIfNull(history);
@@ -26,7 +30,7 @@ public static class WorkflowReplayer
         }
 
         HistoryEvent first = history[0];
-        var execution = new WorkflowExecution(workflow, first.TenantId, first.NamespaceId, first.RunId);
+        var execution = new WorkflowExecution(workflow, first.TenantId, first.NamespaceId, first.RunId) { ContinueAsNewSuggestedAt = continueAsNewSuggestedAt };
         for (int i = 0; i < history.Count; i++)
         {
             if (history[i] is PatchMarker marker)

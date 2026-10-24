@@ -34,14 +34,23 @@ public sealed class KairosClient
         return await _store.StartRunAsync(new StartRunRequest(run, workflowId, workflowType, buildId, sent, _time.GetUtcNow()), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Delivers a signal to a running workflow under a fresh signal id. False when the run is closed or unknown.</summary>
+    /// <param name="run">The run to signal.</param>
+    /// <param name="signalName">The name the workflow waits on.</param>
+    /// <param name="payload">The signal payload (sealed on the client when encryption is on).</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    public ValueTask<bool> SignalAsync(RunKey run, string signalName, byte[] payload, CancellationToken cancellationToken) =>
+        SignalAsync(run, signalName, payload, signalId: null, cancellationToken);
+
+    /// <summary>Delivers a signal to a running workflow. False when the run is closed or unknown.</summary>
+    /// <param name="run">The run to signal.</param>
+    /// <param name="signalName">The name the workflow waits on.</param>
+    /// <param name="payload">The signal payload (sealed on the client when encryption is on).</param>
     /// <param name="signalId">
     /// Identifies this delivery. Retrying with the same id never signals twice; omit it for a fresh id. With encryption on the id also
     /// authenticates the payload, so two signals of one name cannot be swapped.
     /// </param>
-    public ValueTask<bool> SignalAsync(RunKey run, string signalName, byte[] payload, CancellationToken cancellationToken) =>
-        SignalAsync(run, signalName, payload, signalId: null, cancellationToken);
-
-    /// <inheritdoc cref="SignalAsync(RunKey, string, byte[], CancellationToken)"/>
+    /// <param name="cancellationToken">Cancels the call.</param>
     public async ValueTask<bool> SignalAsync(
         RunKey run, string signalName, byte[] payload, string? signalId = null, CancellationToken cancellationToken = default)
     {

@@ -36,10 +36,18 @@ public sealed record StuckWorkflowTask(RunKey Run, string WorkflowType, string B
 /// <summary>One privileged action (resume, fail run). Append-only.</summary>
 public sealed record AuditEntry(Guid TenantId, Guid NamespaceId, Guid? RunId, string Action, string Actor, DateTimeOffset At, string Detail);
 
+/// <summary>Everything needed to start a run.</summary>
+/// <param name="Run">The new run's identity (tenant, namespace and a fresh run id).</param>
 /// <param name="WorkflowId">Caller-chosen business id, unique per namespace; starting an existing id is deduplicated.</param>
+/// <param name="WorkflowType">Registered workflow name.</param>
+/// <param name="BuildId">The build the run is pinned to for its whole life.</param>
+/// <param name="Input">The workflow input, opaque to the server (sealed on the client when encryption is on).</param>
+/// <param name="Now">The start time recorded in history.</param>
 public sealed record StartRunRequest(RunKey Run, string WorkflowId, string WorkflowType, string BuildId, byte[] Input, DateTimeOffset Now);
 
+/// <summary>The outcome of starting a run.</summary>
 /// <param name="RunId">The new run, or the existing one when deduplicated.</param>
+/// <param name="Started">True when a new run was created; false when the workflow id already had a current run.</param>
 public sealed record StartRunResult(Guid RunId, bool Started);
 
 /// <summary>A leased workflow task: the full history snapshot to replay and the fencing token to complete with.</summary>

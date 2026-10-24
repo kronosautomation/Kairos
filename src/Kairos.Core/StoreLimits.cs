@@ -1,6 +1,6 @@
 namespace Kairos;
 
-/// <summary>Resource limits a store enforces (invariant I9: bounded resources).</summary>
+/// <summary>Resource limits a store enforces (bounded resources).</summary>
 public sealed record StoreLimits
 {
     /// <summary>

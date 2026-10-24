@@ -20,10 +20,10 @@ public sealed class SimOptions
     /// <summary>Start with the patched build already deployed (used to record histories written by patched code).</summary>
     public bool StartPatched { get; init; }
 
-    /// <summary>Share of activities that run for about three leases and must heartbeat to survive (L1).</summary>
+    /// <summary>Share of activities that run for about three leases and must heartbeat to survive.</summary>
     public double SlowActivityProbability { get; init; } = 0.1;
 
-    /// <summary>Share of activities that kill their worker on every attempt (L2).</summary>
+    /// <summary>Share of activities that kill their worker on every attempt.</summary>
     public double PoisonActivityProbability { get; init; } = 0.05;
 
     /// <summary>Slow activities renew their lease. Turn off only to show what happens without it.</summary>
@@ -40,7 +40,7 @@ public sealed record SimResult(ulong Seed, int Runs, SimStats Stats, string Fing
 /// <summary>
 /// The whole engine in one process with every source of non-determinism drawn from one seed: virtual clock, seeded RNG,
 /// simulated store faults, message delay/duplication, worker crashes, clock jumps and a mid-flight deploy.
-/// After the chaos phase, faults stop and the world is driven to quiescence, then invariants I1-I4, I9 are checked.
+/// After the chaos phase, faults stop and the world is driven to quiescence, then the engine's invariants are checked.
 /// A failure message always carries the seed; rerunning that seed reproduces it bit for bit.
 /// </summary>
 public sealed class SimWorld

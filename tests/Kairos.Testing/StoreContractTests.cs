@@ -4,7 +4,7 @@ namespace Kairos.Testing;
 
 /// <summary>
 /// The behaviour every <see cref="IKairosStore"/> must have. Subclass and supply a fresh, empty store; the in-memory
-/// reference and PostgreSQL run exactly the same tests. Covers I2, I3 (task fencing), I5 (tenant isolation), I8.
+/// reference and PostgreSQL run exactly the same tests. Covers task fencing, tenant isolation and the other store guarantees.
 /// </summary>
 public abstract partial class StoreContractTests
 {

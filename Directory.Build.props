@@ -34,4 +34,11 @@
     <NuGetAuditLevel>high</NuGetAuditLevel>
   </PropertyGroup>
 
+  <!-- Public packages publish their XML comments; the docs site builds its API reference from them.
+       Members without a summary (CS1591) are listed but not yet an error. Every other documentation warning is an error. -->
+  <PropertyGroup Condition="$(MSBuildProjectFullPath.Contains('src'))">
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
 </Project>

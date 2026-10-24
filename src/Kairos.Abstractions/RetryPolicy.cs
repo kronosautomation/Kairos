@@ -16,7 +16,7 @@ public sealed record RetryPolicy
 
     public TimeSpan MaximumInterval { get; init; } = TimeSpan.FromMinutes(1);
 
-    /// <summary>Exception type names (<see cref="Type.Name"/>) that are never retried.</summary>
+    /// <summary>Exception type names (<c>Type.Name</c>) that are never retried.</summary>
     public IReadOnlyList<string> NonRetryableErrorTypes { get; init; } = [];
 
     public bool Equals(RetryPolicy? other) =>

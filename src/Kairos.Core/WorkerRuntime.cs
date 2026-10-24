@@ -17,6 +17,9 @@ public sealed class WorkerOptions
     /// <see cref="ActivityContext.HeartbeatAsync"/> explicitly.
     /// </summary>
     public bool AutoHeartbeat { get; init; } = true;
+
+    /// <summary>History length at which <see cref="IWorkflowContext.ShouldContinueAsNew"/> turns true for workflows run by this worker.</summary>
+    public int ContinueAsNewSuggestedAt { get; init; } = HistoryLimits.ContinueAsNewSuggestedAt;
 }
 
 /// <summary>A workflow task that could not be processed (e.g. non-determinism). The run is not advanced and not lost.</summary>
@@ -97,14 +100,14 @@ public sealed class WorkerRuntime
         {
             if (_crypto is null)
             {
-                result = WorkflowReplayer.Replay(workflow, task.History, _options.VerifyHashChain);
+                result = WorkflowReplayer.Replay(workflow, task.History, _options.VerifyHashChain, _options.ContinueAsNewSuggestedAt);
             }
             else
             {
                 // Verify the chain over the ciphertext the server holds, then replay the opened (plaintext) copy.
                 HashChain.Verify(task.History);
                 IReadOnlyList<HistoryEvent> opened = await _crypto.OpenHistoryAsync(task.History, cancellationToken).ConfigureAwait(false);
-                result = WorkflowReplayer.Replay(workflow, opened, verifyHashChain: false);
+                result = WorkflowReplayer.Replay(workflow, opened, verifyHashChain: false, _options.ContinueAsNewSuggestedAt);
             }
         }
         catch (Exception ex) when (ex is NonDeterminismException or HistoryIntegrityException or PayloadProtectionException)

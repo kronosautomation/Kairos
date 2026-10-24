@@ -30,7 +30,7 @@ public sealed class KeyUnwrapException : Exception
 
 /// <summary>
 /// Wraps and unwraps data keys for envelope encryption. The master key never leaves the provider and is never sent to Kairos
-/// servers. <paramref name="context"/> is authenticated, not secret (tenant, namespace, ...): a key wrapped for one context cannot
+/// servers. The context passed to each call is authenticated, not secret (tenant, namespace, ...): a key wrapped for one context cannot
 /// be unwrapped for another.
 /// </summary>
 public interface IKeyProvider
@@ -44,10 +44,18 @@ public interface IKeyProvider
 /// <summary>Seals and opens payloads on the client side. The server only ever sees what <see cref="ProtectAsync"/> returns.</summary>
 public interface IPayloadProtector
 {
+    /// <summary>Seals <paramref name="plaintext"/>. The result is what the server stores.</summary>
     /// <param name="scope">Tenant and namespace; keys are never shared across scopes.</param>
+    /// <param name="plaintext">The payload to seal.</param>
     /// <param name="context">Authenticated binding (run, field, id). A payload opens only under the context it was sealed with.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
     ValueTask<byte[]> ProtectAsync(TenantScope scope, ReadOnlyMemory<byte> plaintext, ReadOnlyMemory<byte> context, CancellationToken cancellationToken);
 
+    /// <summary>Opens a payload sealed by <see cref="ProtectAsync"/> under the same scope and context.</summary>
+    /// <param name="scope">Tenant and namespace the payload was sealed for.</param>
+    /// <param name="protectedPayload">The sealed payload as stored.</param>
+    /// <param name="context">The binding the payload was sealed with.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
     /// <exception cref="PayloadProtectionException">Wrong scope or context, unknown key, or altered ciphertext.</exception>
     ValueTask<byte[]> UnprotectAsync(TenantScope scope, ReadOnlyMemory<byte> protectedPayload, ReadOnlyMemory<byte> context, CancellationToken cancellationToken);
 }
@@ -90,7 +98,7 @@ public interface IBlobOffload
 
 // ---- identity -----------------------------------------------------------------------------------------------------
 
-/// <summary>Per-namespace roles (docs/SECURITY-ARCHITECTURE.md section 5).</summary>
+/// <summary>Per-namespace roles. Least privilege: each role may do only what its description says.</summary>
 public enum Role
 {
     /// <summary>Read runs and history.</summary>

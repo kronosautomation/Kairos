@@ -28,7 +28,7 @@ public sealed class EnvelopeOptions
 }
 
 /// <summary>
-/// Client-side envelope encryption (docs/SECURITY-ARCHITECTURE.md section 4). Payloads are sealed with AES-256-GCM under a data key; the
+/// Client-side envelope encryption. Payloads are sealed with AES-256-GCM under a data key; the
 /// data key is wrapped by the customer's <see cref="IKeyProvider"/> (KMS, Key Vault, local key ring), so Kairos stores ciphertext only and
 /// never sees a key. The authenticated data binds each payload to its tenant, namespace and caller-supplied context (run, field, id), so a
 /// ciphertext cannot be replayed into another run, field or tenant.
