@@ -126,6 +126,27 @@ internal sealed record ToolStepRequest
     public WireApprovalDecision? Approval { get; init; }
 }
 
+internal sealed record ApprovalVerifyRequest
+{
+    public WireApprovalRequest Request { get; init; } = new();
+
+    public WireApprovalDecision Decision { get; init; } = new();
+
+    /// <summary>Workflow time when the decision arrived. Token expiry is judged at this moment, not when a worker happens to get to it.</summary>
+    public DateTimeOffset ReceivedAt { get; init; }
+}
+
+internal sealed record ApprovalVerifyResult
+{
+    public bool Ok { get; init; }
+
+    public string Subject { get; init; } = "";
+
+    public string[] Roles { get; init; } = [];
+
+    public string? Reason { get; init; }
+}
+
 internal static class ToolOutcomes
 {
     public const string Completed = "completed";
@@ -167,6 +188,8 @@ internal sealed record SagaMark
 [JsonSerializable(typeof(WireApprovalRequest))]
 [JsonSerializable(typeof(WireApprovalDecision))]
 [JsonSerializable(typeof(SagaMark))]
+[JsonSerializable(typeof(ApprovalVerifyRequest))]
+[JsonSerializable(typeof(ApprovalVerifyResult))]
 [JsonSerializable(typeof(WireMessage[]))]
 internal sealed partial class AgentJson : JsonSerializerContext;
 

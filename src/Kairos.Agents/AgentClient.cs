@@ -5,14 +5,15 @@ using Microsoft.Extensions.AI;
 namespace Kairos.Agents;
 
 /// <summary>
-/// The caller's side of an agent run: deciding approvals and cancelling. Your application authenticates the person first; Kairos records
-/// the identity you pass and checks it against who the request allows.
+/// The caller's side of an agent run: deciding approvals and cancelling. Your application authenticates the person first and passes only an
+/// identity it authenticated. With <paramref name="approvalTokens"/> the client signs each decision for that identity, which is what lets
+/// the worker prove who decided (see <see cref="AgentsBuilder.UseApproverVerifier"/>); give it only to the code that authenticates people.
 /// </summary>
-public sealed class AgentClient(KairosClient client, TimeProvider time)
+public sealed class AgentClient(KairosClient client, TimeProvider time, HmacApprovalTokens? approvalTokens = null)
 {
     public const string CancelSignalName = "kairos.cancel";
 
-    public static string ApprovalSignalName(string approvalId) => "kairos.approval." + approvalId;
+    public static string ApprovalSignalName(string approvalId) => ReservedSignals.ApprovalPrefix + approvalId;
 
     public ValueTask<bool> ApproveAsync(RunKey run, string approvalId, ApproverIdentity approver, string? comment = null, CancellationToken cancellationToken = default) =>
         DecideAsync(run, approvalId, approved: true, approver, comment, cancellationToken);
@@ -34,15 +35,22 @@ public sealed class AgentClient(KairosClient client, TimeProvider time)
         {
             ApprovalId = approvalId,
             Approved = approved,
-            Approver = new WireApprover { Subject = approver.Subject, Name = approver.Name, Roles = [.. approver.Roles ?? []], Evidence = approver.Evidence },
+            Approver = new WireApprover
+            {
+                Subject = approver.Subject,
+                Name = approver.Name,
+                Roles = [.. approver.Roles ?? []],
+                Evidence = approver.Evidence ?? approvalTokens?.Issue(run, approvalId, approved, approver, time.GetUtcNow()),
+            },
             Comment = comment,
             DecidedAt = time.GetUtcNow(),
         };
 
         // The id makes a retry harmless: the same person deciding the same way twice signals once.
-        string signalId = $"approval:{approvalId}:{approver.Subject}:{(approved ? "approve" : "reject")}";
-        return client.SignalAsync(
-            run, ApprovalSignalName(approvalId), WireCodec.Write(wire, AgentJson.Default.WireApprovalDecision), signalId, cancellationToken);
+        // A fresh decision carries fresh evidence, hence a fresh delivery; a retry that re-sends the same evidence is the same delivery.
+        string evidenceDigest = wire.Approver.Evidence is null ? "" : ":" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(wire.Approver.Evidence)))[..16];
+        string signalId = $"approval:{approvalId}:{approver.Subject}:{(approved ? "approve" : "reject")}{evidenceDigest}";
+        return client.DecideApprovalAsync(run, approvalId, WireCodec.Write(wire, AgentJson.Default.WireApprovalDecision), signalId, cancellationToken);
     }
 }
 
@@ -66,13 +74,26 @@ public static class AgentHistory
             }
         }
 
+        // An approval is decided once a verification step accepted a decision for it.
+        var verifyIds = new Dictionary<int, string>();
+        foreach (ActivityScheduled scheduled in history.OfType<ActivityScheduled>().Where(a => a.ActivityType == AgentActivityNames.ApprovalVerify))
+        {
+            verifyIds[scheduled.ActivityId] = WireCodec.Read(scheduled.Input, AgentJson.Default.ApprovalVerifyRequest).Request.ApprovalId;
+        }
+
+        var decided = new HashSet<string>(StringComparer.Ordinal);
+        foreach (ActivityCompleted done in history.OfType<ActivityCompleted>())
+        {
+            if (verifyIds.TryGetValue(done.ActivityId, out string? approvalId) && WireCodec.Read(done.Result, AgentJson.Default.ApprovalVerifyResult).Ok)
+            {
+                decided.Add(approvalId);
+            }
+        }
+
         var pending = new List<PendingApproval>();
         foreach (WireApprovalRequest request in requests)
         {
-            string signal = AgentClient.ApprovalSignalName(request.ApprovalId);
-            bool decided = history.OfType<SignalReceived>()
-                .Any(s => s.SignalName == signal && ApprovalRules.TryAccept(request, s.Payload) is not null);
-            if (!decided)
+            if (!decided.Contains(request.ApprovalId))
             {
                 pending.Add(new PendingApproval(
                     request.ApprovalId, request.Action, request.Details, request.Tool, request.RequestedBy,

@@ -8,22 +8,23 @@ public sealed class AccessPolicyTests
     /// <summary>The expected matrix, written out independently of the implementation. 'x' = allowed.</summary>
     private static readonly Dictionary<Operation, string> Expected = new()
     {
-        //                                reader worker operator admin
-        [Operation.StartRun] = "  xx",
-        [Operation.SignalRun] = "  xx",
-        [Operation.CancelRun] = "  xx",
-        [Operation.TerminateRun] = "  xx",
-        [Operation.ReadRun] = "x xx",
-        [Operation.ReadAuditLog] = "   x",
-        [Operation.PollWorkflowTask] = " x  ",
-        [Operation.PollActivityTask] = " x  ",
-        [Operation.CompleteTask] = " x  ",
-        [Operation.HeartbeatTask] = " x  ",
-        [Operation.ResumeStuckTask] = "   x",
-        [Operation.FailRun] = "   x",
+        //                                reader worker operator admin approver
+        [Operation.StartRun] = "  xx ",
+        [Operation.SignalRun] = "  xx ",
+        [Operation.CancelRun] = "  xx ",
+        [Operation.TerminateRun] = "  xx ",
+        [Operation.ReadRun] = "x xxx",
+        [Operation.ReadAuditLog] = "   x ",
+        [Operation.PollWorkflowTask] = " x   ",
+        [Operation.PollActivityTask] = " x   ",
+        [Operation.CompleteTask] = " x   ",
+        [Operation.HeartbeatTask] = " x   ",
+        [Operation.ResumeStuckTask] = "   x ",
+        [Operation.FailRun] = "   x ",
+        [Operation.DecideApproval] = "    x",
     };
 
-    private static readonly Role[] Roles = [Role.Reader, Role.Worker, Role.Operator, Role.Admin];
+    private static readonly Role[] Roles = [Role.Reader, Role.Worker, Role.Operator, Role.Admin, Role.Approver];
 
     public static TheoryData<Operation> AllOperations()
     {

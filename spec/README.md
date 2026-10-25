@@ -38,7 +38,7 @@ operator resumes it). Live-holder expiry (zombies) is unbounded; operator action
 | `ParkedIsVisible` | a parked task belongs to an open, started run |
 
 `KairosReaperUnrecordedQuick.cfg` is the mutation: exhausted tasks vanish without a record. TLC must find a run that never resolves.
-Run with the other models: `TLC_MODE=quick|full ./check.sh` (quick: 273k distinct states, seconds; full: two runs and three attempts, nightly).
+Run with the other models: `TLC_MODE=quick|full ./check.sh` (quick: 273k distinct states, seconds; full: one run, two attempts, two operator actions, 2.2M states, minutes; larger bounds (two runs, or three attempts) did not finish).
 Backoff delays are abstracted away (a pending task is offered eventually).
 
 ## Saga model (`KairosSaga.tla`)

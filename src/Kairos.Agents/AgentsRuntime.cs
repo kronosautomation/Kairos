@@ -10,6 +10,7 @@ public static class AgentActivityNames
     public const string Chat = "kairos.agent.chat";
     public const string Tool = "kairos.agent.tool";
     public const string ApprovalRequest = "kairos.agent.approval.request";
+    public const string ApprovalVerify = "kairos.agent.approval.verify";
     public const string SagaMark = "kairos.saga.mark";
 }
 
@@ -32,6 +33,8 @@ public sealed class AgentsBuilder
     internal IAgentObserver? Observer { get; private set; }
 
     internal IApprovalNotifier? Notifier { get; private set; }
+
+    internal IApproverVerifier? Verifier { get; private set; }
 
     internal Func<string, string>? Redactor { get; private set; }
 
@@ -120,6 +123,17 @@ public sealed class AgentsBuilder
     {
         ArgumentNullException.ThrowIfNull(observer);
         Observer = observer;
+        return this;
+    }
+
+    /// <summary>
+    /// Proves who decided each approval. Without a verifier, a decision is accepted only when the request names no approvers and no roles
+    /// (anyone may decide); a request that names approvers or roles refuses every decision, because nothing could prove the claim.
+    /// </summary>
+    public AgentsBuilder UseApproverVerifier(IApproverVerifier verifier)
+    {
+        ArgumentNullException.ThrowIfNull(verifier);
+        Verifier = verifier;
         return this;
     }
 
@@ -224,6 +238,7 @@ public sealed class AgentsRuntime
             [AgentActivityNames.Chat] = ChatStepAsync,
             [AgentActivityNames.Tool] = ToolStepAsync,
             [AgentActivityNames.ApprovalRequest] = ApprovalRequestStepAsync,
+            [AgentActivityNames.ApprovalVerify] = ApprovalVerifyStepAsync,
             [AgentActivityNames.SagaMark] = (_, input, _) => Task.FromResult(input),
         };
     }
@@ -423,6 +438,14 @@ public sealed class AgentsRuntime
         }
 
         return input;
+    }
+
+    private async Task<byte[]> ApprovalVerifyStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
+    {
+        ApprovalVerifyRequest request = WireCodec.Read(input, AgentJson.Default.ApprovalVerifyRequest);
+        ApprovalVerifyResult result = await ApprovalRules.EvaluateAsync(
+            request, context.Run, _config.Verifier, cancellationToken).ConfigureAwait(false);
+        return WireCodec.Write(result, AgentJson.Default.ApprovalVerifyResult);
     }
 
     private static byte[] Reply(ToolStepResponse response) => WireCodec.Write(response, AgentJson.Default.ToolStepResponse);

@@ -260,10 +260,8 @@ public sealed class SagaSimulationTests
                     {
                         foreach (PendingApproval pending in AgentHistory.PendingApprovals(await _h.HistoryAsync(_runs[i]!.Value)))
                         {
-                            if (_decided.Add((i, pending.ApprovalId)))
-                            {
-                                await _h.Agent.ApproveAsync(_runs[i]!.Value, pending.ApprovalId, Approver);
-                            }
+                            // Still pending after a full drive means the last decision was refused (its token expired in a clock jump): decide again.
+                            await _h.Agent.ApproveAsync(_runs[i]!.Value, pending.ApprovalId, Approver);
                         }
                     }
 

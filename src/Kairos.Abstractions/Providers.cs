@@ -112,6 +112,9 @@ public enum Role
 
     /// <summary>Everything within the namespace, including recovery actions.</summary>
     Admin,
+
+    /// <summary>Decide approvals (and read runs to see what is being approved). Cannot start, signal, cancel or terminate.</summary>
+    Approver,
 }
 
 /// <summary>An authenticated caller: one tenant, one namespace, one role.</summary>

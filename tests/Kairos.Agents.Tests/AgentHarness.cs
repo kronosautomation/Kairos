@@ -15,10 +15,13 @@ internal sealed class AgentHarness
     private readonly WorkflowRegistry _workflows = new();
     private readonly ActivityRegistry _activities = new();
     private readonly List<RunKey> _runs = [];
+    /// <summary>The key the "host" signs approvals with and the workers verify with.</summary>
+    public static readonly HmacApprovalTokens ApprovalTokens = new(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+
     private readonly IPayloadProtector? _protector;
     private int _counter;
 
-    public AgentHarness(Action<AgentsBuilder> configure, bool faultInjection = false, VirtualTimeProvider? time = null, ulong seed = 1, IPayloadProtector? protector = null)
+    public AgentHarness(Action<AgentsBuilder> configure, bool faultInjection = false, VirtualTimeProvider? time = null, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true)
     {
         Time = time ?? new VirtualTimeProvider();
         var memory = new InMemoryKairosStore();
@@ -31,9 +34,13 @@ internal sealed class AgentHarness
         Store = (IKairosStore?)Faults ?? memory;
         _protector = protector;
         Client = new KairosClient(Store, Time, payloadProtector: protector);
-        Agent = new AgentClient(Client, Time);
+        Agent = new AgentClient(Client, Time, ApprovalTokens);
 
-        var builder = new AgentsBuilder().UseTimeProvider(Time);
+        var builder = new AgentsBuilder().UseTimeProvider(Time).UseTimeProvider(Time);
+        if (verifyApprovers)
+        {
+            builder.UseApproverVerifier(ApprovalTokens);
+        }
         configure(builder);
         Runtime = builder.Build();
         Runtime.RegisterInto(_activities);

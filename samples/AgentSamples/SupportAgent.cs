@@ -42,13 +42,14 @@ public static class SupportAgent
     #endregion
 
     #region configure
-    public static AgentsRuntime Configure(IChatClient model, IRefundApi api, byte[] credentialKey) => new AgentsBuilder()
+    public static AgentsRuntime Configure(IChatClient model, IRefundApi api, IToolCredentialIssuer credentials, IApproverVerifier approvers) => new AgentsBuilder()
         .AddModel("support-model", model)
         .AddTool(LookupOrder(api))
         .AddTool(IssueRefund(api))
         .ConfigureBaselinePolicy(policy => policy.RequireApproval(
             "issue_refund", new ApprovalRequirement(Roles: ["finance"], Timeout: TimeSpan.FromDays(2))))
-        .UseCredentials(new HmacToolCredentialIssuer(credentialKey))
+        .UseCredentials(credentials) // for example an EcdsaToolCredentialIssuer: tool services then hold only the public key
+        .UseApproverVerifier(approvers) // proves who decided each approval
         .Build();
     #endregion
 
@@ -125,11 +126,12 @@ public static class ApprovalExamples
     #endregion
 
     #region approval-decide
-    public static async Task ApproveAsync(KairosClient client, RunKey run, string approvalId, ClaimsSummary signedInUser)
+    public static async Task ApproveAsync(KairosClient client, HmacApprovalTokens approvalTokens, RunKey run, string approvalId, ClaimsSummary signedInUser)
     {
-        // Authenticate the person in your own application first; Kairos records the identity you pass and checks it against the request.
+        // Authenticate the person in your own application first, and pass only an identity you authenticated. The client signs the decision
+        // with the approval key; the workers verify that signature, so a signal sent by anything else cannot approve.
         var approver = new ApproverIdentity(signedInUser.Subject, signedInUser.DisplayName, signedInUser.Roles);
-        await new AgentClient(client, TimeProvider.System).ApproveAsync(run, approvalId, approver, comment: "Checked against the invoice");
+        await new AgentClient(client, TimeProvider.System, approvalTokens).ApproveAsync(run, approvalId, approver, comment: "Checked against the invoice");
     }
     #endregion
 }
@@ -189,7 +191,8 @@ public static class CredentialExamples
 {
     #region verify-credential
     // In the service the tool calls: accept the request only if the token is genuine, unexpired, and carries the scope this call needs.
-    public static bool MayRefund(HmacToolCredentialIssuer verifier, string? bearerToken, DateTimeOffset now) =>
-        verifier.Verify(bearerToken, "issue_refund:write", now) is not null;
+    // The tool name is the audience: a token issued for another tool is refused even if its scope looks right.
+    public static bool MayRefund(IToolCredentialVerifier verifier, string? bearerToken, DateTimeOffset now) =>
+        verifier.Verify(bearerToken, "issue_refund:write", "issue_refund", now) is not null;
     #endregion
 }

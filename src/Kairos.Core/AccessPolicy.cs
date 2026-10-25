@@ -15,6 +15,9 @@ public enum Operation
     HeartbeatTask,
     ResumeStuckTask,
     FailRun,
+
+    /// <summary>Approve or reject a pending approval. Separate from <see cref="SignalRun"/>: a signal cannot carry an approval.</summary>
+    DecideApproval,
 }
 
 /// <summary>
@@ -26,6 +29,7 @@ public static class AccessPolicy
     private static readonly Dictionary<Role, HashSet<Operation>> Allowed = new()
     {
         [Role.Reader] = [Operation.ReadRun],
+        [Role.Approver] = [Operation.ReadRun, Operation.DecideApproval],
         [Role.Worker] = [Operation.PollWorkflowTask, Operation.PollActivityTask, Operation.CompleteTask, Operation.HeartbeatTask],
         [Role.Operator] = [Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun],
         [Role.Admin] =

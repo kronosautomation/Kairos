@@ -12,6 +12,9 @@ public sealed class AgentSamplesTests
 {
     private static readonly TenantScope Scope = new(Guid.Parse("11111111-1111-1111-1111-111111111111"), Guid.Parse("22222222-2222-2222-2222-222222222222"));
     private static readonly byte[] Key = RandomNumberGenerator.GetBytes(32);
+    private static readonly HmacApprovalTokens Approvals = new(RandomNumberGenerator.GetBytes(32));
+
+    private static AgentsRuntime Support(IChatClient model, IRefundApi api) => SupportAgent.Configure(model, api, new HmacToolCredentialIssuer(Key), Approvals);
 
     private sealed class FakeRefundApi : IRefundApi
     {
@@ -115,7 +118,7 @@ public sealed class AgentSamplesTests
     {
         var api = new FakeRefundApi();
         ScriptedChatClient model = SupportModel();
-        var rig = new Rig(SupportAgent.Configure(model, api, Key));
+        var rig = new Rig(Support(model, api));
         rig.Workflow("support", SupportAgent.RunAsync);
 
         RunKey run = await rig.StartAsync("support", "refund order 8841");
@@ -124,9 +127,9 @@ public sealed class AgentSamplesTests
         // The customer cannot approve their own refund; finance can.
         IReadOnlyList<PendingApproval> pending = await ApprovalExamples.WaitingOnPeopleAsync(rig.Client, run);
         Assert.Equal("issue_refund", Assert.Single(pending).Tool);
-        await ApprovalExamples.ApproveAsync(rig.Client, run, pending[0].ApprovalId, new ClaimsSummary("customer:42", "The customer", ["finance"]));
+        await ApprovalExamples.ApproveAsync(rig.Client, Approvals, run, pending[0].ApprovalId, new ClaimsSummary("customer:42", "The customer", ["finance"]));
         Assert.Equal(RunState.Running, await rig.RunAsync(run, jumpClock: false));
-        await ApprovalExamples.ApproveAsync(rig.Client, run, pending[0].ApprovalId, new ClaimsSummary("user:dana", "Dana", ["finance"]));
+        await ApprovalExamples.ApproveAsync(rig.Client, Approvals, run, pending[0].ApprovalId, new ClaimsSummary("user:dana", "Dana", ["finance"]));
         Assert.Equal(RunState.Completed, await rig.RunAsync(run));
 
         Assert.Single(api.Refunds);
@@ -144,13 +147,13 @@ public sealed class AgentSamplesTests
     public async Task A_rejected_refund_is_not_made_and_the_model_is_told()
     {
         var api = new FakeRefundApi();
-        var rig = new Rig(SupportAgent.Configure(SupportModel(), api, Key));
+        var rig = new Rig(Support(SupportModel(), api));
         rig.Workflow("support", SupportAgent.RunAsync);
         RunKey run = await rig.StartAsync("support", "refund order 8841");
         await rig.RunAsync(run, jumpClock: false);
         PendingApproval pending = (await ApprovalExamples.WaitingOnPeopleAsync(rig.Client, run))[0];
 
-        await new AgentClient(rig.Client, rig.Time).RejectAsync(run, pending.ApprovalId, new ApproverIdentity("user:dana", "Dana", ["finance"]), "outside the policy window");
+        await new AgentClient(rig.Client, rig.Time, Approvals).RejectAsync(run, pending.ApprovalId, new ApproverIdentity("user:dana", "Dana", ["finance"]), "outside the policy window");
         Assert.Equal(RunState.Completed, await rig.RunAsync(run));
 
         Assert.Empty(api.Refunds);
@@ -159,14 +162,14 @@ public sealed class AgentSamplesTests
     [Fact]
     public async Task Sign_off_publishes_after_an_editor_approves()
     {
-        var rig = new Rig(new AgentsBuilder().Build());
+        var rig = new Rig(new AgentsBuilder().UseApproverVerifier(Approvals).Build());
         rig.Activity("publish");
         rig.Workflow("publish", ApprovalExamples.PublishWithSignOffAsync);
         RunKey run = await rig.StartAsync("publish", "report");
         Assert.Equal(RunState.Running, await rig.RunAsync(run, jumpClock: false));
         PendingApproval pending = (await ApprovalExamples.WaitingOnPeopleAsync(rig.Client, run))[0];
 
-        await ApprovalExamples.ApproveAsync(rig.Client, run, pending.ApprovalId, new ClaimsSummary("user:eve", "Eve", ["editor"]));
+        await ApprovalExamples.ApproveAsync(rig.Client, Approvals, run, pending.ApprovalId, new ClaimsSummary("user:eve", "Eve", ["editor"]));
         Assert.Equal(RunState.Completed, await rig.RunAsync(run, jumpClock: false));
         Assert.Equal(["publish"], rig.Ran);
     }
@@ -174,7 +177,7 @@ public sealed class AgentSamplesTests
     [Fact]
     public async Task A_sign_off_nobody_gives_expires_and_the_run_fails()
     {
-        var rig = new Rig(new AgentsBuilder().Build());
+        var rig = new Rig(new AgentsBuilder().UseApproverVerifier(Approvals).Build());
         rig.Activity("publish");
         rig.Workflow("publish", ApprovalExamples.PublishWithSignOffAsync);
         RunKey run = await rig.StartAsync("publish", "report");
@@ -186,7 +189,7 @@ public sealed class AgentSamplesTests
     [Fact]
     public async Task A_declined_card_releases_the_hotel_then_the_flight()
     {
-        var rig = new Rig(new AgentsBuilder().Build());
+        var rig = new Rig(new AgentsBuilder().UseApproverVerifier(Approvals).Build());
         foreach (string a in new[] { "reserve-flight", "reserve-hotel", "release-flight", "release-hotel" })
         {
             rig.Activity(a);
@@ -204,7 +207,7 @@ public sealed class AgentSamplesTests
     [Fact]
     public async Task Cancelling_a_waiting_trip_undoes_what_was_booked()
     {
-        var rig = new Rig(new AgentsBuilder().Build());
+        var rig = new Rig(new AgentsBuilder().UseApproverVerifier(Approvals).Build());
         foreach (string a in new[] { "reserve-flight", "reserve-hotel", "release-flight", "release-hotel" })
         {
             rig.Activity(a);
@@ -235,7 +238,7 @@ public sealed class AgentSamplesTests
     [Fact]
     public async Task A_custom_undo_runs_all_of_its_steps()
     {
-        var rig = new Rig(new AgentsBuilder().Build());
+        var rig = new Rig(new AgentsBuilder().UseApproverVerifier(Approvals).Build());
         foreach (string a in new[] { "reserve-stock", "release-stock", "notify-warehouse" })
         {
             rig.Activity(a);
@@ -286,7 +289,7 @@ public sealed class AgentSamplesTests
         var model = new FixtureChatClient(fixture); // fails loudly on any conversation that was not recorded
         #endregion
 
-        var rig = new Rig(SupportAgent.Configure(model, new FakeRefundApi(), Key));
+        var rig = new Rig(Support(model, new FakeRefundApi()));
         rig.Workflow("support", SupportAgent.RunAsync);
         RunKey run = await rig.StartAsync("support", "refund order 8841");
 

@@ -284,8 +284,8 @@ public sealed class ToolAndApprovalTests
     {
         (AgentHarness h, RunKey run, string id) = await WaitingForApprovalAsync();
 
-        await h.Client.SignalAsync(run, AgentClient.ApprovalSignalName(id), Encoding.UTF8.GetBytes("not json"), signalId: "junk");
-        await h.Client.SignalAsync(run, AgentClient.ApprovalSignalName(id),
+        await h.Client.DecideApprovalAsync(run, id, Encoding.UTF8.GetBytes("not json"), signalId: "junk");
+        await h.Client.DecideApprovalAsync(run, id,
             Encoding.UTF8.GetBytes("""{"approvalId":"someone-elses","approved":true,"approver":{"subject":"user:alice","roles":["finance"]}}"""), signalId: "wrong-id");
         Assert.Equal(RunState.Running, await h.RunAsync(run));
     }
@@ -295,8 +295,9 @@ public sealed class ToolAndApprovalTests
     {
         (AgentHarness h, RunKey run, string id) = await WaitingForApprovalAsync();
 
-        Assert.True(await h.Agent.ApproveAsync(run, id, Alice));
-        Assert.True(await h.Agent.ApproveAsync(run, id, Alice)); // a retried request: same signal id
+        ApproverIdentity signedIn = Alice with { Evidence = AgentHarness.ApprovalTokens.Issue(run, id, approved: true, Alice, h.Time.GetUtcNow()) };
+        Assert.True(await h.Agent.ApproveAsync(run, id, signedIn));
+        Assert.True(await h.Agent.ApproveAsync(run, id, signedIn)); // a retried request carrying the same evidence: same delivery
         Assert.Equal(RunState.Completed, await h.RunAsync(run));
 
         Assert.Single((await h.HistoryAsync(run)).OfType<SignalReceived>());

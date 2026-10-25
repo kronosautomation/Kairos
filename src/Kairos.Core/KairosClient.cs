@@ -1,6 +1,13 @@
 namespace Kairos;
 
 /// <summary>Start/signal/inspect runs. Run ids come from an injectable factory so simulations stay reproducible.</summary>
+/// <summary>Signal names the engine keeps for itself.</summary>
+public static class ReservedSignals
+{
+    /// <summary>Approval decisions are signals named <c>kairos.approval.&lt;approval id&gt;</c>. Only <see cref="KairosClient.DecideApprovalAsync"/> sends them.</summary>
+    public const string ApprovalPrefix = "kairos.approval.";
+}
+
 public sealed class KairosClient
 {
     public const string DefaultBuildId = "default";
@@ -53,6 +60,34 @@ public sealed class KairosClient
     /// <param name="cancellationToken">Cancels the call.</param>
     public async ValueTask<bool> SignalAsync(
         RunKey run, string signalName, byte[] payload, string? signalId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(signalName);
+        if (signalName.StartsWith(ReservedSignals.ApprovalPrefix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Signal names starting with '{ReservedSignals.ApprovalPrefix}' are reserved for approval decisions; use DecideApprovalAsync.", nameof(signalName));
+        }
+
+        return await SendSignalAsync(run, signalName, payload, signalId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Delivers an approval decision. This is the only way to send a signal in the reserved approval namespace, and the operation a server
+    /// authorizes as <see cref="Operation.DecideApproval"/> (a separate role grant from <see cref="Operation.SignalRun"/>).
+    /// </summary>
+    /// <param name="run">The run waiting on the approval.</param>
+    /// <param name="approvalId">The approval's id.</param>
+    /// <param name="payload">The decision, including the evidence a verifier checks.</param>
+    /// <param name="signalId">Identifies this delivery; a retry with the same id signals once.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    public ValueTask<bool> DecideApprovalAsync(RunKey run, string approvalId, byte[] payload, string signalId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(approvalId);
+        ArgumentException.ThrowIfNullOrEmpty(signalId);
+        return SendSignalAsync(run, ReservedSignals.ApprovalPrefix + approvalId, payload, signalId, cancellationToken);
+    }
+
+    private async ValueTask<bool> SendSignalAsync(RunKey run, string signalName, byte[] payload, string? signalId, CancellationToken cancellationToken)
     {
         string id = signalId ?? _newSignalId();
         byte[] sent = _crypto is null

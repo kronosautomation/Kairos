@@ -19,13 +19,13 @@ public sealed class CredentialTests
         ToolCredentialRequest request = Request("refunds", ["refunds:read"]);
         ToolCredential credential = await issuer.IssueAsync(request, T0, CancellationToken.None);
 
-        VerifiedToolCredential? ok = issuer.Verify(credential.Token, "refunds:read", T0.AddMinutes(1));
+        VerifiedToolCredential? ok = issuer.Verify(credential.Token, "refunds:read", "refunds", T0.AddMinutes(1));
         Assert.NotNull(ok);
         Assert.Equal(request.Run.RunId, ok.RunId);
         Assert.Equal("refunds", ok.Tool);
         Assert.Equal("user:alice", ok.OnBehalfOf);
 
-        Assert.Null(issuer.Verify(credential.Token, "refunds:write", T0.AddMinutes(1))); // never granted
+        Assert.Null(issuer.Verify(credential.Token, "refunds:write", "refunds", T0.AddMinutes(1))); // never granted
     }
 
     [Fact]
@@ -34,9 +34,9 @@ public sealed class CredentialTests
         var issuer = new HmacToolCredentialIssuer(Key);
         ToolCredential credential = await issuer.IssueAsync(Request(life: TimeSpan.FromMinutes(5)), T0, CancellationToken.None);
 
-        Assert.NotNull(issuer.Verify(credential.Token, "refunds:read", T0.AddMinutes(4)));
-        Assert.Null(issuer.Verify(credential.Token, "refunds:read", T0.AddMinutes(5)));
-        Assert.Null(issuer.Verify(credential.Token, "refunds:read", T0.AddHours(1)));
+        Assert.NotNull(issuer.Verify(credential.Token, "refunds:read", "refunds", T0.AddMinutes(4)));
+        Assert.Null(issuer.Verify(credential.Token, "refunds:read", "refunds", T0.AddMinutes(5)));
+        Assert.Null(issuer.Verify(credential.Token, "refunds:read", "refunds", T0.AddHours(1)));
     }
 
     [Fact]
@@ -46,15 +46,15 @@ public sealed class CredentialTests
         var other = new HmacToolCredentialIssuer(RandomNumberGenerator.GetBytes(32));
         ToolCredential credential = await issuer.IssueAsync(Request(), T0, CancellationToken.None);
 
-        Assert.Null(other.Verify(credential.Token, "refunds:read", T0)); // signed with another key (a rotated key revokes all)
+        Assert.Null(other.Verify(credential.Token, "refunds:read", "refunds", T0)); // signed with another key (a rotated key revokes all)
         string flipped = credential.Token[..^2] + (credential.Token[^2] == 'A' ? 'B' : 'A') + credential.Token[^1];
-        Assert.Null(issuer.Verify(flipped, "refunds:read", T0));
+        Assert.Null(issuer.Verify(flipped, "refunds:read", "refunds", T0));
         foreach (string junk in new[] { "", "ktc_", "ktc_.", "ktc_a.b", "nope", new string('x', 5000) })
         {
-            Assert.Null(issuer.Verify(junk, "refunds:read", T0));
+            Assert.Null(issuer.Verify(junk, "refunds:read", "refunds", T0));
         }
 
-        Assert.Null(issuer.Verify(null, "refunds:read", T0));
+        Assert.Null(issuer.Verify(null, "refunds:read", "refunds", T0));
     }
 
     [Fact]
@@ -76,6 +76,135 @@ public sealed class CredentialTests
 
         Assert.DoesNotContain(credential.Token, credential.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(credential.Token[10..30], $"{credential}", StringComparison.Ordinal);
+    }
+
+    // ---- A2: audience and asymmetric keys ----------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_token_issued_for_one_tool_is_refused_by_another_even_with_a_matching_scope()
+    {
+        var issuer = new HmacToolCredentialIssuer(Key);
+        // A scope string that happens to be the same on both tools.
+        ToolCredential forA = await issuer.IssueAsync(Request("tool-a", ["shared:write"]), T0, CancellationToken.None);
+
+        Assert.NotNull(issuer.Verify(forA.Token, "shared:write", "tool-a", T0));
+        Assert.Null(issuer.Verify(forA.Token, "shared:write", "tool-b", T0));
+    }
+
+    [Fact]
+    public async Task An_asymmetric_token_verifies_with_the_public_key_and_checks_audience_scope_and_expiry()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var issuer = new EcdsaToolCredentialIssuer(key);
+        using var verifier = new EcdsaToolCredentialVerifier(issuer.ExportPublicKey());
+        ToolCredential credential = await issuer.IssueAsync(Request("refunds", ["refunds:write"]), T0, CancellationToken.None);
+
+        Assert.StartsWith("ktp_", credential.Token, StringComparison.Ordinal);
+        Assert.NotNull(verifier.Verify(credential.Token, "refunds:write", "refunds", T0.AddMinutes(1)));
+        Assert.Null(verifier.Verify(credential.Token, "refunds:write", "payments", T0.AddMinutes(1)));
+        Assert.Null(verifier.Verify(credential.Token, "refunds:read", "refunds", T0.AddMinutes(1)));
+        Assert.Null(verifier.Verify(credential.Token, "refunds:write", "refunds", T0.AddMinutes(6)));
+    }
+
+    [Fact]
+    public void An_asymmetric_verifier_has_no_way_to_mint()
+    {
+        Type verifier = typeof(EcdsaToolCredentialVerifier);
+
+        Assert.False(typeof(IToolCredentialIssuer).IsAssignableFrom(verifier));
+        Assert.DoesNotContain(verifier.GetMethods(), m => m.ReturnType.Name.Contains("ToolCredential", StringComparison.Ordinal) && m.ReturnType != typeof(VerifiedToolCredential));
+        Assert.DoesNotContain(verifier.GetConstructors(), c => c.GetParameters().Any(p => p.ParameterType == typeof(System.Security.Cryptography.ECDsa)));
+    }
+
+    [Fact]
+    public async Task A_verifier_holding_the_wrong_public_key_or_a_tampered_token_refuses()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var other = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var issuer = new EcdsaToolCredentialIssuer(key);
+        ToolCredential credential = await issuer.IssueAsync(Request("refunds", ["refunds:read"]), T0, CancellationToken.None);
+
+        using var wrong = new EcdsaToolCredentialVerifier(new EcdsaToolCredentialIssuer(other).ExportPublicKey());
+        using var right = new EcdsaToolCredentialVerifier(issuer.ExportPublicKey());
+        string flipped = credential.Token[..^3] + (credential.Token[^3] == 'A' ? 'B' : 'A') + credential.Token[^2..];
+
+        Assert.Null(wrong.Verify(credential.Token, "refunds:read", "refunds", T0));
+        Assert.Null(right.Verify(flipped, "refunds:read", "refunds", T0));
+        Assert.Null(right.Verify("ktp_.", "refunds:read", "refunds", T0));
+    }
+
+    [Fact]
+    public async Task The_two_token_kinds_are_not_interchangeable()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var ecdsa = new EcdsaToolCredentialIssuer(key);
+        var hmac = new HmacToolCredentialIssuer(Key);
+        using var ecdsaVerifier = new EcdsaToolCredentialVerifier(ecdsa.ExportPublicKey());
+        ToolCredential asymmetric = await ecdsa.IssueAsync(Request("refunds", ["refunds:read"]), T0, CancellationToken.None);
+        ToolCredential symmetric = await hmac.IssueAsync(Request("refunds", ["refunds:read"]), T0, CancellationToken.None);
+
+        Assert.Null(hmac.Verify(asymmetric.Token, "refunds:read", "refunds", T0));
+        Assert.Null(ecdsaVerifier.Verify(symmetric.Token, "refunds:read", "refunds", T0));
+    }
+
+    [Fact]
+    public void The_issuer_insists_on_a_p256_key()
+    {
+        using var p384 = ECDsa.Create(ECCurve.NamedCurves.nistP384);
+        Assert.Throws<ArgumentException>(() => new EcdsaToolCredentialIssuer(p384));
+    }
+
+    [Fact]
+    public async Task A_run_can_use_asymmetric_credentials_end_to_end()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var issuer = new EcdsaToolCredentialIssuer(key);
+        using var verifier = new EcdsaToolCredentialVerifier(issuer.ExportPublicKey());
+        var seen = new List<string>();
+        AgentHarness h = new(b => b.AddModel("m", AgentHarness.Echo()).UseCredentials(issuer).AddTool(
+            new AgentTool("tool", "x", """{"type":"object"}""", ToolAccess.ReadOnly, (i, _) =>
+            {
+                seen.Add(i.Credential!.Token);
+                return ValueTask.FromResult("ok");
+            })));
+        h.Workflow("call", async (ctx, _) =>
+        {
+            await ctx.InvokeToolAsync(new FunctionCallContent("c", "tool", null));
+            return [];
+        });
+        RunKey run = await h.StartAsync("call");
+        await h.RunAsync(run);
+
+        Assert.NotNull(verifier.Verify(seen.Single(), "tool:read", "tool", h.Time.GetUtcNow()));
+        Assert.Null(verifier.Verify(seen.Single(), "tool:write", "tool", h.Time.GetUtcNow()));
+    }
+
+    // ---- A3: one-time use ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_one_time_use_guard_accepts_a_token_once()
+    {
+        var issuer = new HmacToolCredentialIssuer(Key);
+        var guard = new OneTimeUseGuard();
+        ToolCredential credential = await issuer.IssueAsync(Request("refunds", ["refunds:write"]), T0, CancellationToken.None);
+        VerifiedToolCredential verified = issuer.Verify(credential.Token, "refunds:write", "refunds", T0)!;
+        VerifiedToolCredential again = issuer.Verify(credential.Token, "refunds:write", "refunds", T0.AddSeconds(5))!;
+
+        Assert.True(guard.TryConsume(verified, T0));
+        Assert.False(guard.TryConsume(again, T0.AddSeconds(5)));
+        ToolCredential other = await issuer.IssueAsync(Request("refunds", ["refunds:write"]), T0, CancellationToken.None);
+        Assert.True(guard.TryConsume(issuer.Verify(other.Token, "refunds:write", "refunds", T0)!, T0));
+    }
+
+    [Fact]
+    public async Task Every_token_has_its_own_id()
+    {
+        var issuer = new HmacToolCredentialIssuer(Key);
+        ToolCredentialRequest request = Request();
+        VerifiedToolCredential a = issuer.Verify((await issuer.IssueAsync(request, T0, CancellationToken.None)).Token, "refunds:read", "refunds", T0)!;
+        VerifiedToolCredential b = issuer.Verify((await issuer.IssueAsync(request, T0, CancellationToken.None)).Token, "refunds:read", "refunds", T0)!;
+
+        Assert.NotEqual(a.TokenId, b.TokenId);
     }
 
     // ---- through a run --------------------------------------------------------------------------------------
@@ -114,8 +243,8 @@ public sealed class CredentialTests
         ToolCredential credential = Assert.Single(seen);
         Assert.Equal(["tool:read"], credential.Scopes);
         var verifier = new HmacToolCredentialIssuer(Key);
-        Assert.NotNull(verifier.Verify(credential.Token, "tool:read", h.Time.GetUtcNow()));
-        Assert.Null(verifier.Verify(credential.Token, "tool:write", h.Time.GetUtcNow())); // whatever the tool's code tries
+        Assert.NotNull(verifier.Verify(credential.Token, "tool:read", "tool", h.Time.GetUtcNow()));
+        Assert.Null(verifier.Verify(credential.Token, "tool:write", "tool", h.Time.GetUtcNow())); // whatever the tool's code tries
     }
 
     [Fact]
@@ -135,7 +264,7 @@ public sealed class CredentialTests
         RunKey run = await h.StartAsync("call");
         await h.RunAsync(run);
 
-        VerifiedToolCredential claims = new HmacToolCredentialIssuer(Key).Verify(seen[0].Token, "tool:read", h.Time.GetUtcNow())!;
+        VerifiedToolCredential claims = new HmacToolCredentialIssuer(Key).Verify(seen[0].Token, "tool:read", "tool", h.Time.GetUtcNow())!;
         Assert.Equal(run.RunId, claims.RunId);
         Assert.Equal(run.NamespaceId, claims.NamespaceId);
         Assert.Equal("user:alice", claims.OnBehalfOf);

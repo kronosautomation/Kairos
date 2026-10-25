@@ -45,6 +45,8 @@ public sealed class InboundEventProcessor(IEventSource source, KairosClient clie
                 case StartWorkflowEvent start:
                     await client.StartAsync(start.Scope, start.WorkflowId, start.WorkflowType, start.Input, buildId, cancellationToken).ConfigureAwait(false);
                     return true;
+                case SignalRunEvent signal when signal.SignalName.StartsWith(ReservedSignals.ApprovalPrefix, StringComparison.Ordinal):
+                    return true; // a bus may not decide approvals; redelivery cannot change that, so the message is dropped
                 case SignalRunEvent signal:
                     // False means the run is closed or unknown; redelivery cannot change that, so the message is done.
                     await client.SignalAsync(new RunKey(signal.Scope.TenantId, signal.Scope.NamespaceId, signal.RunId), signal.SignalName, signal.Payload, signal.EventId, cancellationToken).ConfigureAwait(false);

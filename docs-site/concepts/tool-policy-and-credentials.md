@@ -40,20 +40,30 @@ for that call:
 - **Limited by what the tool may do.** A read-only tool's credential carries `tool:read` only. A side-effecting tool's carries
   `tool:read` and `tool:write` only because policy allowed it or a person approved it. Whatever the tool's code tries, the token it holds
   cannot do more.
-- **Short-lived.** With the built-in issuer, five minutes by default and never more than fifteen. Every attempt of a step gets a fresh token.
+- **Short-lived.** Five minutes by default, and the built-in issuers refuse to mint a token that lives longer than fifteen. Every attempt of a step gets a fresh token with its own id.
 - **Never recorded.** The token reaches the tool code in `call.Credential` and nowhere else. If a tool returns it in its result, it is
   removed before the result is written to the history. Printing a `ToolCredential` shows `token=***`.
 
 [!code-csharp[](../../samples/AgentSamples/SupportAgent.cs#tools)]
 
-The service the tool calls decides whether to honour the token. `HmacToolCredentialIssuer` makes self-contained tokens signed with
-HMAC-SHA256, so the service can check one without calling back:
+The service the tool calls decides whether to honour the token. Two issuers are provided:
+
+| Issuer | Signature | Use it when |
+|---|---|---|
+| `EcdsaToolCredentialIssuer` | ECDSA P-256 | Several services check tokens. **Recommended.** Only the issuer holds the private key; each tool service holds the public key (`EcdsaToolCredentialVerifier`) and so cannot mint a token, even if it is compromised. |
+| `HmacToolCredentialIssuer` | HMAC-SHA256, shared key (at least 32 bytes) | One service holds the key, or every holder is equally trusted. Whoever can verify can also mint. |
+
+A service checks a token by naming itself, so a token issued for one tool is refused by another even when the scope text matches:
 
 [!code-csharp[](../../samples/AgentSamples/SupportAgent.cs#verify-credential)]
 
-`Verify` returns nothing for a token that is forged, altered, expired, signed with another key, or missing the scope. Rotate the signing
-key to invalidate every outstanding token at once; the key must be at least 32 bytes. You can supply your own `IToolCredentialIssuer` to
-mint tokens in your identity provider's format instead.
+`Verify` returns nothing for a token that is forged, altered, expired, signed with another key, issued for a different tool, or missing
+the scope. The two token kinds carry different prefixes and cannot be mistaken for each other. Rotate the key to invalidate every
+outstanding token at once. You can supply your own `IToolCredentialIssuer` to mint tokens in your identity provider's format.
+
+**One use only.** Each token has a unique id (`VerifiedToolCredential.TokenId`). Within its few minutes of life a token can be presented
+more than once; for a high-risk scope, pass the verified token to `OneTimeUseGuard.TryConsume`, which accepts it the first time only. The
+guard is in memory and per process: when several instances of a service accept the same scope, back it with a shared store.
 
 ## Limits
 

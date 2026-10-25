@@ -293,10 +293,30 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
                 return new ApprovalDecision(approvalId, ApprovalOutcome.Expired, null, null, workflow.Now);
             }
 
-            WireApprovalDecision? accepted = ApprovalRules.TryAccept(wire, next.Result);
-            if (accepted is not null)
+            WireApprovalDecision? claimed = ApprovalRules.Prefilter(wire, next.Result);
+            if (claimed is not null)
             {
-                return AgentsRuntime.ToDecision(accepted);
+                // Who really decided is established by a recorded step, never by what the signal says about itself.
+                ApprovalVerifyResult? verified = null;
+                try
+                {
+                    byte[] checkedResult = await workflow.ExecuteActivityAsync(
+                        AgentActivityNames.ApprovalVerify,
+                        WireCodec.Write(new ApprovalVerifyRequest { Request = wire, Decision = claimed, ReceivedAt = workflow.Now }, AgentJson.Default.ApprovalVerifyRequest),
+                        RetryPolicy.Default);
+                    verified = WireCodec.Read(checkedResult, AgentJson.Default.ApprovalVerifyResult);
+                }
+                catch (ActivityFailureException)
+                {
+                    // the verifier is unavailable: the decision is not accepted, and the request stays open
+                }
+
+                if (verified is { Ok: true })
+                {
+                    return new ApprovalDecision(
+                        approvalId, claimed.Approved ? ApprovalOutcome.Approved : ApprovalOutcome.Rejected,
+                        new ApproverIdentity(verified.Subject, claimed.Approver.Name, verified.Roles, claimed.Approver.Evidence), claimed.Comment, claimed.DecidedAt);
+                }
             }
 
             // A decision from someone who may not decide (or garbage) is ignored; it stays in history for the audit trail.
@@ -307,10 +327,13 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
         SagaScope.RunAsync(workflow, body, options ?? new SagaOptions(), saga => _saga = saga);
 }
 
-/// <summary>The rules that decide whether an approval signal counts. Shared by the workflow and the inbox so they never disagree.</summary>
+/// <summary>
+/// The rules that decide whether an approval signal counts. The workflow only checks that a signal is well formed (cheap, so junk costs
+/// nothing); who decided is established on the worker by <see cref="EvaluateAsync"/> and recorded as a step.
+/// </summary>
 internal static class ApprovalRules
 {
-    public static WireApprovalDecision? TryAccept(WireApprovalRequest request, ReadOnlySpan<byte> payload)
+    public static WireApprovalDecision? Prefilter(WireApprovalRequest request, ReadOnlySpan<byte> payload)
     {
         WireApprovalDecision? decision;
         try
@@ -322,32 +345,53 @@ internal static class ApprovalRules
             return null;
         }
 
-        if (decision is null || !string.Equals(decision.ApprovalId, request.ApprovalId, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(decision.Approver.Subject))
-        {
-            return null;
-        }
-
-        WireApprovalRequirement need = request.Requirement;
-        if (need.ForbidSelfApproval && request.RequestedBy is { Length: > 0 } requester &&
-            string.Equals(requester, decision.Approver.Subject, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        bool restricted = need.Approvers.Length > 0 || need.Roles.Length > 0;
-        if (restricted)
-        {
-            bool bySubject = need.Approvers.Contains(decision.Approver.Subject, StringComparer.Ordinal);
-            bool byRole = decision.Approver.Roles.Any(r => need.Roles.Contains(r, StringComparer.Ordinal));
-            if (!bySubject && !byRole)
-            {
-                return null;
-            }
-        }
-
-        return decision;
+        return decision is not null && string.Equals(decision.ApprovalId, request.ApprovalId, StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(decision.Approver.Subject)
+            ? decision
+            : null;
     }
+
+    public static async ValueTask<ApprovalVerifyResult> EvaluateAsync(
+        ApprovalVerifyRequest check, RunKey run, IApproverVerifier? verifier, CancellationToken cancellationToken)
+    {
+        WireApprovalRequest request = check.Request;
+        WireApprovalDecision decision = check.Decision;
+        WireApprovalRequirement need = request.Requirement;
+        bool restricted = need.Approvers.Length > 0 || need.Roles.Length > 0;
+
+        string subject = decision.Approver.Subject;
+        string[] roles = decision.Approver.Roles;
+        if (verifier is not null)
+        {
+            VerifiedApprover? proven = await verifier.VerifyAsync(
+                new ApproverEvidenceContext(run, decision.ApprovalId, decision.Approved, subject, decision.Approver.Evidence, check.ReceivedAt), cancellationToken).ConfigureAwait(false);
+            if (proven is null)
+            {
+                return Refuse("the approver could not be verified");
+            }
+
+            subject = proven.Subject;
+            roles = [.. proven.Roles];
+        }
+        else if (restricted)
+        {
+            return Refuse("this approval names approvers or roles and no approver verifier is configured");
+        }
+
+        if (need.ForbidSelfApproval && request.RequestedBy is { Length: > 0 } requester && string.Equals(requester, subject, StringComparison.Ordinal))
+        {
+            return Refuse("the person the agent acts for may not approve their own request");
+        }
+
+        if (restricted && !need.Approvers.Contains(subject, StringComparer.Ordinal) && !roles.Any(r => need.Roles.Contains(r, StringComparer.Ordinal)))
+        {
+            return Refuse("the approver is not allowed to decide this approval");
+        }
+
+        return new ApprovalVerifyResult { Ok = true, Subject = subject, Roles = roles };
+    }
+
+    private static ApprovalVerifyResult Refuse(string reason) => new() { Ok = false, Reason = reason };
 }
 
 public static class AgentContextExtensions

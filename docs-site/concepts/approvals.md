@@ -26,32 +26,51 @@ An `ApprovalRequirement` says who counts:
 | `ForbidSelfApproval` | On by default. The person the agent acts for (`ctx.OnBehalfOf`) may not approve their own request. |
 | `Timeout` | Workflow time after which the approval expires. Nothing is waited on forever unless you leave it unset. |
 
-A decision from someone who does not qualify, or one that is malformed or names another approval, is **ignored**: the run keeps waiting
-and the stray decision stays in the history. An approval can only be given once. After the first valid decision further decisions change
-nothing, and a decision for a run that has ended is refused (`false`).
+A decision from someone who does not qualify, or one that is malformed, names another approval, or cannot be verified, is **ignored**: the
+run keeps waiting, the approval stays in `PendingApprovals`, and the stray decision stays in the history. An approval can only be given
+once. After the first accepted decision further decisions change nothing, and a decision for a run that has ended is refused (`false`).
+
+## Proving who decided
+
+A decision says who made it, but a claim is not proof. Kairos therefore treats decisions as untrusted until a **verifier** has checked the
+evidence that came with them, and records the result as a step, so the check is never repeated when the run replays.
+
+- **Approvals travel on a reserved signal name.** Names starting with `kairos.approval.` cannot be sent with `KairosClient.SignalAsync`
+  (it throws), and a bus message with such a name is dropped. Only `KairosClient.DecideApprovalAsync` (which `AgentClient` uses) sends
+  them. A server authorizes that call as its own operation, `DecideApproval`, granted to the `Approver` role and not to `Operator`, so being
+  allowed to signal runs does not allow approving.
+- **Evidence is bound to the decision.** `HmacApprovalTokens` issues a short-lived token (five minutes by default, fifteen at most) for one
+  run, one approval, one answer and one subject, carrying the roles the person holds. The verifier accepts it only if all of those match
+  the decision, and it takes the subject and roles **from the token**, never from the decision's own fields. A token for another run,
+  another approval, the opposite answer, or another person is refused, as is an expired or forged one. Token expiry is judged when the decision reaches the run, not when a
+  worker gets to it; a decision whose token expired before it arrived stays open for a fresh one.
+- **Register the verifier** with `UseApproverVerifier`. For an identity provider that issues ID tokens, implement `IApproverVerifier` over
+  the provider's validation instead; it receives the run, approval, answer, claimed subject and the evidence.
+- **Fail closed.** Without a verifier, a request that names approvers or roles refuses every decision, because nothing could prove the
+  claim. A request that names nobody accepts any identity, and the person the agent acts for is still barred from approving their own request.
 
 ## Deciding
 
-Your application shows the pending approvals, authenticates the person who decides, and passes their identity:
+Your application shows the pending approvals, authenticates the person who decides, and passes only an identity it authenticated.
+Give the `AgentClient` the approval tokens so that it signs the decision for that identity:
 
 [!code-csharp[](../../samples/AgentSamples/SupportAgent.cs#approval-inbox)]
 
 [!code-csharp[](../../samples/AgentSamples/SupportAgent.cs#approval-decide)]
 
-`RejectAsync` is the same call with the opposite answer. Sending the same decision twice is harmless (the delivery is identified by
-approval, person and answer), so a request that is retried after a timeout cannot decide twice.
+`RejectAsync` is the same call with the opposite answer. Re-sending a decision with the same evidence is harmless (it is the same delivery), and a second valid decision after the first changes nothing.
 
 `AgentHistory.PendingApprovals(history)` lists the requests nobody has validly decided; it is what an approvals page or an inbox is
 built from. Pass it the history from `GetOpenedHistoryAsync`, which opens payloads when encryption is on.
 
 ## What this does and does not guarantee
 
-- **The identity in the history is the one your application asserted.** Kairos checks it against the requirement and keeps it, but it
-  cannot authenticate a person itself. Whoever can call `ApproveAsync` can name any identity, so put the call behind your own
-  authentication and authorization, as you would any endpoint that changes state. `ApproverIdentity.Evidence` is for whatever proof you
-  want to keep alongside (a session or assertion id); never put a password in it.
-- **Anyone who can write signals to the run's database can forge a decision.** The database role your application uses is the trust
-  boundary; keep it with the application.
+- **In embedded mode your application is the trust boundary.** The approval key belongs to the code that authenticates people and to the
+  workers. `AgentClient.ApproveAsync` signs whatever identity it is given, so call it only for a person you have authenticated, and put
+  the endpoint behind your own authentication and authorization. Nothing that can merely send signals, and nothing that only reads the
+  database, can approve without the key.
+- **Anyone holding the approval key can approve as anyone.** Keep it out of the tool services and out of anything that handles prompts.
+  Rotating it makes every unused token worthless.
 - **An approval covers one call.** Approving a tool call does not approve the next one, even with the same arguments.
 - **Timeouts follow workflow time**, so a run that is waiting is not woken early or late by clock differences between servers.
 - With [payload encryption](history.md) on, the request details, the decision and the approver's identity are sealed like any other signal.
