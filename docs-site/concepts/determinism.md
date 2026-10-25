@@ -44,6 +44,31 @@ When you mean to change a workflow that has runs in flight, use [versioning](ver
 Workflow code runs more than once, so a log line in it would repeat. Check `ctx.IsReplaying` and write the line only when it is false, or
 log from an activity.
 
+## Catching it at build time
+
+The `Kairos.Analyzers` package adds compiler checks for the habits in the table above. Add it to the project that holds your
+workflows:
+
+```xml
+<PackageReference Include="Kairos.Analyzers" PrivateAssets="all" />
+```
+
+A method marked `[Workflow]`, or any method that takes an `IWorkflowContext`, is workflow code, and so is every lambda and local
+function inside one. A method marked `[Activity]` is never workflow code, so the same calls are fine there.
+
+| Rule | Severity | Reports |
+|---|---|---|
+| KAI001 | Error | Reading the clock: `DateTime.Now`/`UtcNow`/`Today`, `DateTimeOffset.Now`/`UtcNow`, `TimeProvider.GetUtcNow`, `Stopwatch`, `Environment.TickCount`. |
+| KAI002 | Error | Random values: `Guid.NewGuid`, `Random`, `RandomNumberGenerator`. |
+| KAI003 | Error | I/O and the environment: files, `HttpClient`, sockets, processes, `Console`, database connections and commands, environment variables. |
+| KAI004 | Error | `Task.Run`, `Task.Delay`, `Task.Factory`, `Parallel`, threads, timers, and `ConfigureAwait(false)`. |
+| KAI005 | Error | Reading or writing mutable static fields and static properties with a setter. |
+| KAI006 | Warning | A parameter of a workflow or activity that looks like a credential (`password`, `apiKey`, `token`, `connectionString`...). Inputs are recorded in history, so pass a reference and fetch the secret inside the activity. |
+
+The analyzer looks at the workflow method itself. It does not follow calls into helper methods, so keep the deterministic rules in
+mind in code your workflow calls, and use the simulator kit to cover the rest. To allow one deliberate use, suppress the rule at that
+line with `#pragma warning disable KAI002` and a comment saying why.
+
 ## Testing for it
 
 The simulator kit (`Kairos.Testing`) runs workflows against a virtual clock and replays the recorded history after every step, so

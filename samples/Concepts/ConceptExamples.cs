@@ -5,6 +5,7 @@ namespace Kairos.Samples.Concepts;
 /// <summary>Small workflows that the concept pages quote. Each region is exercised by a test in Concepts.Tests.</summary>
 public static class DeterminismExamples
 {
+#pragma warning disable KAI002 // deliberately wrong: this is the example of what not to do
     #region wrong
     // Do not write workflow code like this. When the workflow is replayed it generates a different id than the first run did,
     // so the recorded step no longer matches what the code asks for.
@@ -14,6 +15,7 @@ public static class DeterminismExamples
         return await ctx.ExecuteActivityAsync("send", Encoding.UTF8.GetBytes(requestId));
     }
     #endregion
+#pragma warning restore KAI002
 
     #region right
     // The context hands out ids and times that are recorded, so a replay sees exactly the values the first run saw.

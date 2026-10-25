@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Analyzers load into the compiler, so they target netstandard2.0 whatever the rest of the solution targets. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>true</IsPackable>
+    <PackageId>Kairos.Analyzers</PackageId>
+    <Description>Roslyn analyzers that keep Kairos workflow code deterministic and keep secrets out of workflow history.</Description>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <AnalyzerLanguage>cs</AnalyzerLanguage>
+    <!-- netstandard2.0 has no ImplicitUsings-friendly globals for some analyzers; keep rules but skip globalization/localization noise. -->
+    <NoWarn>$(NoWarn);RS1036;CA1305;CA1307;CA1310;CA1304;CA1311</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
+</Project>
