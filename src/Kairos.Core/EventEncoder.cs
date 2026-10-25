@@ -19,7 +19,7 @@ internal static class EventEncoder
         WorkflowContinued x => 16 + BytesMax(x.Input),
         PatchMarker x => StringMax(x.PatchId),
         ActivityScheduled x => 4 + StringMax(x.ActivityType) + BytesMax(x.Input) + PolicyMax(x.RetryPolicy) + TraceMax(x.TraceContext),
-        ActivityCompleted x => 4 + BytesMax(x.Result),
+        ActivityCompleted x => 4 + BytesMax(x.Result) + (x.Usage is { } u ? 24 + StringMax(u.Model) : 0),
         ActivityFailed x => 4 + 4 + StringMax(x.ErrorType) + StringMax(x.Message) + 1,
         TimerStarted => 4 + 8,
         TimerFired => 4,
@@ -78,6 +78,15 @@ internal static class EventEncoder
             case ActivityCompleted x:
                 w.WriteInt32(x.ActivityId);
                 w.WriteBytes(x.Result);
+                if (x.Usage is { } usage)
+                {
+                    // Trailing and optional, like the trace context: events written before usage was recorded keep their exact encoding and hashes.
+                    w.WriteInt64(usage.InputTokens);
+                    w.WriteInt64(usage.OutputTokens);
+                    w.WriteInt64(usage.CachedInputTokens);
+                    w.WriteString(usage.Model);
+                }
+
                 break;
             case ActivityFailed x:
                 w.WriteInt32(x.ActivityId);

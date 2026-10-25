@@ -40,6 +40,38 @@ public sealed class GoldenCorpusTests
     }
 
     [Fact]
+    public async Task Record_the_usage_corpus_entries()
+    {
+        string? target = Environment.GetEnvironmentVariable("KAIROS_CORPUS_RECORD_USAGE");
+        if (string.IsNullOrEmpty(target))
+        {
+            return; // recording is a release step, not part of normal runs
+        }
+
+        Directory.CreateDirectory(target);
+        foreach (CorpusEntry entry in await GoldenCorpus.RecordUsageEntriesAsync())
+        {
+            await File.WriteAllTextAsync(Path.Combine(target, entry.File), HistoryFile.Serialize(entry.History, "v2", entry.Note, entry.ReplayWith));
+        }
+    }
+
+    [Fact]
+    public void The_usage_entry_keeps_its_figures_and_the_older_entries_carry_none()
+    {
+        string usageFile = Path.Combine(CorpusRoot, "v2", "usage-model-steps.khist");
+        CorpusEntry usage = GoldenCorpus.Parse(usageFile, File.ReadAllText(usageFile));
+
+        RunUsage total = RunUsage.From(usage.History);
+
+        Assert.Equal((2, 3100L, 425L, 1200L), (total.Steps, total.InputTokens, total.OutputTokens, total.CachedInputTokens));
+        Assert.Equal("model-2026-10", Assert.Single(total.ByModel).Model);
+        foreach (string file in Directory.EnumerateFiles(CorpusRoot, "*.khist", SearchOption.AllDirectories).Where(f => !f.Contains("v2", StringComparison.Ordinal)))
+        {
+            Assert.Same(RunUsage.None, RunUsage.From(GoldenCorpus.Parse(file, File.ReadAllText(file)).History));
+        }
+    }
+
+    [Fact]
     public void The_corpus_exists_and_covers_every_event_type()
     {
         string[] files = [.. Directory.EnumerateFiles(CorpusRoot, "*.khist", SearchOption.AllDirectories)];

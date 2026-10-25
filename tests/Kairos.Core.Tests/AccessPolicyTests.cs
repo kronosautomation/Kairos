@@ -22,6 +22,7 @@ public sealed class AccessPolicyTests
         [Operation.ResumeStuckTask] = "   x ",
         [Operation.FailRun] = "   x ",
         [Operation.DecideApproval] = "    x",
+        [Operation.ExportHistory] = "  xx ",
     };
 
     private static readonly Role[] Roles = [Role.Reader, Role.Worker, Role.Operator, Role.Admin, Role.Approver];

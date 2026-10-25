@@ -64,6 +64,26 @@ public sealed record ActivityCompleted(
     int ActivityId, byte[] Result) : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.ActivityCompleted;
+
+    /// <summary>
+    /// What a model step consumed, recorded with the step that consumed it (null for every other activity, and for histories written before usage was recorded).
+    /// Counts are readable metadata, like sizes: they are not sealed. Because the figure lives in the event, replaying a run never counts it again.
+    /// </summary>
+    public UsageRecord? Usage { get; init; }
+}
+
+/// <summary>Tokens consumed by one model step, as the model client reported them. Zero when the client did not say.</summary>
+/// <param name="InputTokens">Tokens in the prompt, including any that were served from a cache.</param>
+/// <param name="OutputTokens">Tokens in the reply.</param>
+/// <param name="CachedInputTokens">The part of <paramref name="InputTokens"/> served from the provider's prompt cache.</param>
+/// <param name="Model">The model that answered (its identifier as the provider reports it), the key a price table is looked up by. At most <see cref="MaxModelLength"/> characters.</param>
+public sealed record UsageRecord(long InputTokens, long OutputTokens, long CachedInputTokens, string Model)
+{
+    /// <summary>Longest model identifier that is recorded; longer ones are cut.</summary>
+    public const int MaxModelLength = 128;
+
+    /// <summary>The sum of input and output tokens.</summary>
+    public long TotalTokens => InputTokens + OutputTokens;
 }
 
 /// <summary>

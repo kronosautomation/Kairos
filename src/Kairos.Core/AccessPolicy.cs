@@ -18,6 +18,9 @@ public enum Operation
 
     /// <summary>Approve or reject a pending approval. Separate from <see cref="SignalRun"/>: a signal cannot carry an approval.</summary>
     DecideApproval,
+
+    /// <summary>Copy one run's history out of the system (ciphertext as stored). Always audited with who and why.</summary>
+    ExportHistory,
 }
 
 /// <summary>
@@ -31,11 +34,11 @@ public static class AccessPolicy
         [Role.Reader] = [Operation.ReadRun],
         [Role.Approver] = [Operation.ReadRun, Operation.DecideApproval],
         [Role.Worker] = [Operation.PollWorkflowTask, Operation.PollActivityTask, Operation.CompleteTask, Operation.HeartbeatTask],
-        [Role.Operator] = [Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun],
+        [Role.Operator] = [Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun, Operation.ExportHistory],
         [Role.Admin] =
         [
             Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun, Operation.ReadAuditLog,
-            Operation.ResumeStuckTask, Operation.FailRun,
+            Operation.ResumeStuckTask, Operation.FailRun, Operation.ExportHistory,
         ],
     };
 

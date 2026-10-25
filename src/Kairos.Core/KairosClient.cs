@@ -152,6 +152,13 @@ public sealed class KairosClient
         }
     }
 
+    /// <summary>
+    /// What the model steps of a run consumed so far, summed from the usage recorded in its history (readable metadata: it works with client-side encryption on and needs no key).
+    /// Each step is counted once, however often the run was replayed. A run that continued as new reports only its own history.
+    /// </summary>
+    public async ValueTask<RunUsage> GetUsageAsync(RunKey run, CancellationToken cancellationToken = default) =>
+        RunUsage.From(await _store.GetHistoryAsync(run, cancellationToken).ConfigureAwait(false));
+
     public ValueTask<RunState?> GetStateAsync(RunKey run, CancellationToken cancellationToken = default) =>
         _store.GetRunStateAsync(run, cancellationToken);
 

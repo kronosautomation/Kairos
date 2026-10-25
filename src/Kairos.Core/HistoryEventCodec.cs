@@ -53,7 +53,7 @@ public static class HistoryEventCodec
             HistoryEventType.WorkflowContinued => new WorkflowContinued(tenant, ns, run, seq, ts, r.ReadGuid(), r.ReadBytes()),
             HistoryEventType.PatchMarker => new PatchMarker(tenant, ns, run, seq, ts, r.ReadString()),
             HistoryEventType.ActivityScheduled => ReadScheduled(ref r, tenant, ns, run, seq, ts),
-            HistoryEventType.ActivityCompleted => new ActivityCompleted(tenant, ns, run, seq, ts, r.ReadInt32(), r.ReadBytes()),
+            HistoryEventType.ActivityCompleted => ReadCompleted(ref r, tenant, ns, run, seq, ts),
             HistoryEventType.ActivityFailed => new ActivityFailed(
                 tenant, ns, run, seq, ts, r.ReadInt32(), r.ReadInt32(), r.ReadString(), r.ReadString(), r.ReadByte() != 0),
             HistoryEventType.TimerStarted => new TimerStarted(tenant, ns, run, seq, ts, r.ReadInt32(), TimeSpan.FromTicks(r.ReadInt64())),
@@ -135,6 +135,26 @@ public static class HistoryEventCodec
             NonRetryableErrorTypes = errors,
         };
         return new ActivityScheduled(tenant, ns, run, seq, ts, id, type, input, policy) { TraceContext = r.AtEnd ? "" : ReadTrace(ref r) };
+    }
+
+    private static ActivityCompleted ReadCompleted(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)
+    {
+        int id = r.ReadInt32();
+        byte[] result = r.ReadBytes();
+        UsageRecord? usage = null;
+        if (!r.AtEnd)
+        {
+            long input = r.ReadInt64(), output = r.ReadInt64(), cached = r.ReadInt64();
+            string model = r.ReadString();
+            if (input < 0 || output < 0 || cached < 0 || cached > input || model.Length > UsageRecord.MaxModelLength)
+            {
+                throw new FormatException("Invalid usage record.");
+            }
+
+            usage = new UsageRecord(input, output, cached, model);
+        }
+
+        return new ActivityCompleted(tenant, ns, run, seq, ts, id, result) { Usage = usage };
     }
 
     private static string ReadTrace(ref Reader r)

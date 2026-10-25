@@ -48,6 +48,10 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
         inner.GetRunGroupsAsync(scope, closedSince, cancellationToken);
 
+    public virtual ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
+        RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken) =>
+        inner.ExportHistoryAsync(run, actor, reason, metadataOnly, now, cancellationToken);
+
     public virtual ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.GetBacklogAsync(scope, now, cancellationToken);
 

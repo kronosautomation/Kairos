@@ -96,4 +96,66 @@ public sealed class ReplayCheckOnPostgresTests(PostgresFixture fixture)
         Assert.Equal(1, foreign);
         Assert.Contains("Nothing was replayed", foreignOut, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task The_tool_exports_a_run_with_the_data_plane_role_and_audits_it_and_the_file_replays_locally()
+    {
+        await using TestDatabase db = await fixture.NewDatabaseAsync();
+        PostgresKairosStore store = db.NewStore();
+        var clock = new VirtualTimeProvider();
+        var client = new KairosClient(store, clock);
+        var workflows = new WorkflowRegistry().Register("pg-order", "default", PgOrders.Original);
+        var activities = new ActivityRegistry().Register("charge", (_, input, _) => Task.FromResult(input));
+        var worker = new WorkerRuntime(store, Scope, workflows, activities, clock, new WorkerOptions { AutoHeartbeat = false });
+        StartRunResult start = await client.StartAsync(Scope, "export-1", "pg-order", Encoding.UTF8.GetBytes(Canary));
+        await Driver.DriveAsync(worker);
+        clock.Advance(TimeSpan.FromSeconds(10));
+        await Driver.DriveAsync(worker);
+        string[] scope = ["--tenant", Scope.TenantId.ToString(), "--namespace", Scope.NamespaceId.ToString()];
+        string dir = Path.Combine(Path.GetTempPath(), "kairos-pg-export-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // The read-only role cannot write the audit log, so it cannot export: an export is never unrecorded.
+            string denied = Path.Combine(dir, "denied.khist");
+            (int readOnlyExit, _, string readOnlyError) = await KairosAsync(
+                db.ReadOnlyConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "should not work", "--out", denied, "--actor", "dev@example.com", .. scope]);
+            Assert.Equal(1, readOnlyExit);
+            Assert.Contains("audit log", readOnlyError, StringComparison.Ordinal);
+            Assert.False(File.Exists(denied));
+
+            string file = Path.Combine(dir, "run.khist");
+            (int exit, string output, string error) = await KairosAsync(
+                db.DataPlaneConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "reproduce ticket 4411", "--out", file, "--actor", "dev@example.com", .. scope]);
+            Assert.True(exit == 0, output + error);
+
+            AuditEntry entry = Assert.Single(await store.GetAuditLogAsync(Scope, default));
+            Assert.Equal(("ExportHistory", "dev@example.com", start.RunId), (entry.Action, entry.Actor, entry.RunId));
+            HistoryFileContents loaded = HistoryFile.ParseVerified(await File.ReadAllTextAsync(file));
+            Assert.Equal($"reproduce ticket 4411 (head {loaded.HeadHash})", entry.Detail);
+
+            // The file replays on a developer machine against local code, with the recorded results; a moved step is reported like replay-check reports it.
+            Assert.True((await KairosReplayer.ReplayAsync(file, PgOrders.Original)).Succeeded);
+            ReplayOutcome moved = await KairosReplayer.ReplayAsync(file, async (ctx, input) =>
+            {
+                await ctx.DelayAsync(TimeSpan.FromSeconds(5));
+                return await ctx.ExecuteActivityAsync("charge", input);
+            });
+            Assert.Contains("emitted:  StartTimer: timer 1 for 00:00:05", moved.Text, StringComparison.Ordinal);
+
+            string metadata = Path.Combine(dir, "metadata.khist");
+            (int metaExit, string metaOut, string metaError) = await KairosAsync(
+                db.DataPlaneConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "shape", "--metadata-only", "--out", metadata, "--actor", "dev@example.com", .. scope]);
+            Assert.True(metaExit == 0, metaOut + metaError);
+            (int verifyExit, string verifyOut, _) = await KairosAsync(db.DataPlaneConnectionString, ["history", "verify", metadata]);
+            Assert.Equal(0, verifyExit);
+            Assert.Contains("digest chain verified", verifyOut, StringComparison.Ordinal);
+            Assert.DoesNotContain(Canary, await File.ReadAllTextAsync(metadata), StringComparison.Ordinal);
+            Assert.Equal(2, (await store.GetAuditLogAsync(Scope, default)).Count);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

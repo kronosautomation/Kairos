@@ -221,7 +221,7 @@ public sealed class WorkerRuntime
                 ? task.Input
                 : await _crypto.OpenAsync(r.Scope, r.RunId, "act-in", task.ActivityId, task.Input, attemptCts.Token).ConfigureAwait(false);
             byte[] output = await activity(context, input, attemptCts.Token).ConfigureAwait(false);
-            outcome = new ActivityCompleted(r.TenantId, r.NamespaceId, r.RunId, 0, _time.GetUtcNow(), task.ActivityId, output);
+            outcome = new ActivityCompleted(r.TenantId, r.NamespaceId, r.RunId, 0, _time.GetUtcNow(), task.ActivityId, output) { Usage = context.Usage };
         }
         catch (OperationCanceledException) when (leaseLost)
         {

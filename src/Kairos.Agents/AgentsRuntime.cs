@@ -337,6 +337,13 @@ public sealed class AgentsRuntime
         }
 
         AgentTelemetry.Response(span, request.Model, response);
+        if (response.Usage is { } used)
+        {
+            // Recorded with the step's completion, once: the figure a price table is applied to later.
+            context.ReportUsage(new UsageRecord(
+                used.InputTokenCount ?? 0, used.OutputTokenCount ?? 0, Math.Min(used.CachedInputTokenCount ?? 0, used.InputTokenCount ?? 0), response.ModelId ?? request.Model));
+        }
+
         var reply = new ChatStepResponse
         {
             Messages = [.. response.Messages.Select(m => WireCodec.ResponseToWire(m, _config.Redactor))],

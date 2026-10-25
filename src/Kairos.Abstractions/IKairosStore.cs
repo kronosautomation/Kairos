@@ -185,6 +185,14 @@ public interface IKairosStore
     ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This store cannot list runs.");
 
+    /// <summary>
+    /// Reads a run's whole history for export and, in the same transaction, appends an audit entry (<c>ExportHistory</c>) naming <paramref name="actor"/> and
+    /// <paramref name="reason"/>. Null (and nothing audited) when the run does not exist in this scope. The caller is responsible for authorizing the actor
+    /// (<c>Operation.ExportHistory</c>); the store records who and why and returns the history exactly as stored (ciphertext when encryption is on).
+    /// </summary>
+    ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot export histories.");
+
     /// <summary>Counts of ready work in this scope, for queue-depth metrics. Null when the store cannot say (the default).</summary>
     ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) => ValueTask.FromResult<WorkBacklog?>(null);
 

@@ -1329,6 +1329,37 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         }).ConfigureAwait(false);
     }
 
+    public async ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
+        RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        StoreRules.ValidateExport(actor, reason);
+        return await InTransaction<IReadOnlyList<HistoryEvent>?>(run.Scope, async (conn, tx) =>
+        {
+            var history = new List<HistoryEvent>();
+            await using (var read = new NpgsqlCommand(
+                "SELECT seq, body, prev_hash, hash FROM kairos.history_events WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r ORDER BY seq", conn, tx))
+            {
+                read.Parameters.AddWithValue("t", run.TenantId);
+                read.Parameters.AddWithValue("n", run.NamespaceId);
+                read.Parameters.AddWithValue("r", run.RunId);
+                await using NpgsqlDataReader reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    history.Add(DecodeRow(run.Scope, run.RunId, reader.GetInt64(0), reader.GetFieldValue<byte[]>(1), reader.GetFieldValue<byte[]>(2), reader.GetFieldValue<byte[]>(3)));
+                }
+            }
+
+            if (history.Count == 0)
+            {
+                return null;
+            }
+
+            // Read and record in one transaction: there is no export without an audit entry, and no audit entry for a read that failed.
+            await AuditAsync(conn, tx, run, StoreRules.ExportAuditAction, actor, now, StoreRules.ExportDetail(reason, metadataOnly, history), cancellationToken).ConfigureAwait(false);
+            return history;
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
     public async ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken)
     {
         return await Retry<RunKey?>(async () =>

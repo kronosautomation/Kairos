@@ -10,3 +10,5 @@ Histories recorded by a released build, replayed by every later build (docs/TEST
 - The workflow code the corpus replays with (`GoldenCorpus.Resolve`, `SimPrograms`, `ReferenceWorkflows`) is frozen for the same reason.
 - `m3/` holds histories recorded by the Milestone 3 build whose format differs from `v1/` (signals carrying ids). `v1/` histories without ids
   must keep replaying byte for byte; the unsignalled `v1/` files are identical to what the M3 build records.
+- `v2/` was recorded by the build that records token usage in completion events (an optional trailing field). It is the first directory whose histories carry
+  usage; `v1/` and `m3/` carry none and must keep verifying and replaying byte for byte.

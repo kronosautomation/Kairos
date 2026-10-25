@@ -80,6 +80,43 @@ public static class HashChain
         }
     }
 
+    /// <summary>
+    /// Verifies sequence continuity, run identity and linkage (each event names the hash of its predecessor, the first the genesis hash), without recomputing content hashes.
+    /// For histories whose payloads were removed (metadata-only exports), where recomputing is impossible.
+    /// </summary>
+    /// <exception cref="HistoryIntegrityException">The history has a gap, a reordering or a broken link.</exception>
+    public static void VerifyLinkage(IReadOnlyList<HistoryEvent> history)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        if (history.Count == 0)
+        {
+            return;
+        }
+
+        HistoryEvent first = history[0];
+        byte[] expectedPrev = s_genesis;
+        for (int i = 0; i < history.Count; i++)
+        {
+            HistoryEvent e = history[i];
+            if (e.Sequence != i + 1)
+            {
+                throw new HistoryIntegrityException($"Expected sequence {i + 1} but found {e.Sequence}.", e.Sequence);
+            }
+
+            if (e.TenantId != first.TenantId || e.NamespaceId != first.NamespaceId || e.RunId != first.RunId)
+            {
+                throw new HistoryIntegrityException($"Event {e.Sequence} belongs to a different tenant, namespace, or run.", e.Sequence);
+            }
+
+            if (e.PrevHash.Length != HashSize || e.Hash.Length != HashSize || !e.PrevHash.AsSpan().SequenceEqual(expectedPrev))
+            {
+                throw new HistoryIntegrityException($"Event {e.Sequence} is not linked to its predecessor.", e.Sequence);
+            }
+
+            expectedPrev = e.Hash;
+        }
+    }
+
     private static void ComputeHash(HistoryEvent e, ReadOnlySpan<byte> prevHash, Span<byte> destination)
     {
         int max = HashSize + EventEncoder.MaxSize(e);

@@ -6,6 +6,19 @@ public sealed record ActivityContext(RunKey Run, int ActivityId, string Activity
     /// <summary>Set by the worker. Renews the attempt lease; if the lease was lost, the activity's cancellation token is cancelled.</summary>
     public Func<ValueTask>? Heartbeat { get; init; }
 
+    /// <summary>The usage an activity reported with <see cref="ReportUsage"/>; the worker records it in the completion event.</summary>
+    public UsageRecord? Usage { get; private set; }
+
+    /// <summary>
+    /// Reports what this attempt consumed (a model step reports its tokens). It is recorded once, in the event that completes the activity, so a replay never counts it again.
+    /// Attempts that fail are not recorded.
+    /// </summary>
+    public void ReportUsage(UsageRecord usage)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        Usage = usage.Model.Length <= UsageRecord.MaxModelLength ? usage : usage with { Model = usage.Model[..UsageRecord.MaxModelLength] };
+    }
+
     /// <summary>Long-running activities call this regularly (the worker also heartbeats automatically while an activity runs).</summary>
     public ValueTask HeartbeatAsync() => Heartbeat is null ? ValueTask.CompletedTask : Heartbeat();
 }

@@ -43,8 +43,16 @@ internal static class GoldenCorpus
             "summer" => ReferenceWorkflows.Summer(int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture)),
             "waits-forever" => ReferenceWorkflows.WaitsForever(),
             "runaway" => ReferenceWorkflows.Runaway(),
+            "usage" => UsageModelSteps,
             _ => throw new ArgumentException($"Unknown corpus workflow '{key}'."),
         };
+    }
+
+    /// <summary>Two model steps, the second fed the first one's answer. Frozen: histories recorded with usage replay with exactly this code.</summary>
+    private static async Task<byte[]> UsageModelSteps(IWorkflowContext ctx, byte[] input)
+    {
+        byte[] first = await ctx.ExecuteActivityAsync("model", input);
+        return await ctx.ExecuteActivityAsync("model", first);
     }
 
     // ---- file format ----------------------------------------------------------------------------------------------
@@ -58,6 +66,29 @@ internal static class GoldenCorpus
     }
 
     public static string Outcome(HistoryEvent last) => HistoryFile.Outcome(last);
+
+    /// <summary>
+    /// The first entries recorded by the build that records token usage (<c>v2/</c>): a run whose two model steps reported usage, one with a cached prompt, written into the
+    /// completion events as an optional trailing field. The <c>v1</c> and <c>m3</c> histories, which have no usage, must keep verifying and replaying unchanged.
+    /// </summary>
+    public static async Task<List<CorpusEntry>> RecordUsageEntriesAsync()
+    {
+        var store = new InMemoryKairosStore();
+        var time = new VirtualTimeProvider();
+        var client = new KairosClient(store, time, () => new Guid(7, 0, 0, [0, 0, 0, 0, 0, 0, 0, 7]));
+        var scope = new TenantScope(new Guid(5, 0, 0, [0, 0, 0, 0, 0, 0, 0, 5]), new Guid(6, 0, 0, [0, 0, 0, 0, 0, 0, 0, 6]));
+        int step = 0;
+        WorkflowRegistry wf = new WorkflowRegistry().Register("agent", KairosClient.DefaultBuildId, Resolve("usage"));
+        ActivityRegistry act = new ActivityRegistry().Register("model", (context, input, _) =>
+        {
+            context.ReportUsage(++step == 1 ? new UsageRecord(1200, 340, 0, "model-2026-10") : new UsageRecord(1900, 85, 1200, "model-2026-10"));
+            return Task.FromResult(input);
+        });
+        StartRunResult start = await client.StartAsync(scope, "usage-1", "agent", [1, 2, 3, 4]);
+        await Driver.DriveAsync(new WorkerRuntime(store, scope, wf, act, time, new WorkerOptions { AutoHeartbeat = false }));
+        IReadOnlyList<HistoryEvent> history = await client.GetHistoryAsync(new RunKey(scope.TenantId, scope.NamespaceId, start.RunId));
+        return [new CorpusEntry("usage-model-steps.khist", "usage", "Two model steps with token usage recorded in their completion events (one with a cached prompt).", history)];
+    }
 
     // ---- recording (run once per release; never re-record to make a failing replay pass) --------------------------------
 

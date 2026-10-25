@@ -146,6 +146,41 @@ public abstract partial class StoreContractTests
     }
 
     [Fact]
+    public async Task An_export_returns_the_history_and_records_who_and_why_in_the_same_step()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult start = await client.StartAsync(A, "x-1", "wf", B8("in"), cancellationToken: Ct);
+        await DriveAsync(store, A, Workflows("default", async (ctx, input) => await ctx.ExecuteActivityAsync("echo", input)), Activities());
+        var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
+        try
+        {
+            Assert.Null(await store.ExportHistoryAsync(new RunKey(A.TenantId, A.NamespaceId, Guid.NewGuid()), "ops@example.com", "why", false, Time.GetUtcNow(), Ct));
+        }
+        catch (NotSupportedException)
+        {
+            return;
+        }
+
+        Assert.Empty(await store.GetAuditLogAsync(A, Ct)); // a run that does not exist is not an export
+
+        IReadOnlyList<HistoryEvent> exported = (await store.ExportHistoryAsync(run, "ops@example.com", "investigating ticket 4411", false, Time.GetUtcNow(), Ct))!;
+        await store.ExportHistoryAsync(run, "ops@example.com", "again", true, Time.GetUtcNow(), Ct);
+
+        Assert.Equal((await store.GetHistoryAsync(run, Ct)).Select(e => Convert.ToHexString(e.Hash)), exported.Select(e => Convert.ToHexString(e.Hash)));
+        AssertChainIntact(exported);
+        IReadOnlyList<AuditEntry> audit = await store.GetAuditLogAsync(A, Ct);
+        Assert.Equal(2, audit.Count);
+        string head = Convert.ToHexStringLower(exported[^1].Hash);
+        Assert.Equal(("ExportHistory", "ops@example.com", $"investigating ticket 4411 (head {head})", run.RunId), (audit[0].Action, audit[0].Actor, audit[0].Detail, audit[0].RunId));
+        Assert.Equal($"metadata only: again (head {head})", audit[1].Detail);
+        Assert.Empty(await store.GetAuditLogAsync(B, Ct));
+        Assert.Null(await store.ExportHistoryAsync(new RunKey(B.TenantId, B.NamespaceId, run.RunId), "mallory", "curious", false, Time.GetUtcNow(), Ct)); // another tenant cannot export it
+        await Assert.ThrowsAnyAsync<ArgumentException>(async () => await store.ExportHistoryAsync(run, "ops", " ", false, Time.GetUtcNow(), Ct)); // no reason, no export
+        await Assert.ThrowsAnyAsync<ArgumentException>(async () => await store.ExportHistoryAsync(run, "", "why", false, Time.GetUtcNow(), Ct));
+        Assert.Equal(2, (await store.GetAuditLogAsync(A, Ct)).Count);
+    }
+
+    [Fact]
     public async Task The_backlog_counts_ready_work_of_this_scope_only()
     {
         (IKairosStore store, KairosClient client) = await NewAsync();

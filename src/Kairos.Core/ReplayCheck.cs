@@ -184,12 +184,19 @@ public sealed class ReplayChecker(WorkflowRegistry candidate, IPayloadProtector?
     }
 
     /// <summary>Replays one history against the candidate.</summary>
-    public async ValueTask<ReplayFinding> CheckAsync(string source, IReadOnlyList<HistoryEvent> history, CancellationToken cancellationToken)
+    public async ValueTask<ReplayFinding> CheckAsync(string source, IReadOnlyList<HistoryEvent> history, CancellationToken cancellationToken) =>
+        (await ReplayAsync(source, history, cancellationToken).ConfigureAwait(false)).Finding;
+
+    /// <summary>
+    /// Replays one history against the candidate and also returns what the code would do next (the commands beyond the recorded history), which is empty for a closed run.
+    /// The workflow code runs once, in this process, so a debugger attached to it stops at its breakpoints in the order the run originally took them.
+    /// </summary>
+    public async ValueTask<(ReplayFinding Finding, ReplayResult? Result)> ReplayAsync(string source, IReadOnlyList<HistoryEvent> history, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(history);
         if (history.Count == 0 || history[0] is not WorkflowStarted started)
         {
-            return new ReplayFinding(source, "", "", ReplayVerdict.Error, history.Count, null, "the history does not begin with WorkflowStarted");
+            return (new ReplayFinding(source, "", "", ReplayVerdict.Error, history.Count, null, "the history does not begin with WorkflowStarted"), null);
         }
 
         string type = started.WorkflowType;
@@ -198,12 +205,12 @@ public sealed class ReplayChecker(WorkflowRegistry candidate, IPayloadProtector?
 
         if (!candidate.TryGet(type, build, out WorkflowFunc? workflow))
         {
-            return Finding(ReplayVerdict.NotCovered, null, "the candidate does not contain this workflow type and build");
+            return (Finding(ReplayVerdict.NotCovered, null, "the candidate does not contain this workflow type and build"), null);
         }
 
         if (history.Count > _options.MaxEvents)
         {
-            return Finding(ReplayVerdict.Error, null, $"the history has {history.Count} events, more than the limit of {_options.MaxEvents}");
+            return (Finding(ReplayVerdict.Error, null, $"the history has {history.Count} events, more than the limit of {_options.MaxEvents}"), null);
         }
 
         try
@@ -212,7 +219,7 @@ public sealed class ReplayChecker(WorkflowRegistry candidate, IPayloadProtector?
         }
         catch (HistoryIntegrityException ex)
         {
-            return Finding(ReplayVerdict.IntegrityFailure, new ReplayDivergence(ex.Sequence, "the stored hash chain", "a different hash"), "the hash chain does not verify");
+            return (Finding(ReplayVerdict.IntegrityFailure, new ReplayDivergence(ex.Sequence, "the stored hash chain", "a different hash"), "the hash chain does not verify"), null);
         }
 
         IReadOnlyList<HistoryEvent> readable = history;
@@ -220,7 +227,7 @@ public sealed class ReplayChecker(WorkflowRegistry candidate, IPayloadProtector?
         {
             if (history.Any(IsSealedText))
             {
-                return Finding(ReplayVerdict.Unreadable, null, "the history is sealed (client-side encryption) but no payload protector is configured");
+                return (Finding(ReplayVerdict.Unreadable, null, "the history is sealed (client-side encryption) but no payload protector is configured"), null);
             }
         }
         else
@@ -231,24 +238,24 @@ public sealed class ReplayChecker(WorkflowRegistry candidate, IPayloadProtector?
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return Finding(ReplayVerdict.Unreadable, null, $"the payloads could not be opened ({ex.GetType().Name})");
+                return (Finding(ReplayVerdict.Unreadable, null, $"the payloads could not be opened ({ex.GetType().Name})"), null);
             }
         }
 
         try
         {
-            _ = WorkflowReplayer.Replay(workflow, readable, verifyHashChain: false);
-            return Finding(ReplayVerdict.Passed, null, "");
+            ReplayResult result = WorkflowReplayer.Replay(workflow, readable, verifyHashChain: false);
+            return (Finding(ReplayVerdict.Passed, null, ""), result);
         }
         catch (NonDeterminismException ex)
         {
             // The structured fields are names, ids and sizes. Older messages carry no structure; they are fixed text built by the engine.
             var divergence = new ReplayDivergence(ex.Sequence, ex.Recorded.Length > 0 ? ex.Recorded : ex.Message, ex.Emitted.Length > 0 ? ex.Emitted : "see recorded");
-            return Finding(ReplayVerdict.Nondeterministic, divergence, "the candidate diverges from the recorded history");
+            return (Finding(ReplayVerdict.Nondeterministic, divergence, "the candidate diverges from the recorded history"), null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return Finding(ReplayVerdict.Error, null, $"the replay failed with {ex.GetType().Name}");
+            return (Finding(ReplayVerdict.Error, null, $"the replay failed with {ex.GetType().Name}"), null);
         }
     }
 

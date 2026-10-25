@@ -6,6 +6,29 @@ namespace Kairos;
 /// </summary>
 public static class StoreRules
 {
+    /// <summary>The audit action written for every history export.</summary>
+    public const string ExportAuditAction = "ExportHistory";
+
+    /// <summary>Longest reason that is recorded. The reason is free text in an audit log: say why, do not paste data.</summary>
+    public const int MaxReasonLength = 500;
+
+    /// <summary>An export always names who and why. Both are required, and the reason has a bound.</summary>
+    public static void ValidateExport(string actor, string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (reason.Length > MaxReasonLength)
+        {
+            throw new ArgumentException($"The reason is longer than {MaxReasonLength} characters.", nameof(reason));
+        }
+    }
+
+    /// <summary>
+    /// The audit detail of an export: the reason (marked when metadata-only) and the hash of the last event exported, which ties a file to this entry.
+    /// </summary>
+    public static string ExportDetail(string reason, bool metadataOnly, IReadOnlyList<HistoryEvent> exported) =>
+        (metadataOnly ? "metadata only: " : "") + reason + " (head " + Convert.ToHexStringLower(exported[^1].Hash) + ")";
+
     /// <summary>The reason recorded when a run would outgrow the history cap without continuing as new.</summary>
     public static string HistoryLimitReason(int max) =>
         $"HistoryLimitExceeded: the run reached the {max}-event history cap without continuing as new.";

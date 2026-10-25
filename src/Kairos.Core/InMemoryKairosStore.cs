@@ -449,6 +449,22 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
+    public ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
+        RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        StoreRules.ValidateExport(actor, reason);
+        lock (_gate)
+        {
+            if (FindRun(run) is not { } r || r.History.Count == 0)
+            {
+                return ValueTask.FromResult<IReadOnlyList<HistoryEvent>?>(null);
+            }
+
+            Scope(run.Scope, create: false)!.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, StoreRules.ExportAuditAction, actor, now, StoreRules.ExportDetail(reason, metadataOnly, r.History)));
+            return ValueTask.FromResult<IReadOnlyList<HistoryEvent>?>([.. r.History]);
+        }
+    }
+
     public ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken)
     {
         lock (_gate)
