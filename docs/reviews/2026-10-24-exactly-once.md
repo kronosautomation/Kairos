@@ -25,7 +25,7 @@ add one (both stores run the same contract tests) or record the gap. The definit
 | B7 | A message delivered twice (callbacks, async invocation) | Signal id de-duplicated per run, inbound events de-duplicated by event id (start by workflow id, signal by event id) | `A_redelivered_signal_id_...`; **new** `Many_deliveries_of_the_same_signal_id_at_once_...`; `The_processor_applies_each_message_once_...`; Toxiproxy `Signals_retried_after_an_unknown_outcome_...` | **Gap closed** (concurrent duplicates were untested) |
 | B8 | Control flow diverges between executions, reusing step numbers for different operations | Replay compares each command with its recorded event; a difference faults the task and appends nothing | Determinism tests, property tests, golden corpus, analyzers KAI001-KAI005 | Covered |
 | B9 | A straggler finishes after the instance was garbage-collected or ended | Completion for a closed or ended run is refused; ending a run removes its tasks and timers | `Failing_a_run_removes_...`; **new** `A_late_activity_result_for_a_run_that_was_ended_changes_nothing` | **Gap closed** (late result after an operator ended the run was untested) |
-| B10 | Lock holder crashes while holding a lock (transactions) | Not applicable: Kairos has no cross-workflow locks. Revisit with sagas (Milestone 4) | n/a | Out of scope until M4 |
+| B10 | Lock holder crashes while holding a lock (transactions) | Not applicable: Kairos has no cross-workflow locks. Revisit with sagas (Milestone 4) | n/a | Sagas landed (M4) without cross-workflow locks, so the case still does not exist; the saga rollback has its own crash matrix, simulation and TLA+ model (`KairosSaga.tla`) |
 | B11 | Child instances' completion is delivered twice to the parent | Not applicable: no child workflows yet. Revisit with child workflows | n/a | Out of scope until children exist |
 
 ## Halfmoon: failure cases
@@ -59,7 +59,8 @@ above; a future change that weakens one of these guarantees now fails a named te
 
 ## Residual risk, tracked
 
-- B10/B11: re-run this checklist when sagas and child workflows land (Milestone 4).
+- B10: sagas have landed without cross-workflow locks, so the case does not arise. Revisit if a lock or a cross-workflow transaction is ever added.
+- B11: re-run this checklist when child workflows land.
 - H2: the reduced-logging experiment (R3) must be checked against this table before any step skips its log record.
 - Asynchronous replication can lose acknowledged commits at failover; the failover drill therefore uses a synchronous replica.
   Operators on asynchronous replication accept that a run may redo its last acknowledged step (the idempotency key keeps the

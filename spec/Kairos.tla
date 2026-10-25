@@ -17,7 +17,7 @@
 (*   I8 fencing           -> ActFencing=TRUE; with FALSE, TLC finds an I2*)
 (*                           violation (KairosUnfenced.cfg)               *)
 (*   I9 bounded/no leaks  -> I9               (sim: I9 store drained)     *)
-(* I11 (compensation) joins this model with sagas in Milestone 4.          *)
+(* I11 (compensation) is modelled separately in KairosSaga.tla.            *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 

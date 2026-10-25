@@ -20,7 +20,7 @@ leases (holder crashed) had no fair expiry, so TLC could stop time. Fixed by spl
 and bounded, unfair `Expire*` (premature, creates zombies). Earlier note: written alongside Milestone 2 but not yet run through TLC (the jar could not be fetched in the authoring
 environment). Treat it as unverified until `check.sh` is green; fix the spec, not the invariants, if TLC disagrees.
 
-Not yet modelled: cancel (not implemented in the engine), compensation / I11 (Milestone 4 sagas), continue-as-new, child workflows.
+Not yet modelled: continue-as-new, child workflows. Cancel and compensation are modelled in `KairosSaga.tla` (below).
 
 ## Reaper model (`KairosReaper.tla`)
 
@@ -40,3 +40,21 @@ operator resumes it). Live-holder expiry (zombies) is unbounded; operator action
 `KairosReaperUnrecordedQuick.cfg` is the mutation: exhausted tasks vanish without a record. TLC must find a run that never resolves.
 Run with the other models: `TLC_MODE=quick|full ./check.sh` (quick: 273k distinct states, seconds; full: two runs and three attempts, nightly).
 Backoff delays are abstracted away (a pending task is offered eventually).
+
+## Saga model (`KairosSaga.tla`)
+
+Models a saga rollback with **no bound on worker crashes**: compensations registered by the forward steps run from the last to the
+first when the body fails, is refused at an approval, or is cancelled. Each compensation is an idempotency-keyed activity, so its effect
+is a set; a worker can die after the effect and before the record (`EffectOnly`), which makes the step run again. Replay rebuilds the plan
+from history, so a crash never loses the rollback.
+
+| Property | Meaning |
+|---|---|
+| `I11` | a rollback that ended undid every registered step, each with its effect applied |
+| `ReverseOrder` | when a step is undone, every later-registered step was undone before it |
+| `RecordedHasEffect` | a recorded compensation has its effect (the I3 relation, for undo steps) |
+| `Completes` (`~>`) | a rollback that began finishes |
+
+Mutations, each of which TLC must reject: `KairosSagaRecordFirstQuick.cfg` (completion recorded without the effect),
+`KairosSagaForwardQuick.cfg` (registration order instead of reverse), `KairosSagaNotResumableQuick.cfg` (a crash abandons the rollback).
+The simulator counterpart is `SagaSimulationTests` (`tests/Kairos.Agents.Tests`), which checks the same properties on real histories.

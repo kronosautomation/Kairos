@@ -30,4 +30,14 @@ if tlc -config "$RMUT" KairosReaper.tla; then
   echo "FAIL: the unrecorded-reaper model passed, so Resolved does not detect lost work"
   exit 1
 fi
+echo "== saga rollback model (no crash bound): I11 reverse order, recorded implies effect, Completes =="
+tlc -config KairosSaga.cfg KairosSaga.tla || { echo "FAIL: the saga model violates a property"; exit 1; }
+
+for MUTATION in KairosSagaRecordFirstQuick.cfg KairosSagaForwardQuick.cfg KairosSagaNotResumableQuick.cfg; do
+  echo "== mutation: $MUTATION, TLC must find a violation =="
+  if tlc -config "$MUTATION" KairosSaga.tla; then
+    echo "FAIL: $MUTATION passed, so the saga properties do not detect it"
+    exit 1
+  fi
+done
 echo "OK: all checks behaved as expected"
