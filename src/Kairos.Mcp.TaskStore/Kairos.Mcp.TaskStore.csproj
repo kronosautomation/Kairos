@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Description>A durable task store for Model Context Protocol servers in C#, backed by Kairos runs: tasks survive restarts and report the status of the work behind them.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Kairos.Core\Kairos.Core.csproj" />
+    <ProjectReference Include="..\Kairos.Agents\Kairos.Agents.csproj" />
+    <PackageReference Include="ModelContextProtocol.Extensions.Tasks" />
+  </ItemGroup>
+
+</Project>

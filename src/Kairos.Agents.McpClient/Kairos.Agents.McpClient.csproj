@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Description>Durable, idempotent Model Context Protocol client steps for Kairos agent workflows: a tool call is recorded once, a long-running remote task is polled across restarts, and risky tools wait for approval.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Kairos.Agents\Kairos.Agents.csproj" />
+    <PackageReference Include="ModelContextProtocol.Extensions.Tasks" />
+  </ItemGroup>
+
+</Project>

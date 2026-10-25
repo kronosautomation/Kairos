@@ -28,3 +28,7 @@
   href: sagas.md
 - name: Testing agents
   href: testing-agents.md
+- name: Durable tasks for MCP servers
+  href: mcp-tasks.md
+- name: Calling MCP tools from an agent
+  href: mcp-client.md

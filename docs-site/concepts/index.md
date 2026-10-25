@@ -18,3 +18,5 @@ Read these in order the first time; each one builds on the one before.
 | [Approvals](approvals.md) | Waiting durably for a named person, and recording who decided. |
 | [Sagas and compensation](sagas.md) | Undoing earlier steps in reverse when a later one fails, surviving crashes mid-rollback. |
 | [Testing agents](testing-agents.md) | Recorded model fixtures, scripted models and what to assert. |
+| [Durable tasks for MCP servers](mcp-tasks.md) | A task store for any C# MCP server whose tasks survive restarts, backed by Kairos runs. |
+| [Calling MCP tools from an agent](mcp-client.md) | MCP tool calls as recorded, idempotent steps; long calls polled across restarts. |

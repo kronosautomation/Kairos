@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Kairos.Hosting\Kairos.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Worker\Kairos.Worker.csproj" />
+    <ProjectReference Include="..\..\src\Kairos.Mcp.TaskStore\Kairos.Mcp.TaskStore.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Cloud.SelfHosted\Kairos.Cloud.SelfHosted.csproj" />
     <ProjectReference Include="..\Kairos.Testing\Kairos.Testing.csproj" />
     <PackageReference Include="Testcontainers.PostgreSql" />

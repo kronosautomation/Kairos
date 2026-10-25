@@ -34,6 +34,14 @@
         "resolved": "18.11.0",
         "contentHash": "MhN9wpvL1Es4hfIYslrsVgIsUdDFxuOBTbAl9mGIMvFo8PP5CLf4DrGdNrfwWSyn0lqi6sssm+I/qkkLL3MU+g=="
       },
+      "Microsoft.Extensions.Caching.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.0.13",
+        "contentHash": "UOJqcdNMoFcV/5RUcOlVKq9pPmbrcmbpLx5iYz9QtrmMcWRQzlL5Q/NZRfbPPLNyIEc1HWjjs5Z7nIwqewU1sg==",
+        "dependencies": {
+          "Microsoft.Extensions.Primitives": "10.0.13"
+        }
+      },
       "Microsoft.Extensions.Configuration.Abstractions": {
         "type": "Transitive",
         "resolved": "10.0.13",
@@ -99,6 +107,15 @@
           "Microsoft.TestPlatform.ObjectModel": "18.11.0"
         }
       },
+      "ModelContextProtocol.Core": {
+        "type": "Transitive",
+        "resolved": "2.3.0",
+        "contentHash": "EDpbQholhVWoNumb0Ab3oGv9LmXOLgaD5ixEIUkrnzpnqD0TJCSHTJ5G71/J1KlrQ98aWDclWTPMffKTnCJoMw==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.11.0",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.13"
+        }
+      },
       "xunit.abstractions": {
         "type": "Transitive",
         "resolved": "2.0.3",
@@ -143,7 +160,10 @@
         "type": "Project",
         "dependencies": {
           "Kairos.Agents": "[1.0.0, )",
-          "Kairos.Hosting": "[1.0.0, )"
+          "Kairos.Agents.McpClient": "[1.0.0, )",
+          "Kairos.Hosting": "[1.0.0, )",
+          "Kairos.Mcp.TaskStore": "[1.0.0, )",
+          "ModelContextProtocol": "[2.3.0, )"
         }
       },
       "kairos.abstractions": {
@@ -154,6 +174,13 @@
         "dependencies": {
           "Kairos.Core": "[1.0.0, )",
           "Microsoft.Extensions.AI.Abstractions": "[10.11.0, )"
+        }
+      },
+      "kairos.agents.mcpclient": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Agents": "[1.0.0, )",
+          "ModelContextProtocol.Extensions.Tasks": "[2.3.0, )"
         }
       },
       "kairos.core": {
@@ -170,6 +197,14 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.13, )",
           "Microsoft.Extensions.Diagnostics.HealthChecks": "[10.0.13, )",
           "Microsoft.Extensions.Hosting.Abstractions": "[10.0.13, )"
+        }
+      },
+      "kairos.mcp.taskstore": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Agents": "[1.0.0, )",
+          "Kairos.Core": "[1.0.0, )",
+          "ModelContextProtocol.Extensions.Tasks": "[2.3.0, )"
         }
       },
       "kairos.persistence.postgres": {
@@ -222,6 +257,26 @@
           "Microsoft.Extensions.Diagnostics.Abstractions": "10.0.13",
           "Microsoft.Extensions.FileProviders.Abstractions": "10.0.13",
           "Microsoft.Extensions.Logging.Abstractions": "10.0.13"
+        }
+      },
+      "ModelContextProtocol": {
+        "type": "CentralTransitive",
+        "requested": "[2.3.0, )",
+        "resolved": "2.3.0",
+        "contentHash": "PHZ0q8xTAoysqUKpA5gC0RGJSfwpZhfsNz+9Sw0X0RzFFVHjIE52sx6C+ogMn+LSE+FfiYiNscPJhM6q6DMT6Q==",
+        "dependencies": {
+          "Microsoft.Extensions.Caching.Abstractions": "10.0.13",
+          "Microsoft.Extensions.Hosting.Abstractions": "10.0.13",
+          "ModelContextProtocol.Core": "[2.3.0]"
+        }
+      },
+      "ModelContextProtocol.Extensions.Tasks": {
+        "type": "CentralTransitive",
+        "requested": "[2.3.0, )",
+        "resolved": "2.3.0",
+        "contentHash": "ixSXGwg+RcnPSbH+Xn7EoFxnzs3NgNbiL+jK/Unq3cpVYtcXlS/wz5DvBPa7Drc1B8/QM4gfrMCGz/XIbu/zYQ==",
+        "dependencies": {
+          "ModelContextProtocol": "[2.3.0]"
         }
       },
       "Npgsql": {
