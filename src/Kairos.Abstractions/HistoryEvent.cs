@@ -136,6 +136,12 @@ public sealed record ActivityFailed(
     : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.ActivityFailed;
+
+    /// <summary>
+    /// What the failed attempt consumed before it failed, when the activity reported it (null otherwise, and always null for the lease-expiry record the store writes itself).
+    /// A call that was paid for and then failed is still spent; recording it here keeps retried attempts from being invisible.
+    /// </summary>
+    public UsageRecord? Usage { get; init; }
 }
 
 public sealed record TimerStarted(

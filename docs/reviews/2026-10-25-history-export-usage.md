@@ -34,9 +34,24 @@ Written 25 Oct 2026. Internal. Plan: `docs/OBSERVABILITY-PLAN.md`. Public page: 
   with sealed payloads). A continued run reports its own history only.
 - Pricing tables, budgets and cost views stay in Kairos.Agents.Policies (Pro); they apply a price table to these figures, so prices can change without touching history.
 
+## Follow-up review fixes
+
+- **Audit identity is not self-asserted.** `AuditEntry` gains `SessionUser` and `ClientAddress` (PostgreSQL `session_user` and `host(inet_client_addr())`, written in the INSERT,
+  migration `0006`), `ClaimedActor` (the supplied name, labelled a claim) and `VerifiedPrincipal`. For exports, `Actor` is the verified principal when `KairosClient.ExportHistoryAsync`
+  was given one that an authenticator verified, otherwise `db:<session_user>`; it is never the supplied name. The CLI uses `HistoryExporter.ExportClaimedAsync`, whose `--actor` only
+  becomes `ClaimedActor`. Tested in both stores, in the CLI, and end to end against PostgreSQL (`--actor ceo@example.com` records `kairos_dataplane` and a client address).
+  `session_user` is used, not `current_user`: `SET ROLE` does not change it. All other audit inserts (resume, fail) also record the database facts; their `Actor` is still the supplied
+  name (open item below).
+- **Usage on failed attempts.** `ActivityFailed` carries the same optional trailing `UsageRecord`; the worker records what the attempt reported before it failed. `RunUsage` keeps the
+  completed-step figures as they were and adds `Failed` (attempts and tokens spent on failed attempts) and `Total`, overall and per model. New golden entry
+  `v2/usage-failed-attempt.khist`; the existing corpus files are untouched.
+
 ## Open items
 
-- Failed attempts' tokens are not recorded; a budget based on this undercounts retried calls. A separate record for failed attempts would need its own event field.
+- `Principal` is a plain record, so "verified" is a contract (it must come from an authenticator), not something the type enforces. `ExportAsync(Principal)` documents it; a signed principal would enforce it.
+- Resume and fail-run audit entries still use the caller-supplied name as `Actor` (their database facts are recorded beside it).
+- A failed attempt that never reports usage (the client threw before a response arrived) cannot be counted; the provider may still have charged for it.
+
 - Usage across a continue-as-new chain is per run; a chain total needs the run listing joined on workflow id.
 - Reasoning tokens are not recorded (the plan names input, output, cached).
 - Export of very large histories is in memory.

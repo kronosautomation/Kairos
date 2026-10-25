@@ -15,10 +15,11 @@ public sealed record HistoryExport(RunKey Run, IReadOnlyList<HistoryEvent> Histo
 public static class HistoryExporter
 {
     /// <summary>
-    /// Exports <paramref name="run"/> as <paramref name="caller"/>.
+    /// Exports <paramref name="run"/> for a <b>verified</b> principal: one an authenticator returned (<see cref="IWorkerAuthenticator"/>), not one built from what a user typed.
+    /// The audit entry names that principal.
     /// </summary>
     /// <param name="store">The store holding the run.</param>
-    /// <param name="caller">Who is exporting. Their role must allow <see cref="Operation.ExportHistory"/> in the run's scope (operator and above).</param>
+    /// <param name="caller">The authenticated caller. Their role must allow <see cref="Operation.ExportHistory"/> in the run's scope (operator and above).</param>
     /// <param name="run">The run to export.</param>
     /// <param name="reason">Why. Required, recorded in the audit log, at most <see cref="StoreRules.MaxReasonLength"/> characters. Say why; do not paste data.</param>
     /// <param name="metadataOnly">Remove payloads (and failure texts) from the file. What remains is event types, sequence, names, ids and timestamps, plus a digest of each removed field; the file is tamper-evident through a digest chain but cannot be replayed.</param>
@@ -32,16 +33,40 @@ public static class HistoryExporter
     public static async Task<HistoryExport?> ExportAsync(
         IKairosStore store, Principal caller, RunKey run, string reason, bool metadataOnly, TimeProvider time, string recordedBy = "export", CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(caller);
-        ArgumentNullException.ThrowIfNull(time);
         if (!AccessPolicy.IsAllowed(caller, Operation.ExportHistory, run.Scope))
         {
             throw new UnauthorizedAccessException($"A {caller.Role} may not export histories in this namespace.");
         }
 
-        StoreRules.ValidateExport(caller.Subject, reason);
-        IReadOnlyList<HistoryEvent>? stored = await store.ExportHistoryAsync(run, caller.Subject, reason, metadataOnly, time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+        return await ExportCoreAsync(store, caller.Subject, $"{caller.Role}:{caller.Subject}", run, reason, metadataOnly, time, recordedBy, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Exports <paramref name="run"/> for someone who only <i>says</i> who they are (a command line option). There is no principal to check, so the role matrix is not applied:
+    /// the credential is the database connection, which must be allowed to write the audit log. The audit entry names the database login and client address the database saw,
+    /// never <paramref name="claimedActor"/>, which is stored apart and labelled as claimed.
+    /// </summary>
+    /// <param name="store">The store holding the run.</param>
+    /// <param name="claimedActor">The name the person gave. Recorded as <see cref="AuditEntry.ClaimedActor"/> only.</param>
+    /// <param name="run">The run to export.</param>
+    /// <param name="reason">Why. Required.</param>
+    /// <param name="metadataOnly">Remove payloads.</param>
+    /// <param name="time">The clock stamped into the audit entry.</param>
+    /// <param name="recordedBy">A tag written into the file header.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    public static Task<HistoryExport?> ExportClaimedAsync(
+        IKairosStore store, string claimedActor, RunKey run, string reason, bool metadataOnly, TimeProvider time, string recordedBy = "export", CancellationToken cancellationToken = default) =>
+        ExportCoreAsync(store, claimedActor, null, run, reason, metadataOnly, time, recordedBy, cancellationToken);
+
+    private static async Task<HistoryExport?> ExportCoreAsync(
+        IKairosStore store, string claimedActor, string? verifiedPrincipal, RunKey run, string reason, bool metadataOnly, TimeProvider time, string recordedBy, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(time);
+        StoreRules.ValidateExport(claimedActor, reason);
+        IReadOnlyList<HistoryEvent>? stored = await store.ExportHistoryAsync(run, claimedActor, verifiedPrincipal, reason, metadataOnly, time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
         if (stored is null)
         {
             return null;

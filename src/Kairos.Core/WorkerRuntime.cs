@@ -208,6 +208,7 @@ public sealed class WorkerRuntime
             }
         }
 
+        ActivityContext? attemptContext = null;
         Task? autoBeat = _options.AutoHeartbeat ? AutoHeartbeatAsync(Beat, lease / 3, attemptCts.Token) : null;
         try
         {
@@ -217,6 +218,7 @@ public sealed class WorkerRuntime
             }
 
             var context = new ActivityContext(r, task.ActivityId, task.ActivityType, task.Attempt, task.IdempotencyKey) { Heartbeat = Beat };
+            attemptContext = context;
             byte[] input = _crypto is null
                 ? task.Input
                 : await _crypto.OpenAsync(r.Scope, r.RunId, "act-in", task.ActivityId, task.Input, attemptCts.Token).ConfigureAwait(false);
@@ -247,7 +249,7 @@ public sealed class WorkerRuntime
 
             bool retry = ex is not ActivityNotRegisteredException && task.RetryPolicy.ShouldRetry(task.Attempt, errorType);
             DateTimeOffset stamp = _time.GetUtcNow();
-            outcome = new ActivityFailed(r.TenantId, r.NamespaceId, r.RunId, 0, stamp, task.ActivityId, task.Attempt, errorType, ex.Message, retry);
+            outcome = new ActivityFailed(r.TenantId, r.NamespaceId, r.RunId, 0, stamp, task.ActivityId, task.Attempt, errorType, ex.Message, retry) { Usage = attemptContext?.Usage };
             retryAt = retry ? stamp + task.RetryPolicy.GetBackoff(task.Attempt) : null;
             attemptOutcome = retry ? "retry" : "failed";
             KairosTelemetry.Fail(span, errorType); // the type only: a message can quote a payload

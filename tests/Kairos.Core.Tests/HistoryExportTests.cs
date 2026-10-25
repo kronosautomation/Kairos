@@ -39,8 +39,38 @@ public sealed class HistoryExportTests
         Assert.False(loaded.MetadataOnly);
         Assert.Equal(export.History.Count, loaded.History.Count);
         AuditEntry entry = Assert.Single(await engine.Store.GetAuditLogAsync(Scope, default));
-        Assert.Equal(("ExportHistory", "ops@example.com", run.RunId), (entry.Action, entry.Actor, entry.RunId));
+        Assert.Equal(("ExportHistory", "Operator:ops@example.com", "Operator:ops@example.com", run.RunId), (entry.Action, entry.Actor, entry.VerifiedPrincipal, entry.RunId));
         Assert.Equal($"ticket 4411: customer says the charge was doubled (head {loaded.HeadHash})", entry.Detail); // the audit entry names the last event: the file is tied to the system
+    }
+
+    [Fact]
+    public async Task The_client_exports_for_a_verified_principal_and_the_audit_entry_names_that_principal()
+    {
+        (TestEngine engine, RunKey run) = await RecordAsync();
+        var client = new KairosClient(engine.Store, engine.Time);
+
+        HistoryExport? export = await client.ExportHistoryAsync(Operator, run, "via the client");
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(async () => await client.ExportHistoryAsync(new Principal(Scope, Role.Reader, "r", null), run, "no"));
+
+        Assert.NotNull(export);
+        AuditEntry entry = Assert.Single(await engine.Store.GetAuditLogAsync(Scope, default));
+        Assert.Equal(("Operator:ops@example.com", "Operator:ops@example.com"), (entry.Actor, entry.VerifiedPrincipal));
+        Assert.Equal(InMemoryKairosStore.SessionUserName, entry.SessionUser);
+    }
+
+    [Fact]
+    public async Task A_claimed_name_cannot_change_who_the_audit_log_says_exported()
+    {
+        (TestEngine engine, RunKey run) = await RecordAsync();
+
+        await HistoryExporter.ExportClaimedAsync(engine.Store, "ops@example.com", run, "first", false, engine.Time);
+        await HistoryExporter.ExportClaimedAsync(engine.Store, "ceo@example.com", run, "second", false, engine.Time);
+        await HistoryExporter.ExportClaimedAsync(engine.Store, "Operator:alice", run, "third, claiming to be a verified principal", false, engine.Time);
+
+        IReadOnlyList<AuditEntry> audit = await engine.Store.GetAuditLogAsync(Scope, default);
+        Assert.Equal(3, audit.Count);
+        Assert.All(audit, e => Assert.Equal(("db:in-memory", "in-memory", null), (e.Actor, e.SessionUser, e.VerifiedPrincipal)));
+        Assert.Equal(["ops@example.com", "ceo@example.com", "Operator:alice"], audit.Select(e => e.ClaimedActor));
     }
 
     [Theory]
@@ -256,9 +286,9 @@ public sealed class HistoryExportTests
     private sealed class TamperingStore(IKairosStore inner) : ForwardingStore(inner)
     {
         public override async ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
-            RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
+            RunKey run, string claimedActor, string? verifiedPrincipal, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
         {
-            IReadOnlyList<HistoryEvent>? real = await base.ExportHistoryAsync(run, actor, reason, metadataOnly, now, cancellationToken);
+            IReadOnlyList<HistoryEvent>? real = await base.ExportHistoryAsync(run, claimedActor, verifiedPrincipal, reason, metadataOnly, now, cancellationToken);
             if (real is null)
             {
                 return null;

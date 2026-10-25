@@ -159,6 +159,14 @@ public sealed class KairosClient
     public async ValueTask<RunUsage> GetUsageAsync(RunKey run, CancellationToken cancellationToken = default) =>
         RunUsage.From(await _store.GetHistoryAsync(run, cancellationToken).ConfigureAwait(false));
 
+    /// <summary>
+    /// Exports a run's history for a <b>verified</b> principal (see <see cref="HistoryExporter.ExportAsync"/>): operator or above in the run's namespace, a reason, one audited step.
+    /// The audit entry names the principal; the database login and address come from the database. Null when the run does not exist in the principal's scope.
+    /// </summary>
+    public async Task<HistoryExport?> ExportHistoryAsync(
+        Principal verifiedPrincipal, RunKey run, string reason, bool metadataOnly = false, CancellationToken cancellationToken = default) =>
+        await HistoryExporter.ExportAsync(_store, verifiedPrincipal, run, reason, metadataOnly, _time, "client", cancellationToken).ConfigureAwait(false);
+
     public ValueTask<RunState?> GetStateAsync(RunKey run, CancellationToken cancellationToken = default) =>
         _store.GetRunStateAsync(run, cancellationToken);
 

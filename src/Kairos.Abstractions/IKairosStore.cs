@@ -34,7 +34,23 @@ public enum CompletionOutcome
 public sealed record StuckWorkflowTask(RunKey Run, string WorkflowType, string BuildId, int Attempts);
 
 /// <summary>One privileged action (resume, fail run). Append-only.</summary>
-public sealed record AuditEntry(Guid TenantId, Guid NamespaceId, Guid? RunId, string Action, string Actor, DateTimeOffset At, string Detail);
+public sealed record AuditEntry(Guid TenantId, Guid NamespaceId, Guid? RunId, string Action, string Actor, DateTimeOffset At, string Detail)
+{
+    /// <summary>
+    /// The database login the store connected as, recorded by the database itself (PostgreSQL <c>session_user</c>), never by the caller. Together with
+    /// <see cref="ClientAddress"/> this is who actually did it; <see cref="Actor"/> is the caller's own word for entries that are not exports.
+    /// </summary>
+    public string? SessionUser { get; init; }
+
+    /// <summary>The network address the database saw the connection come from (<c>inet_client_addr()</c>), or null for a local connection.</summary>
+    public string? ClientAddress { get; init; }
+
+    /// <summary>The name the caller asked to be recorded under (for example <c>--actor</c>). <b>Claimed, not verified</b>; kept only so a reader can see what was claimed.</summary>
+    public string? ClaimedActor { get; init; }
+
+    /// <summary>The authenticated principal, when the export went through a client given one that an authenticator verified (<c>role:subject</c>); null otherwise.</summary>
+    public string? VerifiedPrincipal { get; init; }
+}
 
 /// <summary>Everything needed to start a run.</summary>
 /// <param name="Run">The new run's identity (tenant, namespace and a fresh run id).</param>
@@ -186,11 +202,14 @@ public interface IKairosStore
         throw new NotSupportedException("This store cannot list runs.");
 
     /// <summary>
-    /// Reads a run's whole history for export and, in the same transaction, appends an audit entry (<c>ExportHistory</c>) naming <paramref name="actor"/> and
-    /// <paramref name="reason"/>. Null (and nothing audited) when the run does not exist in this scope. The caller is responsible for authorizing the actor
+    /// Reads a run's whole history for export and, in the same transaction, appends an audit entry (<c>ExportHistory</c>) with the <paramref name="reason"/> and who did it.
+    /// <b>Who is never taken from the caller.</b> The entry's <see cref="AuditEntry.Actor"/> is <paramref name="verifiedPrincipal"/> when the caller was authenticated, and otherwise
+    /// the store's own view of the connection (<c>db:</c> plus the database login); <see cref="AuditEntry.SessionUser"/> and <see cref="AuditEntry.ClientAddress"/> are written by the
+    /// database. <paramref name="claimedActor"/> is stored apart, as <see cref="AuditEntry.ClaimedActor"/>. Null (and nothing audited) when the run does not exist in this scope. The caller is responsible for authorizing the actor
     /// (<c>Operation.ExportHistory</c>); the store records who and why and returns the history exactly as stored (ciphertext when encryption is on).
     /// </summary>
-    ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken) =>
+    ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
+        RunKey run, string claimedActor, string? verifiedPrincipal, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This store cannot export histories.");
 
     /// <summary>Counts of ready work in this scope, for queue-depth metrics. Null when the store cannot say (the default).</summary>

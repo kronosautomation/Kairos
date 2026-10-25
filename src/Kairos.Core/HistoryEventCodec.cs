@@ -54,8 +54,7 @@ public static class HistoryEventCodec
             HistoryEventType.PatchMarker => new PatchMarker(tenant, ns, run, seq, ts, r.ReadString()),
             HistoryEventType.ActivityScheduled => ReadScheduled(ref r, tenant, ns, run, seq, ts),
             HistoryEventType.ActivityCompleted => ReadCompleted(ref r, tenant, ns, run, seq, ts),
-            HistoryEventType.ActivityFailed => new ActivityFailed(
-                tenant, ns, run, seq, ts, r.ReadInt32(), r.ReadInt32(), r.ReadString(), r.ReadString(), r.ReadByte() != 0),
+            HistoryEventType.ActivityFailed => ReadFailed(ref r, tenant, ns, run, seq, ts),
             HistoryEventType.TimerStarted => new TimerStarted(tenant, ns, run, seq, ts, r.ReadInt32(), TimeSpan.FromTicks(r.ReadInt64())),
             HistoryEventType.RunTerminated => new RunTerminated(tenant, ns, run, seq, ts, r.ReadString()),
             HistoryEventType.WorkflowTaskCompleted => new WorkflowTaskCompleted(tenant, ns, run, seq, ts),
@@ -141,20 +140,24 @@ public static class HistoryEventCodec
     {
         int id = r.ReadInt32();
         byte[] result = r.ReadBytes();
-        UsageRecord? usage = null;
-        if (!r.AtEnd)
-        {
-            long input = r.ReadInt64(), output = r.ReadInt64(), cached = r.ReadInt64();
-            string model = r.ReadString();
-            if (input < 0 || output < 0 || cached < 0 || cached > input || model.Length > UsageRecord.MaxModelLength)
-            {
-                throw new FormatException("Invalid usage record.");
-            }
+        return new ActivityCompleted(tenant, ns, run, seq, ts, id, result) { Usage = r.AtEnd ? null : ReadUsage(ref r) };
+    }
 
-            usage = new UsageRecord(input, output, cached, model);
-        }
+    private static ActivityFailed ReadFailed(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)
+    {
+        int id = r.ReadInt32(), attempt = r.ReadInt32();
+        string type = r.ReadString(), message = r.ReadString();
+        bool retry = r.ReadByte() != 0;
+        return new ActivityFailed(tenant, ns, run, seq, ts, id, attempt, type, message, retry) { Usage = r.AtEnd ? null : ReadUsage(ref r) };
+    }
 
-        return new ActivityCompleted(tenant, ns, run, seq, ts, id, result) { Usage = usage };
+    private static UsageRecord ReadUsage(ref Reader r)
+    {
+        long input = r.ReadInt64(), output = r.ReadInt64(), cached = r.ReadInt64();
+        string model = r.ReadString();
+        return input < 0 || output < 0 || cached < 0 || cached > input || model.Length > UsageRecord.MaxModelLength
+            ? throw new FormatException("Invalid usage record.")
+            : new UsageRecord(input, output, cached, model);
     }
 
     private static string ReadTrace(ref Reader r)

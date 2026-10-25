@@ -12,9 +12,12 @@ kairos history export 3f2a9c1e-8d4b-4c47-9a10-5b7e6d2f0a11 --reason "reproduce t
 
 - **Operators only.** Exporting needs the operator role or above in the run's namespace. The command connects with a data-plane
   database role, because an export is always recorded; a read-only role cannot export.
-- **A reason is required**, up to 500 characters. It is written to the audit log with your name (`--actor`, or `KAIROS_ACTOR`, or your
-  user name) in the same transaction that reads the history, together with the hash of the last event exported. There is no export
-  without an audit entry. Say why; do not paste data into it.
+- **A reason is required**, up to 500 characters. It is written to the audit log in the same transaction that reads the history, together
+  with the hash of the last event exported. There is no export without an audit entry. Say why; do not paste data into it.
+- **Who exported is not something you can type.** The audit entry names the database login the server authenticated and the network
+  address it saw the connection come from, both written by the database itself. The name you give with `--actor` (or `KAIROS_ACTOR`) is
+  stored beside it, labelled as a claim, and changes nothing else. When an export goes through `KairosClient.ExportHistoryAsync` with a
+  principal that an authenticator verified, the entry names that principal instead.
 - **The file is verified before it is written.** If the stored history does not verify, no file is produced (the attempt is still
   recorded).
 - **Payloads stay sealed.** The file holds the history exactly as the database does: with client-side encryption on, ciphertext only.
@@ -59,6 +62,8 @@ regression test.
 
 Model steps record the tokens they consumed in their own history event: input, output and cached input tokens, and the model that
 answered. The figures are readable metadata, so they can be read without a key, and because they live in the event, replaying a run
-never counts a step twice. Only the attempt that completed a step is counted; an attempt that failed and was retried is not.
+never counts a step twice. An attempt that consumed tokens and then failed (a reply that could not be used, say) records its usage on the
+failure event, and the run reports it **apart** from the completed steps, so waste is visible and the total consumed is still the sum.
+An attempt that reports nothing, and an attempt that was cancelled or whose lease was lost before it finished, records nothing.
 
 [!code-csharp[](../../samples/Concepts.Tests/ReplayLocallyTests.cs#run-usage)]

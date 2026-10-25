@@ -1164,7 +1164,8 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         {
             await using NpgsqlBatch batch = Batch(scope);
             NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
-            cmd.CommandText = "SELECT run_id, action, actor, at, detail FROM kairos.audit_log WHERE tenant_id = @t AND namespace_id = @n ORDER BY id";
+            cmd.CommandText =
+                "SELECT run_id, action, actor, at, detail, session_user_name, client_addr, claimed_actor, verified_principal FROM kairos.audit_log WHERE tenant_id = @t AND namespace_id = @n ORDER BY id";
             Scope(cmd, scope);
             batch.BatchCommands.Add(cmd);
             await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -1176,23 +1177,41 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             {
                 entries.Add(new AuditEntry(
                     scope.TenantId, scope.NamespaceId, reader.IsDBNull(0) ? null : reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
-                    new DateTimeOffset(reader.GetDateTime(3), TimeSpan.Zero), reader.GetString(4)));
+                    new DateTimeOffset(reader.GetDateTime(3), TimeSpan.Zero), reader.GetString(4))
+                {
+                    SessionUser = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    ClientAddress = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    ClaimedActor = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    VerifiedPrincipal = reader.IsDBNull(8) ? null : reader.GetString(8),
+                });
             }
 
             return entries;
         }).ConfigureAwait(false);
     }
 
-    private static async Task AuditAsync(NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, string action, string actor, DateTimeOffset at, string detail, CancellationToken ct)
+    /// <summary>
+    /// Appends an audit entry. The database login and client address are written by the database in this statement (<c>session_user</c>, <c>inet_client_addr()</c>): nothing the
+    /// caller passes can change them. <paramref name="actor"/> is whatever the caller asserted, except for exports, which pass a verified principal or null (then the entry names
+    /// the database login itself).
+    /// </summary>
+    private static async Task AuditAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, string action, string? actor, DateTimeOffset at, string detail, CancellationToken ct,
+        string? claimedActor = null, string? verifiedPrincipal = null)
     {
         await using var cmd = new NpgsqlCommand(
-            "INSERT INTO kairos.audit_log (tenant_id, namespace_id, run_id, at, action, actor, detail) VALUES (@t, @n, @r, @at, @action, @actor, @detail)", conn, tx);
+            """
+            INSERT INTO kairos.audit_log (tenant_id, namespace_id, run_id, at, action, actor, detail, session_user_name, client_addr, claimed_actor, verified_principal)
+            VALUES (@t, @n, @r, @at, @action, COALESCE(@actor, 'db:' || session_user), @detail, session_user, host(inet_client_addr()), @claimed, @verified)
+            """, conn, tx);
+        cmd.Parameters.Add(new NpgsqlParameter("actor", NpgsqlDbType.Text) { Value = (object?)actor ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter("claimed", NpgsqlDbType.Text) { Value = (object?)claimedActor ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter("verified", NpgsqlDbType.Text) { Value = (object?)verifiedPrincipal ?? DBNull.Value });
         cmd.Parameters.AddWithValue("t", run.TenantId);
         cmd.Parameters.AddWithValue("n", run.NamespaceId);
         cmd.Parameters.AddWithValue("r", run.RunId);
         cmd.Parameters.Add(Ts("at", at));
         cmd.Parameters.AddWithValue("action", action);
-        cmd.Parameters.AddWithValue("actor", actor);
         cmd.Parameters.AddWithValue("detail", detail);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -1330,9 +1349,9 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
     }
 
     public async ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
-        RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
+        RunKey run, string claimedActor, string? verifiedPrincipal, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        StoreRules.ValidateExport(actor, reason);
+        StoreRules.ValidateExport(claimedActor, reason);
         return await InTransaction<IReadOnlyList<HistoryEvent>?>(run.Scope, async (conn, tx) =>
         {
             var history = new List<HistoryEvent>();
@@ -1355,7 +1374,9 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             }
 
             // Read and record in one transaction: there is no export without an audit entry, and no audit entry for a read that failed.
-            await AuditAsync(conn, tx, run, StoreRules.ExportAuditAction, actor, now, StoreRules.ExportDetail(reason, metadataOnly, history), cancellationToken).ConfigureAwait(false);
+            await AuditAsync(
+                conn, tx, run, StoreRules.ExportAuditAction, verifiedPrincipal, now, StoreRules.ExportDetail(reason, metadataOnly, history), cancellationToken,
+                claimedActor, verifiedPrincipal).ConfigureAwait(false);
             return history;
         }, cancellationToken).ConfigureAwait(false);
     }

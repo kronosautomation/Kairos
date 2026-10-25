@@ -130,9 +130,13 @@ public sealed class ReplayCheckOnPostgresTests(PostgresFixture fixture)
             Assert.True(exit == 0, output + error);
 
             AuditEntry entry = Assert.Single(await store.GetAuditLogAsync(Scope, default));
-            Assert.Equal(("ExportHistory", "dev@example.com", start.RunId), (entry.Action, entry.Actor, entry.RunId));
+            Assert.Equal(("ExportHistory", start.RunId), (entry.Action, entry.RunId));
             HistoryFileContents loaded = HistoryFile.ParseVerified(await File.ReadAllTextAsync(file));
             Assert.Equal($"reproduce ticket 4411 (head {loaded.HeadHash})", entry.Detail);
+
+            // Who is written by the database: the login it authenticated and the address it saw. The name given with --actor is kept apart as a claim.
+            Assert.Equal(("kairos_dataplane", "db:kairos_dataplane", "dev@example.com", null), (entry.SessionUser, entry.Actor, entry.ClaimedActor, entry.VerifiedPrincipal));
+            Assert.False(string.IsNullOrEmpty(entry.ClientAddress));
 
             // The file replays on a developer machine against local code, with the recorded results; a moved step is reported like replay-check reports it.
             Assert.True((await KairosReplayer.ReplayAsync(file, PgOrders.Original)).Succeeded);
@@ -152,6 +156,14 @@ public sealed class ReplayCheckOnPostgresTests(PostgresFixture fixture)
             Assert.Contains("digest chain verified", verifyOut, StringComparison.Ordinal);
             Assert.DoesNotContain(Canary, await File.ReadAllTextAsync(metadata), StringComparison.Ordinal);
             Assert.Equal(2, (await store.GetAuditLogAsync(Scope, default)).Count);
+
+            // Claiming to be someone else changes only the claim.
+            string third = Path.Combine(dir, "third.khist");
+            (int thirdExit, _, _) = await KairosAsync(
+                db.DataPlaneConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "pretending", "--out", third, "--actor", "ceo@example.com", .. scope]);
+            Assert.Equal(0, thirdExit);
+            AuditEntry pretend = (await store.GetAuditLogAsync(Scope, default))[^1];
+            Assert.Equal((entry.SessionUser, entry.Actor, entry.ClientAddress.Length > 0, "ceo@example.com"), (pretend.SessionUser, pretend.Actor, pretend.ClientAddress is { Length: > 0 }, pretend.ClaimedActor));
         }
         finally
         {

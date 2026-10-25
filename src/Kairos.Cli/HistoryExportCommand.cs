@@ -16,7 +16,7 @@ internal sealed record HistoryExportArguments
 
     public bool MetadataOnly { get; init; }
 
-    /// <summary>Who is exporting, as recorded in the audit log.</summary>
+    /// <summary>The name the person gives. Recorded as a claim only: the audit log identifies the exporter by the database login and address.</summary>
     public string Actor { get; init; } = "";
 
     public TenantScope Scope { get; init; } = KairosOptions.DefaultScope;
@@ -128,13 +128,12 @@ internal static class HistoryExportCommand
                 store = new PostgresKairosStore(owned);
             }
 
-            // The database role is the credential here. The command acts as an operator in the scope it was given; a server that authenticates people enforces the role matrix itself.
-            var caller = new Principal(args.Scope, Role.Operator, args.Actor, null);
+            // The database role is the credential here, and the audit entry names it (login and address come from the database). --actor is only recorded, as a claim.
             HistoryExport? export;
             try
             {
-                export = await HistoryExporter.ExportAsync(
-                    store, caller, new RunKey(args.Scope.TenantId, args.Scope.NamespaceId, args.Run), args.Reason, args.MetadataOnly, time, "cli", cancellationToken).ConfigureAwait(false);
+                export = await HistoryExporter.ExportClaimedAsync(
+                    store, args.Actor, new RunKey(args.Scope.TenantId, args.Scope.NamespaceId, args.Run), args.Reason, args.MetadataOnly, time, "cli", cancellationToken).ConfigureAwait(false);
             }
             catch (HistoryIntegrityException ex)
             {
@@ -165,7 +164,7 @@ internal static class HistoryExportCommand
 
             await File.WriteAllTextAsync(path, export.FileText, cancellationToken).ConfigureAwait(false);
             await stdout.WriteLineAsync(
-                $"Exported {export.History.Count} events of run {args.Run:D} to {path}{(export.MetadataOnly ? " (metadata only)" : "")}. Recorded in the audit log as {args.Actor}.").ConfigureAwait(false);
+                $"Exported {export.History.Count} events of run {args.Run:D} to {path}{(export.MetadataOnly ? " (metadata only)" : "")}. Recorded in the audit log under the database login and address the server saw; the name you gave ({args.Actor}) is stored beside it as a claim.").ConfigureAwait(false);
             if (export.MetadataOnly)
             {
                 await stdout.WriteLineAsync("Metadata only: payloads are removed and the file cannot be replayed. It is tamper-evident through a digest chain over the metadata and the digests of what was removed.").ConfigureAwait(false);

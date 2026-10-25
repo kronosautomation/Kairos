@@ -182,8 +182,8 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
         Faulty(nameof(GetRunGroupsAsync), () => inner.GetRunGroupsAsync(scope, closedSince, cancellationToken));
 
     public ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
-        RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken) =>
-        Faulty(nameof(ExportHistoryAsync), () => inner.ExportHistoryAsync(run, actor, reason, metadataOnly, now, cancellationToken));
+        RunKey run, string claimedActor, string? verifiedPrincipal, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Faulty(nameof(ExportHistoryAsync), () => inner.ExportHistoryAsync(run, claimedActor, verifiedPrincipal, reason, metadataOnly, now, cancellationToken));
 
     public ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
         Faulty(nameof(GetBacklogAsync), () => inner.GetBacklogAsync(scope, now, cancellationToken));

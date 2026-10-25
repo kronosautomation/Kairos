@@ -20,7 +20,7 @@ internal static class EventEncoder
         PatchMarker x => StringMax(x.PatchId),
         ActivityScheduled x => 4 + StringMax(x.ActivityType) + BytesMax(x.Input) + PolicyMax(x.RetryPolicy) + TraceMax(x.TraceContext),
         ActivityCompleted x => 4 + BytesMax(x.Result) + (x.Usage is { } u ? 24 + StringMax(u.Model) : 0),
-        ActivityFailed x => 4 + 4 + StringMax(x.ErrorType) + StringMax(x.Message) + 1,
+        ActivityFailed x => 4 + 4 + StringMax(x.ErrorType) + StringMax(x.Message) + 1 + (x.Usage is { } u ? 24 + StringMax(u.Model) : 0),
         TimerStarted => 4 + 8,
         TimerFired => 4,
         WorkflowTaskCompleted => 0,
@@ -78,15 +78,7 @@ internal static class EventEncoder
             case ActivityCompleted x:
                 w.WriteInt32(x.ActivityId);
                 w.WriteBytes(x.Result);
-                if (x.Usage is { } usage)
-                {
-                    // Trailing and optional, like the trace context: events written before usage was recorded keep their exact encoding and hashes.
-                    w.WriteInt64(usage.InputTokens);
-                    w.WriteInt64(usage.OutputTokens);
-                    w.WriteInt64(usage.CachedInputTokens);
-                    w.WriteString(usage.Model);
-                }
-
+                WriteUsage(ref w, x.Usage);
                 break;
             case ActivityFailed x:
                 w.WriteInt32(x.ActivityId);
@@ -94,6 +86,7 @@ internal static class EventEncoder
                 w.WriteString(x.ErrorType);
                 w.WriteString(x.Message);
                 w.WriteByte(x.WillRetry ? (byte)1 : (byte)0);
+                WriteUsage(ref w, x.Usage);
                 break;
             case TimerStarted x:
                 w.WriteInt32(x.TimerId);
@@ -131,6 +124,18 @@ internal static class EventEncoder
         }
 
         return w.Position;
+    }
+
+    /// <summary>Trailing and optional, like the trace context: events written before usage was recorded keep their exact encoding and hashes.</summary>
+    private static void WriteUsage(ref SpanWriter w, UsageRecord? usage)
+    {
+        if (usage is not null)
+        {
+            w.WriteInt64(usage.InputTokens);
+            w.WriteInt64(usage.OutputTokens);
+            w.WriteInt64(usage.CachedInputTokens);
+            w.WriteString(usage.Model);
+        }
     }
 
     private static int TraceMax(string trace) => trace.Length == 0 ? 0 : StringMax(trace);

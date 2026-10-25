@@ -13,9 +13,9 @@ public static class StoreRules
     public const int MaxReasonLength = 500;
 
     /// <summary>An export always names who and why. Both are required, and the reason has a bound.</summary>
-    public static void ValidateExport(string actor, string reason)
+    public static void ValidateExport(string claimedActor, string reason)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(claimedActor);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
         if (reason.Length > MaxReasonLength)
         {

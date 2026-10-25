@@ -42,12 +42,28 @@ public sealed class HistoryExportCliTests : IDisposable
         (int exit, string output, _, string file) = await ExportAsync(engine.Store, engine.Time, run, "--reason", "ticket 4411");
 
         Assert.Equal(ExitCode.Passed, exit);
-        Assert.Contains("Recorded in the audit log as ops@example.com", output, StringComparison.Ordinal);
+        Assert.Contains("Recorded in the audit log under the database login", output, StringComparison.Ordinal);
         Assert.False(HistoryFile.ParseVerified(await File.ReadAllTextAsync(file)).MetadataOnly);
         AuditEntry entry = Assert.Single(await engine.Store.GetAuditLogAsync(Scope, default));
-        Assert.Equal(("ExportHistory", "ops@example.com"), (entry.Action, entry.Actor));
+        Assert.Equal(("ExportHistory", "db:in-memory", "ops@example.com"), (entry.Action, entry.Actor, entry.ClaimedActor));
+        Assert.Contains("stored beside it as a claim", output, StringComparison.Ordinal);
         Assert.StartsWith("ticket 4411 (head ", entry.Detail, StringComparison.Ordinal);
         Assert.Contains(HistoryFile.Parse(await File.ReadAllTextAsync(file)).HeadHash, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_actor_option_cannot_change_the_recorded_identity()
+    {
+        (TestEngine engine, Guid run) = await RecordAsync();
+
+        await ExportAsync(engine.Store, engine.Time, run, "--reason", "as myself");
+        await ExportAsync(engine.Store, engine.Time, run, "--reason", "as the ceo", "--actor", "ceo@example.com", "--force");
+        await ExportAsync(engine.Store, engine.Time, run, "--reason", "as a verified admin", "--actor", "Admin:root", "--force");
+
+        IReadOnlyList<AuditEntry> audit = await engine.Store.GetAuditLogAsync(Scope, default);
+        Assert.Equal(3, audit.Count);
+        Assert.All(audit, e => Assert.Equal(("db:in-memory", "in-memory", null), (e.Actor, e.SessionUser, e.VerifiedPrincipal)));
+        Assert.Equal(["ops@example.com", "ceo@example.com", "Admin:root"], audit.Select(e => e.ClaimedActor));
     }
 
     [Fact]

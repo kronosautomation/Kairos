@@ -181,7 +181,7 @@ public abstract partial class StoreContractTests
         {
             foreach (RunKey run in new[] { a.Busy, a.Finished, a.Parked, a.Leased })
             {
-                Assert.Null(await a.Store.ExportHistoryAsync(In(f, run), "mallory", "curious", false, Time.GetUtcNow(), Ct));
+                Assert.Null(await a.Store.ExportHistoryAsync(In(f, run), "mallory", null, "curious", false, Time.GetUtcNow(), Ct));
             }
 
             Assert.Empty(await a.Store.GetAuditLogAsync(f, Ct)); // nothing was exported, so nothing is recorded in their scope either

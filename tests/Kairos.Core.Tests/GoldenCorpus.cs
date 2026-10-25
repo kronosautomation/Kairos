@@ -44,6 +44,7 @@ internal static class GoldenCorpus
             "waits-forever" => ReferenceWorkflows.WaitsForever(),
             "runaway" => ReferenceWorkflows.Runaway(),
             "usage" => UsageModelSteps,
+            "usage-failed" => UsageFailedStep,
             _ => throw new ArgumentException($"Unknown corpus workflow '{key}'."),
         };
     }
@@ -54,6 +55,10 @@ internal static class GoldenCorpus
         byte[] first = await ctx.ExecuteActivityAsync("model", input);
         return await ctx.ExecuteActivityAsync("model", first);
     }
+
+    /// <summary>One model step with a retry policy that allows a second attempt. Frozen, like the others.</summary>
+    private static async Task<byte[]> UsageFailedStep(IWorkflowContext ctx, byte[] input) =>
+        await ctx.ExecuteActivityAsync("model", input, RetryPolicy.Default with { InitialInterval = TimeSpan.FromSeconds(1), MaximumAttempts = 3 });
 
     // ---- file format ----------------------------------------------------------------------------------------------
 
@@ -87,7 +92,37 @@ internal static class GoldenCorpus
         StartRunResult start = await client.StartAsync(scope, "usage-1", "agent", [1, 2, 3, 4]);
         await Driver.DriveAsync(new WorkerRuntime(store, scope, wf, act, time, new WorkerOptions { AutoHeartbeat = false }));
         IReadOnlyList<HistoryEvent> history = await client.GetHistoryAsync(new RunKey(scope.TenantId, scope.NamespaceId, start.RunId));
-        return [new CorpusEntry("usage-model-steps.khist", "usage", "Two model steps with token usage recorded in their completion events (one with a cached prompt).", history)];
+        var entries = new List<CorpusEntry>
+        {
+            new("usage-model-steps.khist", "usage", "Two model steps with token usage recorded in their completion events (one with a cached prompt).", history),
+        };
+
+        // A model step whose first attempt consumed tokens and then failed (the usage rides on the failure event), and whose retry completed.
+        {
+            var failStore = new InMemoryKairosStore();
+            var failTime = new VirtualTimeProvider();
+            var failClient = new KairosClient(failStore, failTime, () => new Guid(8, 0, 0, [0, 0, 0, 0, 0, 0, 0, 8]));
+            int attempt = 0;
+            WorkflowRegistry failWf = new WorkflowRegistry().Register("agent", KairosClient.DefaultBuildId, UsageFailedStep);
+            ActivityRegistry failAct = new ActivityRegistry().Register("model", (context, input, _) =>
+            {
+                context.ReportUsage(++attempt == 1 ? new UsageRecord(900, 0, 0, "model-2026-10") : new UsageRecord(950, 60, 900, "model-2026-10"));
+                return attempt == 1 ? throw new InvalidOperationException("the reply could not be used") : Task.FromResult(input);
+            });
+            StartRunResult failStart = await failClient.StartAsync(scope, "usage-2", "agent", [9, 9]);
+            var failWorker = new WorkerRuntime(failStore, scope, failWf, failAct, failTime, new WorkerOptions { AutoHeartbeat = false });
+            for (int i = 0; i < 4; i++)
+            {
+                await Driver.DriveAsync(failWorker);
+                failTime.Advance(TimeSpan.FromSeconds(30));
+            }
+
+            entries.Add(new CorpusEntry(
+                "usage-failed-attempt.khist", "usage-failed", "A model step whose first attempt spent tokens and failed (usage on the failure event); the retry completed.",
+                await failClient.GetHistoryAsync(new RunKey(scope.TenantId, scope.NamespaceId, failStart.RunId))));
+        }
+
+        return entries;
     }
 
     // ---- recording (run once per release; never re-record to make a failing replay pass) --------------------------------

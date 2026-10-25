@@ -65,6 +65,12 @@ public sealed class GoldenCorpusTests
 
         Assert.Equal((2, 3100L, 425L, 1200L), (total.Steps, total.InputTokens, total.OutputTokens, total.CachedInputTokens));
         Assert.Equal("model-2026-10", Assert.Single(total.ByModel).Model);
+        Assert.Equal(0, total.Failed.Attempts);
+
+        string failedFile = Path.Combine(CorpusRoot, "v2", "usage-failed-attempt.khist");
+        RunUsage withFailure = RunUsage.From(GoldenCorpus.Parse(failedFile, File.ReadAllText(failedFile)).History);
+        Assert.Equal((1, 950L, 60L, 900L), (withFailure.Steps, withFailure.InputTokens, withFailure.OutputTokens, withFailure.CachedInputTokens));
+        Assert.Equal((1, 900L, 0L), (withFailure.Failed.Attempts, withFailure.Failed.InputTokens, withFailure.Failed.OutputTokens));
         foreach (string file in Directory.EnumerateFiles(CorpusRoot, "*.khist", SearchOption.AllDirectories).Where(f => !f.Contains("v2", StringComparison.Ordinal)))
         {
             Assert.Same(RunUsage.None, RunUsage.From(GoldenCorpus.Parse(file, File.ReadAllText(file)).History));

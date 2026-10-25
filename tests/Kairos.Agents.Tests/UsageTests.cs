@@ -43,6 +43,24 @@ public sealed class UsageTests
         Assert.Equal(("provider-model-v3", 400L, 25L, 300L), (model.Model, model.InputTokens, model.OutputTokens, model.CachedInputTokens));
     }
 
+    [Fact]
+    public async Task A_model_reply_that_was_paid_for_and_then_could_not_be_used_is_spent_but_not_a_step()
+    {
+        var model = new ScriptedChatClient(_ => new ChatMessage(ChatRole.Assistant, "reply that the redactor rejects once"));
+        int redactions = 0; // call 1 is the request, redacted in the workflow; call 2 is the reply, redacted in the model step
+        var h = new AgentHarness(b => b.AddModel("m", model).UseRedactor(text => ++redactions == 2 ? throw new InvalidOperationException("redactor failed") : text));
+        h.Workflow("agent", async (ctx, _) => AgentHarness.Bytes((await ctx.ChatAsync("m", [new ChatMessage(ChatRole.User, "hi")])).Text));
+
+        RunKey run = await h.StartAsync("agent");
+        Assert.Equal(RunState.Completed, await h.RunAsync(run));
+
+        RunUsage usage = await h.Client.GetUsageAsync(run);
+        Assert.Equal(2, model.CallCount); // the model was called twice
+        Assert.Equal((1, 10L), (usage.Steps, usage.InputTokens)); // one completed step...
+        Assert.Equal((1, 10L, 5L), (usage.Failed.Attempts, usage.Failed.InputTokens, usage.Failed.OutputTokens)); // ...and the call whose reply failed after it was paid for
+        Assert.Equal((2, 20L), (usage.Total.Attempts, usage.Total.InputTokens));
+    }
+
     private sealed class CachedUsageClient : IChatClient
     {
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>

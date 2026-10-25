@@ -154,7 +154,7 @@ public abstract partial class StoreContractTests
         var run = new RunKey(A.TenantId, A.NamespaceId, start.RunId);
         try
         {
-            Assert.Null(await store.ExportHistoryAsync(new RunKey(A.TenantId, A.NamespaceId, Guid.NewGuid()), "ops@example.com", "why", false, Time.GetUtcNow(), Ct));
+            Assert.Null(await store.ExportHistoryAsync(new RunKey(A.TenantId, A.NamespaceId, Guid.NewGuid()), "ops@example.com", null, "why", false, Time.GetUtcNow(), Ct));
         }
         catch (NotSupportedException)
         {
@@ -163,21 +163,35 @@ public abstract partial class StoreContractTests
 
         Assert.Empty(await store.GetAuditLogAsync(A, Ct)); // a run that does not exist is not an export
 
-        IReadOnlyList<HistoryEvent> exported = (await store.ExportHistoryAsync(run, "ops@example.com", "investigating ticket 4411", false, Time.GetUtcNow(), Ct))!;
-        await store.ExportHistoryAsync(run, "ops@example.com", "again", true, Time.GetUtcNow(), Ct);
+        IReadOnlyList<HistoryEvent> exported = (await store.ExportHistoryAsync(run, "ops@example.com", null, "investigating ticket 4411", false, Time.GetUtcNow(), Ct))!;
+        await store.ExportHistoryAsync(run, "ceo@example.com", null, "again", true, Time.GetUtcNow(), Ct);
+        await store.ExportHistoryAsync(run, "ignored", "operator:alice", "verified", false, Time.GetUtcNow(), Ct);
 
         Assert.Equal((await store.GetHistoryAsync(run, Ct)).Select(e => Convert.ToHexString(e.Hash)), exported.Select(e => Convert.ToHexString(e.Hash)));
         AssertChainIntact(exported);
         IReadOnlyList<AuditEntry> audit = await store.GetAuditLogAsync(A, Ct);
-        Assert.Equal(2, audit.Count);
+        Assert.Equal(3, audit.Count);
         string head = Convert.ToHexStringLower(exported[^1].Hash);
-        Assert.Equal(("ExportHistory", "ops@example.com", $"investigating ticket 4411 (head {head})", run.RunId), (audit[0].Action, audit[0].Actor, audit[0].Detail, audit[0].RunId));
+        Assert.Equal(("ExportHistory", $"investigating ticket 4411 (head {head})", run.RunId), (audit[0].Action, audit[0].Detail, audit[0].RunId));
         Assert.Equal($"metadata only: again (head {head})", audit[1].Detail);
+
+        // Who did it comes from the store, not from the caller: the name that was asked for is kept apart, as a claim, and changes nothing else.
+        Assert.False(string.IsNullOrEmpty(audit[0].SessionUser));
+        Assert.Equal("db:" + audit[0].SessionUser, audit[0].Actor);
+        Assert.Equal("ops@example.com", audit[0].ClaimedActor);
+        Assert.Equal("ceo@example.com", audit[1].ClaimedActor);
+        Assert.Equal((audit[0].Actor, audit[0].SessionUser, audit[0].ClientAddress), (audit[1].Actor, audit[1].SessionUser, audit[1].ClientAddress));
+        Assert.DoesNotContain("ceo", audit[1].Actor, StringComparison.Ordinal);
+        Assert.Null(audit[0].VerifiedPrincipal);
+
+        // A verified principal is recorded as the actor, and a claim cannot displace it.
+        Assert.Equal(("operator:alice", "operator:alice", "ignored"), (audit[2].Actor, audit[2].VerifiedPrincipal, audit[2].ClaimedActor));
+        Assert.Equal(audit[0].SessionUser, audit[2].SessionUser);
         Assert.Empty(await store.GetAuditLogAsync(B, Ct));
-        Assert.Null(await store.ExportHistoryAsync(new RunKey(B.TenantId, B.NamespaceId, run.RunId), "mallory", "curious", false, Time.GetUtcNow(), Ct)); // another tenant cannot export it
-        await Assert.ThrowsAnyAsync<ArgumentException>(async () => await store.ExportHistoryAsync(run, "ops", " ", false, Time.GetUtcNow(), Ct)); // no reason, no export
-        await Assert.ThrowsAnyAsync<ArgumentException>(async () => await store.ExportHistoryAsync(run, "", "why", false, Time.GetUtcNow(), Ct));
-        Assert.Equal(2, (await store.GetAuditLogAsync(A, Ct)).Count);
+        Assert.Null(await store.ExportHistoryAsync(new RunKey(B.TenantId, B.NamespaceId, run.RunId), "mallory", null, "curious", false, Time.GetUtcNow(), Ct)); // another tenant cannot export it
+        await Assert.ThrowsAnyAsync<ArgumentException>(async () => await store.ExportHistoryAsync(run, "ops", null, " ", false, Time.GetUtcNow(), Ct)); // no reason, no export
+        await Assert.ThrowsAnyAsync<ArgumentException>(async () => await store.ExportHistoryAsync(run, "", null, "why", false, Time.GetUtcNow(), Ct));
+        Assert.Equal(3, (await store.GetAuditLogAsync(A, Ct)).Count);
     }
 
     [Fact]

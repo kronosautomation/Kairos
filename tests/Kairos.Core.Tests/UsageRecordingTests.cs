@@ -26,6 +26,86 @@ public sealed class UsageRecordingTests
         Assert.Equal(HashChain.ComputeHash(plain, HashChain.GenesisHash), HashChain.ComputeHash(plain with { Usage = null }, HashChain.GenesisHash));
     }
 
+    private static ActivityFailed Failed(UsageRecord? usage) =>
+        new(Scope.TenantId, Scope.NamespaceId, Guid.NewGuid(), 5, DateTimeOffset.UnixEpoch, 1, 2, "Boom", "text", true) { Usage = usage };
+
+    [Fact]
+    public void A_failed_attempt_carries_usage_as_a_trailing_field_and_old_failures_encode_as_before()
+    {
+        ActivityFailed plain = Failed(null);
+        ActivityFailed spent = plain with { Usage = new UsageRecord(500, 0, 100, "model-x") };
+
+        var decoded = (ActivityFailed)HistoryEventCodec.Decode(HistoryEventCodec.Encode(spent), [], []);
+
+        Assert.Equal(new UsageRecord(500, 0, 100, "model-x"), decoded.Usage);
+        Assert.Null(((ActivityFailed)HistoryEventCodec.Decode(HistoryEventCodec.Encode(plain), [], [])).Usage);
+        Assert.Equal(HistoryEventCodec.Encode(plain).Length + 24 + 4 + 7, HistoryEventCodec.Encode(spent).Length);
+        Assert.Equal(HashChain.ComputeHash(plain, HashChain.GenesisHash), HashChain.ComputeHash(plain with { Usage = null }, HashChain.GenesisHash));
+        Assert.NotEqual(HashChain.ComputeHash(plain, HashChain.GenesisHash), HashChain.ComputeHash(spent, HashChain.GenesisHash));
+        Assert.Throws<FormatException>(() => HistoryEventCodec.Decode(HistoryEventCodec.Encode(plain with { Usage = new UsageRecord(1, 2, 3, "m") }), [], [])); // cached above input
+    }
+
+    [Fact]
+    public async Task Tokens_spent_by_attempts_that_failed_are_recorded_and_reported_apart_from_completed_steps()
+    {
+        int attempts = 0;
+        var store = new InMemoryKairosStore();
+        var clock = new VirtualTimeProvider();
+        var client = new KairosClient(store, clock);
+        var workflows = new WorkflowRegistry().Register("agent", "default", async (ctx, input) =>
+            await ctx.ExecuteActivityAsync("model", input, RetryPolicy.Default with { InitialInterval = TimeSpan.FromSeconds(1), MaximumAttempts = 5 }));
+        var activities = new ActivityRegistry().Register("model", (context, input, _) =>
+        {
+            attempts++;
+            context.ReportUsage(new UsageRecord(100, attempts == 3 ? 20 : 0, attempts == 2 ? 50 : 0, "model-x")); // the call is paid for, then the step fails or succeeds
+            return attempts < 3 ? throw new InvalidOperationException("the reply could not be used") : Task.FromResult(input);
+        });
+        StartRunResult start = await client.StartAsync(Scope, "u-fail", "agent", Encoding.UTF8.GetBytes("x"));
+        var worker = new WorkerRuntime(store, Scope, workflows, activities, clock, new WorkerOptions { AutoHeartbeat = false });
+        for (int i = 0; i < 6; i++)
+        {
+            await Driver.DriveAsync(worker);
+            clock.Advance(TimeSpan.FromSeconds(30));
+        }
+
+        var run = new RunKey(Scope.TenantId, Scope.NamespaceId, start.RunId);
+        Assert.Equal(RunState.Completed, await client.GetStateAsync(run));
+        IReadOnlyList<HistoryEvent> history = await client.GetHistoryAsync(run);
+        Assert.Equal(2, history.OfType<ActivityFailed>().Count(f => f.Usage is not null));
+        HashChain.Verify(history);
+
+        RunUsage usage = await client.GetUsageAsync(run);
+        Assert.Equal((1, 100L, 20L, 0L), (usage.Steps, usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens)); // the completed step alone
+        Assert.Equal((2, 200L, 0L, 50L), (usage.Failed.Attempts, usage.Failed.InputTokens, usage.Failed.OutputTokens, usage.Failed.CachedInputTokens));
+        Assert.Equal((3, 300L, 20L, 50L), (usage.Total.Attempts, usage.Total.InputTokens, usage.Total.OutputTokens, usage.Total.CachedInputTokens));
+        ModelUsage model = Assert.Single(usage.ByModel);
+        Assert.Equal((1, 2, 300L), (model.Steps, model.Failed.Attempts, model.Total.InputTokens));
+    }
+
+    [Fact]
+    public async Task A_failure_that_reported_nothing_and_the_lease_expiry_record_carry_no_usage()
+    {
+        var store = new InMemoryKairosStore();
+        var clock = new VirtualTimeProvider();
+        var client = new KairosClient(store, clock);
+        var workflows = new WorkflowRegistry().Register("agent", "default", async (ctx, input) =>
+            await ctx.ExecuteActivityAsync("model", input, RetryPolicy.Default with { MaximumAttempts = 2, InitialInterval = TimeSpan.FromSeconds(1) }));
+        var activities = new ActivityRegistry().Register("model", (_, _, _) => throw new InvalidOperationException("no reply"));
+        StartRunResult start = await client.StartAsync(Scope, "u-none", "agent", [1]);
+        var worker = new WorkerRuntime(store, Scope, workflows, activities, clock, new WorkerOptions { AutoHeartbeat = false });
+        for (int i = 0; i < 4; i++)
+        {
+            await Driver.DriveAsync(worker);
+            clock.Advance(TimeSpan.FromSeconds(30));
+        }
+
+        IReadOnlyList<HistoryEvent> history = await client.GetHistoryAsync(new RunKey(Scope.TenantId, Scope.NamespaceId, start.RunId));
+
+        Assert.Equal(2, history.OfType<ActivityFailed>().Count());
+        Assert.All(history.OfType<ActivityFailed>(), f => Assert.Null(f.Usage));
+        Assert.Same(RunUsage.None, RunUsage.From(history));
+    }
+
     [Fact]
     public void A_usage_record_that_cannot_be_true_is_refused_on_decode()
     {

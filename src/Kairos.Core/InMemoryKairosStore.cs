@@ -449,10 +449,13 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
+    /// <summary>The login the in-memory store reports for every connection: there is no database to ask.</summary>
+    public const string SessionUserName = "in-memory";
+
     public ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
-        RunKey run, string actor, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
+        RunKey run, string claimedActor, string? verifiedPrincipal, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        StoreRules.ValidateExport(actor, reason);
+        StoreRules.ValidateExport(claimedActor, reason);
         lock (_gate)
         {
             if (FindRun(run) is not { } r || r.History.Count == 0)
@@ -460,7 +463,13 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
                 return ValueTask.FromResult<IReadOnlyList<HistoryEvent>?>(null);
             }
 
-            Scope(run.Scope, create: false)!.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, StoreRules.ExportAuditAction, actor, now, StoreRules.ExportDetail(reason, metadataOnly, r.History)));
+            Scope(run.Scope, create: false)!.Audit.Add(new AuditEntry(
+                run.TenantId, run.NamespaceId, run.RunId, StoreRules.ExportAuditAction, verifiedPrincipal ?? "db:" + SessionUserName, now, StoreRules.ExportDetail(reason, metadataOnly, r.History))
+            {
+                SessionUser = SessionUserName,
+                ClaimedActor = claimedActor,
+                VerifiedPrincipal = verifiedPrincipal,
+            });
             return ValueTask.FromResult<IReadOnlyList<HistoryEvent>?>([.. r.History]);
         }
     }
@@ -501,7 +510,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             row.Leased = false;
             row.Attempt = 1;
             row.VisibleAt = now;
-            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, "ResumeWorkflowTask", actor, now, "unparked after repeated lease expiry"));
+            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, "ResumeWorkflowTask", actor, now, "unparked after repeated lease expiry") { SessionUser = SessionUserName });
             return ValueTask.FromResult(true);
         }
     }
@@ -518,7 +527,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             Append(r, new RunTerminated(run.TenantId, run.NamespaceId, run.RunId, 0, now, reason));
             Close(data, r, RunState.Failed);
             data.WorkflowTasks.Remove(run.RunId);
-            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, "FailRun", actor, now, reason));
+            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, "FailRun", actor, now, reason) { SessionUser = SessionUserName });
             return ValueTask.FromResult(true);
         }
     }
