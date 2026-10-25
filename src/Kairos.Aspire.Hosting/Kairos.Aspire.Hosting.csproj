@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>.NET Aspire hosting integration for Kairos: builder.AddKairos("kairos").WithReference(postgres) gives an app its Kairos database and shows runs in the Aspire dashboard.</Description>
+    <RootNamespace>Aspire.Hosting</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" />
+  </ItemGroup>
+
+</Project>

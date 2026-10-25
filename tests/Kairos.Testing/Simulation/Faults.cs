@@ -98,6 +98,10 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
     public ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
         Faulty(nameof(SignalRunAsync), () => inner.SignalRunAsync(run, signalName, signalId, payload, now, cancellationToken));
 
+    public ValueTask<bool> SignalRunTracedAsync(
+        RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, string traceContext, CancellationToken cancellationToken) =>
+        Faulty(nameof(SignalRunAsync), () => inner.SignalRunTracedAsync(run, signalName, signalId, payload, now, traceContext, cancellationToken));
+
     public ValueTask<WorkflowTask?> PollWorkflowTaskAsync(
         TenantScope scope, IReadOnlyCollection<string> buildIds, DateTimeOffset now, TimeSpan lease, CancellationToken cancellationToken) =>
         Faulty(nameof(PollWorkflowTaskAsync), () => inner.PollWorkflowTaskAsync(scope, buildIds, now, lease, cancellationToken));
@@ -170,6 +174,9 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
 
         return first;
     }
+
+    public ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Faulty(nameof(GetBacklogAsync), () => inner.GetBacklogAsync(scope, now, cancellationToken));
 
     public ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken) =>
         inner.GetStuckWorkflowTasksAsync(scope, cancellationToken);

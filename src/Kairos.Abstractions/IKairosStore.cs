@@ -43,7 +43,8 @@ public sealed record AuditEntry(Guid TenantId, Guid NamespaceId, Guid? RunId, st
 /// <param name="BuildId">The build the run is pinned to for its whole life.</param>
 /// <param name="Input">The workflow input, opaque to the server (sealed on the client when encryption is on).</param>
 /// <param name="Now">The start time recorded in history.</param>
-public sealed record StartRunRequest(RunKey Run, string WorkflowId, string WorkflowType, string BuildId, byte[] Input, DateTimeOffset Now);
+/// <param name="TraceContext">W3C <c>traceparent</c> of the span that started the run, recorded in history (empty when there is none).</param>
+public sealed record StartRunRequest(RunKey Run, string WorkflowId, string WorkflowType, string BuildId, byte[] Input, DateTimeOffset Now, string TraceContext = "");
 
 /// <summary>The outcome of starting a run.</summary>
 /// <param name="RunId">The new run, or the existing one when deduplicated.</param>
@@ -56,10 +57,13 @@ public sealed record WorkflowTask(
 
 /// <summary>A leased activity attempt. <see cref="IdempotencyKey"/> is stable across retries, crashes and lease losses.</summary>
 public sealed record ActivityTask(
-    RunKey Run, int ActivityId, string ActivityType, byte[] Input, RetryPolicy RetryPolicy, int Attempt, long LeaseToken)
+    RunKey Run, int ActivityId, string ActivityType, byte[] Input, RetryPolicy RetryPolicy, int Attempt, long LeaseToken, string TraceContext = "")
 {
     public string IdempotencyKey => $"{Run.RunId:N}:{ActivityId}";
 }
+
+/// <summary>Work that is ready to be claimed right now. Growth means workers are not keeping up.</summary>
+public sealed record WorkBacklog(int WorkflowTasks, int ActivityTasks, int DueTimers);
 
 /// <summary>
 /// Persistence contract (reference: PostgreSQL). Events passed in are templates: the store assigns
@@ -76,6 +80,14 @@ public interface IKairosStore
     /// so redelivery from a bus or a retrying client cannot signal twice.
     /// </summary>
     ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="SignalRunAsync"/> that also records the sender's W3C <c>traceparent</c> in the
+    /// <see cref="SignalReceived"/> event. The default drops it, so a store written before tracing keeps working.
+    /// </summary>
+    ValueTask<bool> SignalRunTracedAsync(
+        RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, string traceContext, CancellationToken cancellationToken) =>
+        SignalRunAsync(run, signalName, signalId, payload, now, cancellationToken);
 
     /// <summary>Claims one runnable workflow task for one of <paramref name="buildIds"/> (run pinning), or null.</summary>
     ValueTask<WorkflowTask?> PollWorkflowTaskAsync(
@@ -120,6 +132,9 @@ public interface IKairosStore
     /// until an operator intervenes). Returns the number of leases handled.
     /// </summary>
     ValueTask<int> ReapExpiredLeasesAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>Counts of ready work in this scope, for queue-depth metrics. Null when the store cannot say (the default).</summary>
+    ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) => ValueTask.FromResult<WorkBacklog?>(null);
 
     /// <summary>Parked workflow tasks in this scope (see <see cref="StuckWorkflowTask"/>). The hosting layer logs and meters these.</summary>
     ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken);

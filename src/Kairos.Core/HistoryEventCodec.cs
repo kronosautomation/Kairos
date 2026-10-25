@@ -79,16 +79,21 @@ public static class HistoryEventCodec
         string name = r.ReadString();
         byte[] payload = r.ReadBytes();
         string id = "";
+        string trace = "";
         if (!r.AtEnd)
         {
             id = r.ReadString();
-            if (id.Length == 0)
+            if (!r.AtEnd)
             {
-                throw new FormatException("Non-canonical signal id."); // an empty id is encoded by leaving it out
+                trace = ReadTrace(ref r);
+            }
+            else if (id.Length == 0)
+            {
+                throw new FormatException("Non-canonical signal id."); // an empty id is encoded by leaving it out, unless a trace context follows
             }
         }
 
-        return new SignalReceived(tenant, ns, run, seq, ts, name, payload) { SignalId = id };
+        return new SignalReceived(tenant, ns, run, seq, ts, name, payload) { SignalId = id, TraceContext = trace };
     }
 
     private static WorkflowStarted ReadStarted(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)
@@ -96,7 +101,8 @@ public static class HistoryEventCodec
         string type = r.ReadString();
         string build = r.ReadString();
         byte[] input = r.ReadBytes();
-        return new WorkflowStarted(tenant, ns, run, seq, ts, type, build, input) { PreviousRunId = r.ReadGuid() };
+        Guid previous = r.ReadGuid();
+        return new WorkflowStarted(tenant, ns, run, seq, ts, type, build, input) { PreviousRunId = previous, TraceContext = r.AtEnd ? "" : ReadTrace(ref r) };
     }
 
     private static ActivityScheduled ReadScheduled(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)
@@ -128,7 +134,18 @@ public static class HistoryEventCodec
             MaximumInterval = max,
             NonRetryableErrorTypes = errors,
         };
-        return new ActivityScheduled(tenant, ns, run, seq, ts, id, type, input, policy);
+        return new ActivityScheduled(tenant, ns, run, seq, ts, id, type, input, policy) { TraceContext = r.AtEnd ? "" : ReadTrace(ref r) };
+    }
+
+    private static string ReadTrace(ref Reader r)
+    {
+        string trace = r.ReadString();
+        if (trace.Length == 0)
+        {
+            throw new FormatException("Non-canonical trace context."); // an empty one is encoded by leaving it out
+        }
+
+        return trace;
     }
 
     private ref struct Reader(ReadOnlySpan<byte> data)

@@ -19,9 +19,10 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Package | License | Tier | Notes |
 |---|---|---|---|
 | Kairos.Abstractions | Apache 2.0 | Community | Contracts and provider interfaces |
-| Kairos.Core | Apache 2.0 | Community | Engine, replay, hash chain, worker runtime, metrics |
+| Kairos.Core | Apache 2.0 | Community | Engine, replay, hash chain, worker runtime, raw spans (ActivitySource `Kairos`) and metrics (meter `Kairos`), trace context in history |
 | Kairos.Persistence.Postgres | Apache 2.0 | Community | RLS, roles, leases, fencing, audit log, Resume/Fail store APIs |
-| Kairos.Hosting | Apache 2.0 | Community | Embedded mode (`AddKairos`), stuck-task monitor, health check |
+| Kairos.Hosting | Apache 2.0 | Community | Embedded mode (`AddKairos`), stuck-task monitor, health checks, OpenTelemetry registration |
+| Kairos.Aspire.Hosting | Apache 2.0 | Community | .NET Aspire AppHost integration: `AddKairos("kairos").WithReference(postgres)` |
 | Kairos.Client, Kairos.Worker | Apache 2.0 | Community | Start/signal/query; remote worker SDK incl. client-side payload encryption |
 | Kairos.Agents | Apache 2.0 | Community | Durable model and tool steps, approvals primitive, sagas/compensation, per-run scoped credentials, baseline tool policy (read-only by default; writes need an allow policy or approval) |
 | Kairos.Cloud.SelfHosted | Apache 2.0 | Community | Vault, mTLS/SPIFFE, file/S3-compatible offload, Kafka/NATS/webhooks |
@@ -36,7 +37,7 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Agents.A2a | Commercial | Pro | The hosted A2A server: workflows published as agents, signed cards served, server-stamped identity |
 | Kairos.Agents.Mcp | Commercial | Pro | The Kairos MCP server: workflows as tools, approvals as input requests with verified approvers, operator tools |
 | Kairos.Cloud.Azure, .Aws, .Gcp | Commercial | Pro | Managed key, identity, blob and event adapters (self-hosted equivalents stay free) |
-| Kairos.Telemetry | Commercial | Pro | Packaged OpenTelemetry/GenAI exporters and dashboards (raw metrics stay in Core) |
+| Kairos.Telemetry | Commercial | Pro | Packaged dashboards (Grafana, Azure Monitor workbooks) and alert rules. Raw spans, metrics, the GenAI conventions and the Aspire integration are Community and stay in Core, Hosting and Kairos.Aspire.Hosting |
 | Kairos.Server, Kairos.Admin | Commercial | Business | Standalone multi-tenant data plane and control plane |
 | Kairos.Dashboard.Enterprise | Commercial | Business | SSO, roles, audit export, bulk operator console |
 | Kairos.Agents.AgentFramework | Commercial | Business | Microsoft Agent Framework durability provider |

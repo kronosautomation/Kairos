@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Kairos;
 
 /// <summary>Start/signal/inspect runs. Run ids come from an injectable factory so simulations stay reproducible.</summary>
@@ -37,8 +39,40 @@ public sealed class KairosClient
         ArgumentException.ThrowIfNullOrEmpty(workflowId);
         ArgumentNullException.ThrowIfNull(input);
         var run = new RunKey(scope.TenantId, scope.NamespaceId, _newRunId());
-        byte[] sent = _crypto is null ? input : await _crypto.SealAsync(scope, run.RunId, "start", 0, input, cancellationToken).ConfigureAwait(false);
-        return await _store.StartRunAsync(new StartRunRequest(run, workflowId, workflowType, buildId, sent, _time.GetUtcNow()), cancellationToken).ConfigureAwait(false);
+
+        // A child of whatever is current (for example the HTTP request that asked for the run). Its context is stored in the run's history,
+        // so the run's tasks continue this trace wherever and whenever they run.
+        using Activity? span = KairosTelemetry.Source.StartActivity("kairos.run.start", ActivityKind.Producer);
+        if (span is not null)
+        {
+            span.SetTag(KairosTags.TenantId, scope.TenantId.ToString("D"));
+            span.SetTag(KairosTags.NamespaceId, scope.NamespaceId.ToString("D"));
+            span.SetTag(KairosTags.WorkflowType, workflowType);
+            span.SetTag(KairosTags.WorkflowId, workflowId);
+            span.SetTag(KairosTags.BuildId, buildId);
+            span.SetTag(KairosTags.PayloadBytes, input.Length);
+        }
+
+        string trace = span is null ? KairosTelemetry.CurrentTraceContext() : KairosTelemetry.ContextOf(span);
+        try
+        {
+            byte[] sent = _crypto is null ? input : await _crypto.SealAsync(scope, run.RunId, "start", 0, input, cancellationToken).ConfigureAwait(false);
+            StartRunResult result = await _store.StartRunAsync(
+                new StartRunRequest(run, workflowId, workflowType, buildId, sent, _time.GetUtcNow(), trace), cancellationToken).ConfigureAwait(false);
+            span?.SetTag(KairosTags.RunId, result.RunId.ToString("D"));
+            span?.SetTag("kairos.run.deduplicated", !result.Started);
+            if (result.Started)
+            {
+                KairosMetrics.RunsStarted.Add(1, new KeyValuePair<string, object?>("workflow.type", workflowType));
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            KairosTelemetry.Fail(span, ex.GetType().Name);
+            throw;
+        }
     }
 
     /// <summary>Delivers a signal to a running workflow under a fresh signal id. False when the run is closed or unknown.</summary>
@@ -90,10 +124,32 @@ public sealed class KairosClient
     private async ValueTask<bool> SendSignalAsync(RunKey run, string signalName, byte[] payload, string? signalId, CancellationToken cancellationToken)
     {
         string id = signalId ?? _newSignalId();
-        byte[] sent = _crypto is null
-            ? payload
-            : await _crypto.SealAsync(run.Scope, run.RunId, PayloadCrypto.SignalField(signalName, id), 0, payload, cancellationToken).ConfigureAwait(false);
-        return await _store.SignalRunAsync(run, signalName, id, sent, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+        bool approval = signalName.StartsWith(ReservedSignals.ApprovalPrefix, StringComparison.Ordinal);
+        using Activity? span = KairosTelemetry.Source.StartActivity(approval ? "kairos.approval.decide" : "kairos.signal.send", ActivityKind.Producer);
+        if (span is not null)
+        {
+            span.SetTag(KairosTags.TenantId, run.TenantId.ToString("D"));
+            span.SetTag(KairosTags.NamespaceId, run.NamespaceId.ToString("D"));
+            span.SetTag(KairosTags.RunId, run.RunId.ToString("D"));
+            span.SetTag(approval ? KairosTags.ApprovalId : KairosTags.SignalName, approval ? signalName[ReservedSignals.ApprovalPrefix.Length..] : signalName);
+            span.SetTag(KairosTags.PayloadBytes, payload.Length);
+        }
+
+        string trace = span is null ? KairosTelemetry.CurrentTraceContext() : KairosTelemetry.ContextOf(span);
+        try
+        {
+            byte[] sent = _crypto is null
+                ? payload
+                : await _crypto.SealAsync(run.Scope, run.RunId, PayloadCrypto.SignalField(signalName, id), 0, payload, cancellationToken).ConfigureAwait(false);
+            return trace.Length == 0
+                ? await _store.SignalRunAsync(run, signalName, id, sent, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false)
+                : await _store.SignalRunTracedAsync(run, signalName, id, sent, _time.GetUtcNow(), trace, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            KairosTelemetry.Fail(span, ex.GetType().Name);
+            throw;
+        }
     }
 
     public ValueTask<RunState?> GetStateAsync(RunKey run, CancellationToken cancellationToken = default) =>

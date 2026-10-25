@@ -29,14 +29,22 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             scope.Runs.Add(request.Run.RunId, run);
             scope.WorkflowIds.Add(request.WorkflowId, request.Run.RunId);
             Append(run, new WorkflowStarted(
-                request.Run.TenantId, request.Run.NamespaceId, request.Run.RunId, 0, request.Now, request.WorkflowType, request.BuildId, request.Input));
+                request.Run.TenantId, request.Run.NamespaceId, request.Run.RunId, 0, request.Now, request.WorkflowType, request.BuildId, request.Input)
+            {
+                TraceContext = request.TraceContext,
+            });
             EnsureWorkflowTask(scope, run, request.Now);
             return ValueTask.FromResult(new StartRunResult(request.Run.RunId, true));
         }
     }
 
-    public ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken)
+    public ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
+        SignalRunTracedAsync(run, signalName, signalId, payload, now, "", cancellationToken);
+
+    public ValueTask<bool> SignalRunTracedAsync(
+        RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, string traceContext, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(traceContext);
         ArgumentException.ThrowIfNullOrEmpty(signalId);
         lock (_gate)
         {
@@ -50,7 +58,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
                 return ValueTask.FromResult(true); // already delivered
             }
 
-            Append(r, new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId });
+            Append(r, new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId, TraceContext = traceContext });
             EnsureWorkflowTask(Scope(run.Scope, create: false)!, r, now);
             return ValueTask.FromResult(true);
         }
@@ -165,6 +173,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         Append(next, new WorkflowStarted(key.TenantId, key.NamespaceId, c.NewRunId, 0, now, previous.WorkflowType, previous.BuildId, c.Input)
         {
             PreviousRunId = previous.Key.RunId,
+            TraceContext = previous.History.Count > 0 && previous.History[0] is WorkflowStarted first ? first.TraceContext : "", // one trace across the whole chain
         });
         EnsureWorkflowTask(scope, next, now);
     }
@@ -218,7 +227,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             best.LeaseToken++;
             ActivityScheduled s = best.Scheduled;
             return ValueTask.FromResult<ActivityTask?>(new ActivityTask(
-                new RunKey(s.TenantId, s.NamespaceId, s.RunId), s.ActivityId, s.ActivityType, s.Input, s.RetryPolicy, best.Attempt, best.LeaseToken));
+                new RunKey(s.TenantId, s.NamespaceId, s.RunId), s.ActivityId, s.ActivityType, s.Input, s.RetryPolicy, best.Attempt, best.LeaseToken, s.TraceContext));
         }
     }
 
@@ -366,6 +375,22 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             }
 
             return ValueTask.FromResult(handled);
+        }
+    }
+
+    public ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (Scope(scope, create: false) is not { } data)
+            {
+                return ValueTask.FromResult<WorkBacklog?>(new WorkBacklog(0, 0, 0));
+            }
+
+            int workflow = data.WorkflowTasks.Values.Count(t => !t.Leased && !t.Stuck && t.VisibleAt <= now);
+            int activity = data.ActivityTasks.Values.Count(t => !t.Leased && t.VisibleAt <= now);
+            int timers = data.Timers.Values.Count(due => due <= now);
+            return ValueTask.FromResult<WorkBacklog?>(new WorkBacklog(workflow, activity, timers));
         }
     }
 

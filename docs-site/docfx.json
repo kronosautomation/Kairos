@@ -9,6 +9,7 @@
             "src/Kairos.Core/Kairos.Core.csproj",
             "src/Kairos.Persistence.Postgres/Kairos.Persistence.Postgres.csproj",
             "src/Kairos.Hosting/Kairos.Hosting.csproj",
+            "src/Kairos.Aspire.Hosting/Kairos.Aspire.Hosting.csproj",
             "src/Kairos.Agents/Kairos.Agents.csproj",
             "src/Kairos.Mcp.TaskStore/Kairos.Mcp.TaskStore.csproj",
             "src/Kairos.Agents.McpClient/Kairos.Agents.McpClient.csproj",

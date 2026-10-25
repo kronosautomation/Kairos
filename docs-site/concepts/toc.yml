@@ -34,3 +34,5 @@
   href: mcp-client.md
 - name: Calling other agents with A2A
   href: a2a.md
+- name: Observability and Aspire
+  href: observability.md

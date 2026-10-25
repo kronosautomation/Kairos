@@ -136,6 +136,8 @@ public abstract partial class StoreContractTests
         },
         [nameof(IKairosStore.SignalRunAsync)] = async (a, f) =>
             Assert.False(await a.Store.SignalRunAsync(In(f, a.Busy), "go", "leak-signal", B8("x"), Time.GetUtcNow(), Ct)),
+        [nameof(IKairosStore.SignalRunTracedAsync)] = async (a, f) =>
+            Assert.False(await a.Store.SignalRunTracedAsync(In(f, a.Busy), "go", "leak-signal-traced", B8("x"), Time.GetUtcNow(), "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", Ct)),
         [nameof(IKairosStore.PollWorkflowTaskAsync)] = async (a, f) =>
             Assert.Null(await a.Store.PollWorkflowTaskAsync(f, DefaultBuild, Time.GetUtcNow().AddDays(1), TimeSpan.FromMinutes(1), Ct)),
         [nameof(IKairosStore.CompleteWorkflowTaskAsync)] = async (a, f) =>
@@ -171,6 +173,11 @@ public abstract partial class StoreContractTests
             Assert.Equal(0, await a.Store.FireDueTimersAsync(f, Time.GetUtcNow().AddYears(1), Ct)),
         [nameof(IKairosStore.GetStuckWorkflowTasksAsync)] = async (a, f) =>
             Assert.Empty(await a.Store.GetStuckWorkflowTasksAsync(f, Ct)),
+        [nameof(IKairosStore.GetBacklogAsync)] = async (a, f) =>
+        {
+            WorkBacklog? backlog = await a.Store.GetBacklogAsync(f, Time.GetUtcNow().AddYears(1), Ct);
+            Assert.True(backlog is null or { WorkflowTasks: 0, ActivityTasks: 0, DueTimers: 0 }, "a foreign scope counted someone else's work");
+        },
         [nameof(IKairosStore.ResumeWorkflowTaskAsync)] = async (a, f) =>
             Assert.False(await a.Store.ResumeWorkflowTaskAsync(In(f, a.Parked), "mallory", Time.GetUtcNow(), Ct)),
         [nameof(IKairosStore.FailRunAsync)] = async (a, f) =>

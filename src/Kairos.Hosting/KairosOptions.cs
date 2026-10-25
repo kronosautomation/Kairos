@@ -26,6 +26,18 @@ public sealed class KairosOptions
 
     public WorkerOptions Worker { get; set; } = new();
 
+    /// <summary>
+    /// True (the default) makes <c>AddKairos</c> subscribe the host's OpenTelemetry providers to the <c>Kairos</c> activity source and meter, so runs, tasks and metrics
+    /// appear in any OpenTelemetry pipeline (and the Aspire dashboard) with no further setup. Set false to subscribe yourself.
+    /// </summary>
+    public bool RegisterTelemetry { get; set; } = true;
+
+    /// <summary>
+    /// How long every worker loop may be idle without completing an iteration before the health check reports the workers as stalled. Loops that are running
+    /// a long activity count as alive. Default 30 seconds; keep it well above <see cref="PollFallbackInterval"/>.
+    /// </summary>
+    public TimeSpan WorkerStallThreshold { get; set; } = TimeSpan.FromSeconds(30);
+
     internal IPayloadProtector? PayloadProtector { get; private set; }
 
     /// <summary>
@@ -54,6 +66,17 @@ public sealed class KairosOptions
             });
         };
         return this;
+    }
+
+    /// <summary>
+    /// Postgres, with the connection string read from configuration under <c>ConnectionStrings:{name}</c>. This is where .NET Aspire puts the string when the app
+    /// references the database (<c>builder.AddKairos("kairos").WithReference(postgres)</c> in the AppHost).
+    /// </summary>
+    public KairosOptions UsePostgresFromConfiguration(Microsoft.Extensions.Configuration.IConfiguration configuration, string name = "kairos")
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return UsePostgres(configuration["ConnectionStrings:" + name]
+            ?? throw new InvalidOperationException($"No connection string named '{name}' is configured (ConnectionStrings:{name})."));
     }
 
     /// <summary>Any store implementation (tests, simulators). Workers fall back to timed polling.</summary>

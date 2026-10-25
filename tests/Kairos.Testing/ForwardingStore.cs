@@ -9,6 +9,12 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.SignalRunAsync(run, signalName, signalId, payload, now, cancellationToken);
 
+    public virtual ValueTask<bool> SignalRunTracedAsync(
+        RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, string traceContext, CancellationToken cancellationToken) =>
+        traceContext.Length == 0
+            ? SignalRunAsync(run, signalName, signalId, payload, now, cancellationToken) // a decorator that overrides the plain call still sees untraced signals
+            : inner.SignalRunTracedAsync(run, signalName, signalId, payload, now, traceContext, cancellationToken);
+
     public virtual ValueTask<WorkflowTask?> PollWorkflowTaskAsync(
         TenantScope scope, IReadOnlyCollection<string> buildIds, DateTimeOffset now, TimeSpan lease, CancellationToken cancellationToken) =>
         inner.PollWorkflowTaskAsync(scope, buildIds, now, lease, cancellationToken);
@@ -35,6 +41,9 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask<CompletionOutcome> CompleteActivityTaskAsync(
         ActivityTask task, HistoryEvent outcome, DateTimeOffset? retryAt, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.CompleteActivityTaskAsync(task, outcome, retryAt, now, cancellationToken);
+
+    public virtual ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
+        inner.GetBacklogAsync(scope, now, cancellationToken);
 
     public virtual ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken) =>
         inner.GetStuckWorkflowTasksAsync(scope, cancellationToken);

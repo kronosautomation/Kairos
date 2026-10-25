@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Kairos;
 
 public sealed class WorkerOptions
@@ -88,14 +90,30 @@ public sealed class WorkerRuntime
 
     private async Task ProcessClaimedWorkflowTaskAsync(WorkflowTask task, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        // The run's trace was recorded when it started; every task, on any worker and after any restart, continues it.
+        string runTrace = task.History.Count > 0 && task.History[0] is WorkflowStarted origin ? origin.TraceContext : "";
+        using Activity? span = KairosTelemetry.Start("kairos.workflow_task", ActivityKind.Consumer, runTrace, runId: task.Run.RunId.ToString("D"));
+        string workflowType = task.WorkflowType;
+        if (span is not null)
+        {
+            span.SetTag(KairosTags.TenantId, task.Run.TenantId.ToString("D"));
+            span.SetTag(KairosTags.NamespaceId, task.Run.NamespaceId.ToString("D"));
+            span.SetTag(KairosTags.WorkflowType, workflowType);
+            span.SetTag(KairosTags.BuildId, task.BuildId);
+            span.SetTag("kairos.task.attempt", task.Attempt);
+            span.SetTag(KairosTags.HistoryEvents, task.History.Count);
+        }
+
+        var tags = new KeyValuePair<string, object?>("workflow.type", workflowType);
         if (!_workflows.TryGet(task.WorkflowType, task.BuildId, out WorkflowFunc? workflow))
         {
-            Fault(task, new InvalidOperationException($"Workflow '{task.WorkflowType}' build '{task.BuildId}' is not registered."));
+            Fault(task, new InvalidOperationException($"Workflow '{task.WorkflowType}' build '{task.BuildId}' is not registered."), span);
             await _store.ReleaseWorkflowTaskAsync(task, now + _options.FailedTaskRetryDelay, now, countAttempt: true, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         ReplayResult result;
+        long replayStart = _time.GetTimestamp();
         try
         {
             if (_crypto is null)
@@ -112,20 +130,40 @@ public sealed class WorkerRuntime
         }
         catch (Exception ex) when (ex is NonDeterminismException or HistoryIntegrityException or PayloadProtectionException)
         {
-            Fault(task, ex);
+            Fault(task, ex, span);
             await _store.ReleaseWorkflowTaskAsync(task, now + _options.FailedTaskRetryDelay, now, countAttempt: true, cancellationToken).ConfigureAwait(false);
             return;
         }
 
+        KairosMetrics.ReplayDuration.Record(_time.GetElapsedTime(replayStart).TotalSeconds, tags);
+        KairosMetrics.HistoryEvents.Record(task.History.Count, tags);
+        KairosMetrics.HistoryBytes.Record(TelemetryEvents.PayloadBytes(task.History), tags);
+
         DateTimeOffset stamp = _time.GetUtcNow();
+        string taskContext = KairosTelemetry.OrElse(span, runTrace);
         var events = new List<HistoryEvent>(result.NewCommands.Count);
         for (int i = 0; i < result.NewCommands.Count; i++)
         {
-            HistoryEvent plain = ToEvent(task.Run, result.NewCommands[i], stamp);
+            HistoryEvent plain = ToEvent(task.Run, result.NewCommands[i], stamp, taskContext);
             events.Add(_crypto is null ? plain : await _crypto.SealEventAsync(plain, cancellationToken).ConfigureAwait(false));
         }
 
-        await _store.CompleteWorkflowTaskAsync(task, events, stamp, cancellationToken).ConfigureAwait(false);
+        span?.SetTag(KairosTags.NewEvents, events.Count);
+        CompletionOutcome outcome = await _store.CompleteWorkflowTaskAsync(task, events, stamp, cancellationToken).ConfigureAwait(false);
+        string outcomeTag = outcome switch
+        {
+            CompletionOutcome.Applied => "applied",
+            CompletionOutcome.StaleLease => "stale_lease",
+            _ => "sequence_conflict",
+        };
+        span?.SetTag(KairosTags.Outcome, outcomeTag);
+        KairosMetrics.WorkflowTasks.Add(1, tags, new KeyValuePair<string, object?>(KairosTags.Outcome, outcomeTag));
+        if (outcome == CompletionOutcome.Applied)
+        {
+            // Spans and counters derived from history are emitted only for the events this task consumed, and only once it is recorded:
+            // a replay (or a task that has to run again) never reports the same timer, signal or run twice.
+            TelemetryEvents.Emit(task, result.NewCommands, runTrace, stamp, span);
+        }
     }
 
 #pragma warning disable CA1031 // Any activity exception is a recorded attempt failure.
@@ -143,6 +181,18 @@ public sealed class WorkerRuntime
         RunKey r = task.Run;
         HistoryEvent outcome;
         DateTimeOffset? retryAt = null;
+        using Activity? span = KairosTelemetry.Start("kairos.activity.attempt", ActivityKind.Consumer, task.TraceContext, runId: r.RunId.ToString("D"));
+        if (span is not null)
+        {
+            span.SetTag(KairosTags.TenantId, r.TenantId.ToString("D"));
+            span.SetTag(KairosTags.NamespaceId, r.NamespaceId.ToString("D"));
+            span.SetTag(KairosTags.ActivityType, task.ActivityType);
+            span.SetTag(KairosTags.ActivityId, task.ActivityId);
+            span.SetTag(KairosTags.Attempt, task.Attempt);
+        }
+
+        long attemptStart = _time.GetTimestamp();
+        string attemptOutcome = "completed";
 
         // Cancelled on shutdown or when a heartbeat learns the lease was lost; the activity sees this token.
         using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -175,12 +225,14 @@ public sealed class WorkerRuntime
         }
         catch (OperationCanceledException) when (leaseLost)
         {
+            FinishAttempt(span, task, "lease_lost", attemptStart);
             return true; // another worker owns this task now: record nothing, stop quietly
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Shutting down mid-activity: give the attempt back so a peer starts it at once; this is not a failed attempt.
             await ReleaseQuietlyAsync(() => _store.ReleaseActivityTaskAsync(task, _time.GetUtcNow(), _time.GetUtcNow(), CancellationToken.None)).ConfigureAwait(false);
+            FinishAttempt(span, task, "cancelled", attemptStart);
             throw;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -197,6 +249,12 @@ public sealed class WorkerRuntime
             DateTimeOffset stamp = _time.GetUtcNow();
             outcome = new ActivityFailed(r.TenantId, r.NamespaceId, r.RunId, 0, stamp, task.ActivityId, task.Attempt, errorType, ex.Message, retry);
             retryAt = retry ? stamp + task.RetryPolicy.GetBackoff(task.Attempt) : null;
+            attemptOutcome = retry ? "retry" : "failed";
+            KairosTelemetry.Fail(span, errorType); // the type only: a message can quote a payload
+            if (retry)
+            {
+                KairosMetrics.ActivityRetries.Add(1, new KeyValuePair<string, object?>(KairosTags.ActivityType, task.ActivityType));
+            }
         }
         finally
         {
@@ -212,8 +270,17 @@ public sealed class WorkerRuntime
             outcome = await _crypto.SealEventAsync(outcome, cancellationToken).ConfigureAwait(false);
         }
 
-        await _store.CompleteActivityTaskAsync(task, outcome, retryAt, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+        CompletionOutcome recorded = await _store.CompleteActivityTaskAsync(task, outcome, retryAt, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+        FinishAttempt(span, task, recorded == CompletionOutcome.Applied ? attemptOutcome : "stale", attemptStart);
         return true;
+    }
+
+    private void FinishAttempt(Activity? span, ActivityTask task, string outcome, long startedAt)
+    {
+        span?.SetTag(KairosTags.Outcome, outcome);
+        KairosMetrics.ActivityAttempts.Add(
+            1, new KeyValuePair<string, object?>(KairosTags.ActivityType, task.ActivityType), new KeyValuePair<string, object?>(KairosTags.Outcome, outcome));
+        KairosMetrics.ActivityDuration.Record(_time.GetElapsedTime(startedAt).TotalSeconds, new KeyValuePair<string, object?>(KairosTags.ActivityType, task.ActivityType));
     }
 
     private async Task AutoHeartbeatAsync(Func<ValueTask> beat, TimeSpan period, CancellationToken ct)
@@ -254,18 +321,35 @@ public sealed class WorkerRuntime
     {
         int fired = await _store.FireDueTimersAsync(_scope, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
         int reaped = await _store.ReapExpiredLeasesAsync(_scope, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+        if (fired > 0)
+        {
+            KairosMetrics.TimersFired.Add(fired);
+        }
+
+        if (reaped > 0)
+        {
+            KairosMetrics.LeaseExpiries.Add(reaped);
+        }
+
         return fired + reaped;
     }
 
-    private void Fault(WorkflowTask task, Exception error)
+    private void Fault(WorkflowTask task, Exception error, Activity? span)
     {
         KairosMetrics.WorkflowTaskFaults.Add(1, new KeyValuePair<string, object?>("error", error.GetType().Name));
+        KairosMetrics.WorkflowTasks.Add(
+            1, new KeyValuePair<string, object?>("workflow.type", task.WorkflowType), new KeyValuePair<string, object?>(KairosTags.Outcome, "faulted"));
+        KairosTelemetry.Fail(span, error.GetType().Name);
+        span?.SetTag(KairosTags.Outcome, "faulted");
         OnFault?.Invoke(new TaskFault(task.Run, error));
     }
 
-    private static HistoryEvent ToEvent(RunKey r, WorkflowCommand command, DateTimeOffset ts) => command switch
+    private static HistoryEvent ToEvent(RunKey r, WorkflowCommand command, DateTimeOffset ts, string traceContext) => command switch
     {
-        ScheduleActivityCommand c => new ActivityScheduled(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.ActivityId, c.ActivityType, c.Input, c.RetryPolicy),
+        ScheduleActivityCommand c => new ActivityScheduled(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.ActivityId, c.ActivityType, c.Input, c.RetryPolicy)
+        {
+            TraceContext = traceContext,
+        },
         StartTimerCommand c => new TimerStarted(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.TimerId, c.Duration),
         RecordPatchCommand c => new PatchMarker(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.PatchId),
         CompleteWorkflowCommand c => new WorkflowCompleted(r.TenantId, r.NamespaceId, r.RunId, 0, ts, c.Result),

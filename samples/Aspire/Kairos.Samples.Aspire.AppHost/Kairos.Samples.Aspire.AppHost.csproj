@@ -1,0 +1,17 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.6.4">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <UserSecretsId>kairos-samples-aspire-apphost</UserSecretsId>
+    <NoWarn>$(NoWarn);CA1050;CA1515;ASPIRE010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Kairos.Aspire.Hosting\Kairos.Aspire.Hosting.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="..\Kairos.Samples.Aspire.Orders\Kairos.Samples.Aspire.Orders.csproj" />
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" />
+  </ItemGroup>
+
+</Project>

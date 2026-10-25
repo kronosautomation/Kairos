@@ -15,17 +15,17 @@ internal static class EventEncoder
     /// <summary>Upper bound of the encoded size of <paramref name="e"/>.</summary>
     public static int MaxSize(HistoryEvent e) => HeaderSize + e switch
     {
-        WorkflowStarted x => StringMax(x.WorkflowType) + StringMax(x.BuildId) + BytesMax(x.Input) + 16,
+        WorkflowStarted x => StringMax(x.WorkflowType) + StringMax(x.BuildId) + BytesMax(x.Input) + 16 + TraceMax(x.TraceContext),
         WorkflowContinued x => 16 + BytesMax(x.Input),
         PatchMarker x => StringMax(x.PatchId),
-        ActivityScheduled x => 4 + StringMax(x.ActivityType) + BytesMax(x.Input) + PolicyMax(x.RetryPolicy),
+        ActivityScheduled x => 4 + StringMax(x.ActivityType) + BytesMax(x.Input) + PolicyMax(x.RetryPolicy) + TraceMax(x.TraceContext),
         ActivityCompleted x => 4 + BytesMax(x.Result),
         ActivityFailed x => 4 + 4 + StringMax(x.ErrorType) + StringMax(x.Message) + 1,
         TimerStarted => 4 + 8,
         TimerFired => 4,
         WorkflowTaskCompleted => 0,
         RunTerminated x => StringMax(x.Reason),
-        SignalReceived x => StringMax(x.SignalName) + BytesMax(x.Payload) + (x.SignalId.Length == 0 ? 0 : StringMax(x.SignalId)),
+        SignalReceived x => StringMax(x.SignalName) + BytesMax(x.Payload) + (x.SignalId.Length == 0 && x.TraceContext.Length == 0 ? 0 : StringMax(x.SignalId)) + TraceMax(x.TraceContext),
         WorkflowCompleted x => BytesMax(x.Result),
         WorkflowFailed x => StringMax(x.ErrorType) + StringMax(x.Message),
         _ => throw new ArgumentException($"Unknown history event type {e.GetType().Name}.", nameof(e)),
@@ -50,6 +50,7 @@ internal static class EventEncoder
                 w.WriteString(x.BuildId);
                 w.WriteBytes(x.Input);
                 w.WriteGuid(x.PreviousRunId);
+                WriteTrace(ref w, x.TraceContext);
                 break;
             case WorkflowContinued x:
                 w.WriteGuid(x.NewRunId);
@@ -72,6 +73,7 @@ internal static class EventEncoder
                     w.WriteString(x.RetryPolicy.NonRetryableErrorTypes[i]);
                 }
 
+                WriteTrace(ref w, x.TraceContext);
                 break;
             case ActivityCompleted x:
                 w.WriteInt32(x.ActivityId);
@@ -99,9 +101,12 @@ internal static class EventEncoder
             case SignalReceived x:
                 w.WriteString(x.SignalName);
                 w.WriteBytes(x.Payload);
-                if (x.SignalId.Length > 0)
+                if (x.SignalId.Length > 0 || x.TraceContext.Length > 0)
                 {
-                    w.WriteString(x.SignalId); // trailing and optional: histories written before signal ids keep their exact encoding and hashes
+                    // Trailing and optional: histories written before signal ids (or tracing) keep their exact encoding and hashes. A signal that carries a
+                    // trace context always writes its id first (possibly empty), so the two optional fields can never be mistaken for one another.
+                    w.WriteString(x.SignalId);
+                    WriteTrace(ref w, x.TraceContext);
                 }
 
                 break;
@@ -117,6 +122,17 @@ internal static class EventEncoder
         }
 
         return w.Position;
+    }
+
+    private static int TraceMax(string trace) => trace.Length == 0 ? 0 : StringMax(trace);
+
+    /// <summary>The trace context is trailing and optional, so events written before tracing keep their exact encoding and hashes.</summary>
+    private static void WriteTrace(ref SpanWriter w, string trace)
+    {
+        if (trace.Length > 0)
+        {
+            w.WriteString(trace);
+        }
     }
 
     private static int StringMax(string s) => 4 + Encoding.UTF8.GetMaxByteCount(s.Length);

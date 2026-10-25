@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 
 namespace Kairos;
 
@@ -26,15 +28,27 @@ public static class KairosServiceCollectionExtensions
         services.AddSingleton(sp => sp.GetRequiredService<KairosOptions.StoreHandle>().Store);
         services.AddSingleton(sp => new KairosClient(sp.GetRequiredService<IKairosStore>(), sp.GetRequiredService<TimeProvider>(), payloadProtector: options.PayloadProtector));
         services.AddSingleton(sp => new StuckTaskMonitor(
-            sp.GetRequiredService<KairosOptions.StoreHandle>(), options, sp.GetRequiredService<ILogger<StuckTaskMonitor>>()));
+            sp.GetRequiredService<KairosOptions.StoreHandle>(), options, sp.GetRequiredService<ILogger<StuckTaskMonitor>>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new KairosWorkerPulse(sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<KairosHealthCheck>();
+
+        // The store and the workers are reported by the host's health checks without any setup.
+        services.AddHealthChecks().AddKairosHealthCheck();
+
+        if (options.RegisterTelemetry)
+        {
+            // Subscribes whichever OpenTelemetry SDK the host uses (Aspire's service defaults included) to Kairos spans and metrics. Without an SDK it does nothing.
+            services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddSource(KairosTelemetry.SourceName));
+            services.ConfigureOpenTelemetryMeterProvider(metrics => metrics.AddMeter(KairosMetrics.MeterName));
+        }
+
         services.AddSingleton<IHostedService, KairosWorkerService>();
         return services;
     }
 }
 
 internal sealed partial class KairosWorkerService(
-    KairosOptions.StoreHandle handle, KairosOptions options, TimeProvider time, StuckTaskMonitor monitor, ILogger<KairosWorkerService> logger)
+    KairosOptions.StoreHandle handle, KairosOptions options, TimeProvider time, StuckTaskMonitor monitor, KairosWorkerPulse pulse, ILogger<KairosWorkerService> logger)
     : BackgroundService
 {
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
@@ -71,6 +85,19 @@ internal sealed partial class KairosWorkerService(
 #pragma warning disable CA1031 // A worker loop must survive any store/activity error; it is logged and retried.
     private async Task RunLoopAsync(WorkerRuntime worker, StuckTaskMonitor? watcher, CancellationToken ct)
     {
+        pulse.LoopStarted();
+        try
+        {
+            await LoopAsync(worker, watcher, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            pulse.LoopStopped();
+        }
+    }
+
+    private async Task LoopAsync(WorkerRuntime worker, StuckTaskMonitor? watcher, CancellationToken ct)
+    {
         long lastWatch = long.MinValue;
         while (!ct.IsCancellationRequested)
         {
@@ -82,9 +109,19 @@ internal sealed partial class KairosWorkerService(
                     await watcher.RefreshAsync(ct).ConfigureAwait(false);
                 }
 
-                bool didWork = await worker.ProcessWorkflowTaskAsync(ct).ConfigureAwait(false);
-                didWork |= await worker.ProcessActivityTaskAsync(ct).ConfigureAwait(false);
-                didWork |= await worker.FireTimersAsync(ct).ConfigureAwait(false) > 0;
+                pulse.WorkStarted();
+                bool didWork;
+                try
+                {
+                    didWork = await worker.ProcessWorkflowTaskAsync(ct).ConfigureAwait(false);
+                    didWork |= await worker.ProcessActivityTaskAsync(ct).ConfigureAwait(false);
+                    didWork |= await worker.FireTimersAsync(ct).ConfigureAwait(false) > 0;
+                }
+                finally
+                {
+                    pulse.WorkFinished();
+                }
+
                 if (didWork)
                 {
                     continue;

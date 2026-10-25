@@ -8,6 +8,7 @@
     <ProjectReference Include="..\Kairos.Core\Kairos.Core.csproj" />
     <ProjectReference Include="..\Kairos.Persistence.Postgres\Kairos.Persistence.Postgres.csproj" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+    <PackageReference Include="OpenTelemetry.Api.ProviderBuilderExtensions" />
   </ItemGroup>
 
   <!-- .NET 11+ supplies these, and an explicit reference there is NU1510 (an error under TreatWarningsAsErrors).

@@ -78,6 +78,67 @@ public abstract partial class StoreContractTests
     }
 
     [Fact]
+    public async Task The_backlog_counts_ready_work_of_this_scope_only()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        WorkBacklog? empty = await store.GetBacklogAsync(A, Time.GetUtcNow(), Ct);
+        if (empty is null)
+        {
+            return; // a store that cannot say is allowed to say nothing
+        }
+
+        Assert.Equal(new WorkBacklog(0, 0, 0), empty);
+        await client.StartAsync(A, "b-1", "wf", [], cancellationToken: Ct);
+        await client.StartAsync(A, "b-2", "wf", [], cancellationToken: Ct);
+
+        Assert.Equal(new WorkBacklog(2, 0, 0), await store.GetBacklogAsync(A, Time.GetUtcNow(), Ct));
+        Assert.Equal(new WorkBacklog(0, 0, 0), await store.GetBacklogAsync(B, Time.GetUtcNow(), Ct));
+
+        WorkflowTask? leased = await store.PollWorkflowTaskAsync(A, ["default"], Time.GetUtcNow(), TimeSpan.FromMinutes(1), Ct);
+        Assert.NotNull(leased);
+        Assert.Equal(1, (await store.GetBacklogAsync(A, Time.GetUtcNow(), Ct))!.WorkflowTasks); // a leased task is not ready
+    }
+
+    [Fact]
+    public async Task Trace_contexts_are_recorded_in_history_and_reach_the_activity_task()
+    {
+        const string Start = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        const string Scheduler = "00-4bf92f3577b34da6a3ce929d0e0e4736-b7ad6b7169203331-01";
+        const string Sender = "00-0af7651916cd43dd8448eb211c80319c-b9c7c989f97918e1-01";
+        (IKairosStore store, _) = await NewAsync();
+        var run = new RunKey(A.TenantId, A.NamespaceId, Guid.NewGuid());
+        await store.StartRunAsync(new StartRunRequest(run, "t-1", "wf", "default", [], Time.GetUtcNow(), Start), Ct);
+        Assert.True(await store.SignalRunTracedAsync(run, "go", "sig-1", [], Time.GetUtcNow(), Sender, Ct));
+
+        WorkflowTask task = (await store.PollWorkflowTaskAsync(A, ["default"], Time.GetUtcNow(), TimeSpan.FromMinutes(1), Ct))!;
+        Assert.Equal(Start, ((WorkflowStarted)task.History[0]).TraceContext);
+        Assert.Equal(Sender, ((SignalReceived)task.History[1]).TraceContext);
+        var scheduled = new ActivityScheduled(run.TenantId, run.NamespaceId, run.RunId, 0, Time.GetUtcNow(), 1, "work", [], RetryPolicy.Default) { TraceContext = Scheduler };
+        Assert.Equal(CompletionOutcome.Applied, await store.CompleteWorkflowTaskAsync(task, [scheduled], Time.GetUtcNow(), Ct));
+
+        ActivityTask? activity = await store.PollActivityTaskAsync(A, Time.GetUtcNow(), TimeSpan.FromMinutes(1), Ct);
+        Assert.Equal(Scheduler, activity!.TraceContext);
+        IReadOnlyList<HistoryEvent> history = await store.GetHistoryAsync(run, Ct);
+        AssertChainIntact(history); // the context is part of what the chain covers
+        Assert.Equal(Scheduler, history.OfType<ActivityScheduled>().Single().TraceContext);
+    }
+
+    [Fact]
+    public async Task A_continued_run_keeps_the_trace_of_the_run_it_continues()
+    {
+        const string Start = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        (IKairosStore store, _) = await NewAsync();
+        var run = new RunKey(A.TenantId, A.NamespaceId, Guid.NewGuid());
+        await store.StartRunAsync(new StartRunRequest(run, "t-2", "wf", "default", [], Time.GetUtcNow(), Start), Ct);
+        WorkflowTask task = (await store.PollWorkflowTaskAsync(A, ["default"], Time.GetUtcNow(), TimeSpan.FromMinutes(1), Ct))!;
+        Guid next = Guid.NewGuid();
+        await store.CompleteWorkflowTaskAsync(task, [new WorkflowContinued(run.TenantId, run.NamespaceId, run.RunId, 0, Time.GetUtcNow(), next, [])], Time.GetUtcNow(), Ct);
+
+        IReadOnlyList<HistoryEvent> history = await store.GetHistoryAsync(new RunKey(run.TenantId, run.NamespaceId, next), Ct);
+        Assert.Equal(Start, ((WorkflowStarted)history[0]).TraceContext);
+    }
+
+    [Fact]
     public async Task Starting_an_existing_workflow_id_is_deduplicated()
     {
         (_, KairosClient client) = await NewAsync();

@@ -40,6 +40,12 @@ public sealed record WorkflowStarted(
 
     /// <summary>The run this one continues (continue-as-new); <see cref="Guid.Empty"/> for a fresh start.</summary>
     public Guid PreviousRunId { get; init; }
+
+    /// <summary>
+    /// W3C <c>traceparent</c> of the span that started the run, or empty. Kept in history so every task of the run, on any worker and after any
+    /// restart, continues the same trace. It is readable metadata (random ids only), never derived from a payload.
+    /// </summary>
+    public string TraceContext { get; init; } = "";
 }
 
 public sealed record ActivityScheduled(
@@ -48,6 +54,9 @@ public sealed record ActivityScheduled(
     : HistoryEvent(TenantId, NamespaceId, RunId, Sequence, Timestamp)
 {
     public override HistoryEventType Type => HistoryEventType.ActivityScheduled;
+
+    /// <summary>W3C <c>traceparent</c> of the workflow task that scheduled the activity, or empty. Every attempt, retry and restart is a child of it.</summary>
+    public string TraceContext { get; init; } = "";
 }
 
 public sealed record ActivityCompleted(
@@ -134,6 +143,9 @@ public sealed record SignalReceived(
     /// store ignore a redelivered signal. Empty only in histories written before ids existed.
     /// </summary>
     public string SignalId { get; init; } = "";
+
+    /// <summary>W3C <c>traceparent</c> of the span that sent the signal, or empty.</summary>
+    public string TraceContext { get; init; } = "";
 }
 
 public sealed record WorkflowCompleted(

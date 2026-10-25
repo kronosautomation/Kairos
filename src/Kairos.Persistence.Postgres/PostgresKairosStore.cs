@@ -37,7 +37,10 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
     {
         ArgumentNullException.ThrowIfNull(request);
         var started = new WorkflowStarted(
-            request.Run.TenantId, request.Run.NamespaceId, request.Run.RunId, 0, request.Now, request.WorkflowType, request.BuildId, request.Input);
+            request.Run.TenantId, request.Run.NamespaceId, request.Run.RunId, 0, request.Now, request.WorkflowType, request.BuildId, request.Input)
+        {
+            TraceContext = request.TraceContext,
+        };
         HistoryEvent first = StoreRules.Seal(started, 1, HashChain.GenesisHash);
         byte[] body = HistoryEventCodec.Encode(first);
 
@@ -101,9 +104,14 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         }).ConfigureAwait(false);
     }
 
-    public async ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken)
+    public ValueTask<bool> SignalRunAsync(RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, CancellationToken cancellationToken) =>
+        SignalRunTracedAsync(run, signalName, signalId, payload, now, "", cancellationToken);
+
+    public async ValueTask<bool> SignalRunTracedAsync(
+        RunKey run, string signalName, string signalId, byte[] payload, DateTimeOffset now, string traceContext, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(signalId);
+        ArgumentNullException.ThrowIfNull(traceContext);
         return await InTransaction(run.Scope, async (conn, tx) =>
         {
             RunHead? head = await LockRunAsync(conn, tx, run, cancellationToken).ConfigureAwait(false);
@@ -125,7 +133,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 }
             }
 
-            var template = new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId };
+            var template = new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId, TraceContext = traceContext };
             await AppendAsync(conn, tx, run, head, [template], cancellationToken).ConfigureAwait(false);
             await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false);
             await NotifyAsync(conn, tx, run.Scope, cancellationToken).ConfigureAwait(false);
@@ -338,7 +346,11 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             var started = new WorkflowStarted(next.TenantId, next.NamespaceId, next.RunId, 0, now, "", "", continuation.Input) { PreviousRunId = run.RunId };
             string workflowType, buildId;
             await using (var meta = new NpgsqlCommand(
-                "SELECT workflow_type, build_id FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r", conn, tx))
+                """
+                SELECT workflow_type, build_id,
+                       (SELECT body FROM kairos.history_events h WHERE h.tenant_id = @t AND h.namespace_id = @n AND h.run_id = @r AND h.seq = 1)
+                FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r
+                """, conn, tx))
             {
                 meta.Parameters.AddWithValue("t", run.TenantId);
                 meta.Parameters.AddWithValue("n", run.NamespaceId);
@@ -347,6 +359,10 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 await reader.ReadAsync(ct).ConfigureAwait(false);
                 workflowType = reader.GetString(0);
                 buildId = reader.GetString(1);
+                if (!reader.IsDBNull(2) && HistoryEventCodec.Decode(reader.GetFieldValue<byte[]>(2), NoHash, NoHash) is WorkflowStarted origin)
+                {
+                    started = started with { TraceContext = origin.TraceContext }; // one trace across the whole chain
+                }
             }
 
             HistoryEvent first = StoreRules.Seal(started with { WorkflowType = workflowType, BuildId = buildId }, 1, HashChain.GenesisHash);
@@ -638,7 +654,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
 
             return new ActivityTask(
                 new RunKey(scope.TenantId, scope.NamespaceId, reader.GetGuid(0)), scheduled.ActivityId, scheduled.ActivityType,
-                scheduled.Input, scheduled.RetryPolicy, reader.GetInt32(2), reader.GetInt64(3));
+                scheduled.Input, scheduled.RetryPolicy, reader.GetInt32(2), reader.GetInt64(3), scheduled.TraceContext);
         }).ConfigureAwait(false);
     }
 
@@ -955,6 +971,29 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
     }
 
     // ---- operator actions on parked work --------------------------------------------------------------------------
+
+    public async ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        return await Retry<WorkBacklog?>(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(scope);
+            NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
+            cmd.CommandText = """
+                SELECT (SELECT count(*) FROM kairos.workflow_tasks WHERE tenant_id = @t AND namespace_id = @n AND NOT leased AND NOT stuck AND visible_at <= @now),
+                       (SELECT count(*) FROM kairos.activity_tasks WHERE tenant_id = @t AND namespace_id = @n AND NOT leased AND visible_at <= @now),
+                       (SELECT count(*) FROM kairos.timers WHERE tenant_id = @t AND namespace_id = @n AND due_at <= @now)
+                """;
+            Scope(cmd, scope);
+            cmd.Parameters.Add(Ts("now", now));
+            batch.BatchCommands.Add(cmd);
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            return new WorkBacklog((int)reader.GetInt64(0), (int)reader.GetInt64(1), (int)reader.GetInt64(2));
+        }).ConfigureAwait(false);
+    }
 
     public async ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken)
     {

@@ -277,12 +277,30 @@ public sealed class AgentsRuntime
     private async Task<byte[]> ChatStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
     {
         ChatStepRequest request = WireCodec.Read(input, AgentJson.Default.ChatStepRequest);
+        using Activity? span = AgentTelemetry.StartChat(context, request);
+        long started = AgentTelemetry.Now();
+        try
+        {
+            byte[] reply = await ChatCoreAsync(context, request, span, cancellationToken).ConfigureAwait(false);
+            AgentTelemetry.Finish("chat", request.Model, span, started, error: null);
+            return reply;
+        }
+        catch (Exception ex)
+        {
+            AgentTelemetry.Finish("chat", request.Model, span, started, ex);
+            throw;
+        }
+    }
+
+    private async Task<byte[]> ChatCoreAsync(ActivityContext context, ChatStepRequest request, Activity? span, CancellationToken cancellationToken)
+    {
         if (!_config.Models.TryGetValue(request.Model, out Func<RunKey, IChatClient>? resolve))
         {
             throw new UnknownModelException($"No model is registered as '{request.Model}'.");
         }
 
         IChatClient client = resolve(context.Run);
+        AgentTelemetry.Provider(span, client);
         var tools = new List<AITool>(request.Tools.Length);
         foreach (string name in request.Tools)
         {
@@ -318,6 +336,7 @@ public sealed class AgentsRuntime
             throw new TimeoutException($"The model '{request.Model}' did not answer within {_config.ModelTimeout.TotalSeconds:0} seconds.");
         }
 
+        AgentTelemetry.Response(span, request.Model, response);
         var reply = new ChatStepResponse
         {
             Messages = [.. response.Messages.Select(m => WireCodec.ResponseToWire(m, _config.Redactor))],
@@ -361,6 +380,24 @@ public sealed class AgentsRuntime
     private async Task<byte[]> ToolStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
     {
         ToolStepRequest request = WireCodec.Read(input, AgentJson.Default.ToolStepRequest);
+        using Activity? span = AgentTelemetry.StartTool(context, request);
+        long started = AgentTelemetry.Now();
+        try
+        {
+            byte[] reply = await ToolCoreAsync(context, request, cancellationToken).ConfigureAwait(false);
+            AgentTelemetry.ToolOutcome(span, reply);
+            AgentTelemetry.Finish("execute_tool", request.Name, span, started, error: null);
+            return reply;
+        }
+        catch (Exception ex)
+        {
+            AgentTelemetry.Finish("execute_tool", request.Name, span, started, ex);
+            throw;
+        }
+    }
+
+    private async Task<byte[]> ToolCoreAsync(ActivityContext context, ToolStepRequest request, CancellationToken cancellationToken)
+    {
         if (!_config.Tools.TryGetValue(request.Name, out AgentTool? tool))
         {
             // A model asking for a tool that does not exist is the model's mistake: tell it, do not retry.
