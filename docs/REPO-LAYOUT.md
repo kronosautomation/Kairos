@@ -32,8 +32,9 @@ spans both (a new core API plus its commercial user) is two commits, core first.
 | **Kairos.Agents.A2aClient** | **Kairos** | Durable, idempotent outbound A2A calls for agent workflows (`ctx.CallA2aAgentAsync`), with Agent Card verification. Agent durability is free. |
 | **Kairos.Agents.A2a** | **Kairos.Commercial** (Pro) | Hosted A2A server: workflows published as A2A agents, signed Agent Cards served, server-stamped caller identity. Mirrors Kairos.Agents.Mcp. |
 | **Kairos.Agents.Mcp** | **Kairos.Commercial** (Pro) | The Kairos MCP server: workflows exposed as tools, approvals as input requests with server-stamped, verified approver identity, operator tools. Uses Kairos.Mcp.TaskStore. |
-| **Kairos.Cloud.Azure** | **Kairos.Commercial** (Pro) | Blob payload offload, Key Vault key wrapping, Service Bus event sink and source, behind the Apache provider interfaces; passes the Apache conformance suites. |
-| Kairos.Agents.Policies, Telemetry, Dashboard, Cloud.Aws/Gcp | Kairos.Commercial (Pro) | Future |
+| **Kairos.Cloud.Azure** | **Kairos.Commercial** (Pro) | Blob payload offload, Key Vault key wrapping, Service Bus event sink and source, Entra worker authentication, behind the Apache provider interfaces; passes the Apache conformance suites. |
+| **Kairos.Cloud.Aws** | **Kairos.Commercial** (Pro) | KMS key wrapping, S3 offload, SQS and EventBridge events, IAM worker authentication, role credentials only; passes the Apache conformance suites. |
+| Kairos.Agents.Policies, Telemetry, Dashboard, Cloud.Gcp | Kairos.Commercial (Pro) | Future |
 | Kairos.Server, Admin, Dashboard.Enterprise, Agents.AgentFramework | Kairos.Commercial (Business) | Future |
 | Marketing site | Kairos.Website | From the design canvas |
 | Product docs | Kairos/docs-site | Customer-facing rewrites only |
