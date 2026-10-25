@@ -36,7 +36,8 @@ spans both (a new core API plus its commercial user) is two commits, core first.
 | **Kairos.Cloud.Aws** | **Kairos.Commercial** (Pro) | KMS key wrapping, S3 offload, SQS and EventBridge events, IAM worker authentication, role credentials only; passes the Apache conformance suites. |
 | **infra/** (Pulumi C# cell stacks), **build/** (cloud sandbox pipeline) | **Kairos.Commercial** | One Azure Container Apps cell and one ECS Fargate cell, each with its own PostgreSQL, private networking only, least-privilege identities, no secrets in stack configuration; and the nightly `CloudSandbox` pipeline that deploys a throwaway cell, runs the Apache conformance suites against the real services, and destroys it. |
 | Kairos.Agents.Policies, Telemetry, Dashboard, Cloud.Gcp | Kairos.Commercial (Pro) | Future |
-| Kairos.Server, Admin, Dashboard.Enterprise, Agents.AgentFramework | Kairos.Commercial (Business) | Future |
+| **Kairos.Server**, **Kairos.Server.Host** | **Kairos.Commercial** (Business) | The multi-tenant data plane: run operations over HTTP and gRPC, Entra / IAM / OIDC authentication, per-tenant limits, health. The worker task protocol comes next. Host = the executable that composes it from configuration. |
+| Kairos.Admin, Dashboard.Enterprise, Agents.AgentFramework | Kairos.Commercial (Business) | Future |
 | Marketing site | Kairos.Website | From the design canvas |
 | Product docs | Kairos/docs-site | Customer-facing rewrites only |
 
