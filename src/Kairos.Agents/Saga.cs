@@ -41,10 +41,30 @@ public interface ISaga
     /// Registers an undo step that runs one activity. Register it after the step it undoes succeeded (or before, if the step can have an
     /// effect even when it fails). The activity must be idempotent and must cope with "nothing to undo".
     /// </summary>
-    void Compensate(string name, string activityType, ReadOnlyMemory<byte> input);
+    SagaCompensationHandle Compensate(string name, string activityType, ReadOnlyMemory<byte> input);
 
     /// <summary>Registers an undo step made of workflow code. Pass the given retry policy to the activities it runs.</summary>
-    void Compensate(string name, Func<RetryPolicy, Task> undo);
+    SagaCompensationHandle Compensate(string name, Func<RetryPolicy, Task> undo);
+
+    /// <summary>
+    /// Completes when a cancel is requested. Race it against a wait that is not already cancel-aware (a durable timer, say) so a cancel is noticed
+    /// at once instead of at the next step.
+    /// </summary>
+    Task WhenCancelled { get; }
+}
+
+/// <summary>A registered undo step. Discard it when the work it would undo has ended on its own and there is nothing left to undo.</summary>
+public sealed class SagaCompensationHandle
+{
+    internal SagaCompensationHandle()
+    {
+    }
+
+    /// <summary>True once <see cref="Discard"/> was called.</summary>
+    public bool IsDiscarded { get; private set; }
+
+    /// <summary>Removes the undo step from the rollback. Has no effect once the rollback has started.</summary>
+    public void Discard() => IsDiscarded = true;
 }
 
 /// <summary>A cancel was requested for a run inside a saga. The saga rolled back before this reached the caller.</summary>
@@ -148,7 +168,9 @@ internal sealed class SagaScope : ISaga
 
     internal Task<byte[]> CancelTask => _cancel;
 
-    internal int Registered => _steps.Count;
+    internal int Registered => _steps.Count(s => !s.Handle.IsDiscarded);
+
+    public Task WhenCancelled => _cancel;
 
     public void ThrowIfCancelled()
     {
@@ -158,18 +180,20 @@ internal sealed class SagaScope : ISaga
         }
     }
 
-    public void Compensate(string name, string activityType, ReadOnlyMemory<byte> input)
+    public SagaCompensationHandle Compensate(string name, string activityType, ReadOnlyMemory<byte> input)
     {
         ArgumentException.ThrowIfNullOrEmpty(activityType);
         byte[] copy = input.ToArray();
-        Compensate(name, policy => _context.ExecuteActivityAsync(activityType, copy, policy));
+        return Compensate(name, policy => _context.ExecuteActivityAsync(activityType, copy, policy));
     }
 
-    public void Compensate(string name, Func<RetryPolicy, Task> undo)
+    public SagaCompensationHandle Compensate(string name, Func<RetryPolicy, Task> undo)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(undo);
-        _steps.Add(new Step(name, undo));
+        var handle = new SagaCompensationHandle();
+        _steps.Add(new Step(name, undo, handle));
+        return handle;
     }
 
     /// <param name="context">The workflow context.</param>
@@ -208,17 +232,18 @@ internal sealed class SagaScope : ISaga
 
     private async Task RollBackAsync(Exception cause)
     {
-        if (_steps.Count == 0)
+        List<Step> steps = [.. _steps.Where(s => !s.Handle.IsDiscarded)];
+        if (steps.Count == 0)
         {
             return;
         }
 
-        string[] plan = [.. Enumerable.Reverse(_steps).Select(s => s.Name)];
+        string[] plan = [.. Enumerable.Reverse(steps).Select(s => s.Name)];
         await MarkAsync(new SagaMark { Kind = SagaMarks.RollbackBegin, Names = plan });
         var failed = new List<string>();
-        for (int i = _steps.Count - 1; i >= 0; i--)
+        for (int i = steps.Count - 1; i >= 0; i--)
         {
-            Step step = _steps[i];
+            Step step = steps[i];
             await MarkAsync(new SagaMark { Kind = SagaMarks.StepBegin, Name = step.Name });
             bool ok = true;
             try
@@ -255,7 +280,7 @@ internal sealed class SagaScope : ISaga
         }
     }
 
-    private sealed record Step(string Name, Func<RetryPolicy, Task> Undo);
+    private sealed record Step(string Name, Func<RetryPolicy, Task> Undo, SagaCompensationHandle Handle);
 }
 
 internal static class SagaMarks

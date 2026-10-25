@@ -93,4 +93,16 @@ public sealed class A2aSamplesTests
         Assert.Equal("Invoice 42 is paid.", result);
         Assert.Equal(("The invoice is for customer 42.", "t-1"), agent.Received[^1]);
     }
+
+    [Fact]
+    public async Task An_unsigned_partner_is_registered_as_an_explicit_exception()
+    {
+        using var http = new HttpClient();
+        A2aClientRuntime runtime = A2aExamples.ConfigureUnsignedPartner(http);
+
+        Assert.Contains(A2aClientRuntime.SendActivity, runtime.Activities.Keys);
+        using var strict = new A2aAgentConnector(new Uri("https://partner.example.com/"), http);
+        Assert.True(strict.RequireSignedCard);
+        await Assert.ThrowsAsync<UntrustedAgentCardException>(async () => await strict.ConnectAsync(default));
+    }
 }

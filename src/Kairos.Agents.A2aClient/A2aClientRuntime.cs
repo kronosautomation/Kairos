@@ -71,8 +71,17 @@ public sealed class A2aClientEndpoint(IA2AClient client) : IA2aAgentEndpoint
     public async ValueTask<A2aReply> GetTaskAsync(string taskId, CancellationToken cancellationToken) =>
         Map(await client.GetTaskAsync(new GetTaskRequest { Id = taskId }, cancellationToken).ConfigureAwait(false));
 
-    public async ValueTask CancelTaskAsync(string taskId, CancellationToken cancellationToken) =>
-        await client.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, cancellationToken).ConfigureAwait(false);
+    public async ValueTask CancelTaskAsync(string taskId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.CancelTaskAsync(new CancelTaskRequest { Id = taskId }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (A2AException ex) when (ex.ErrorCode is A2AErrorCode.TaskNotCancelable or A2AErrorCode.TaskNotFound)
+        {
+            // Already finished, or gone: there is nothing left to cancel, which is what the caller wanted.
+        }
+    }
 
     private static A2aReply Map(AgentTask task)
     {
@@ -141,12 +150,17 @@ public sealed class UnknownA2aAgentException : Exception
 }
 
 /// <summary>
-/// Reaches a remote agent from its address: fetches its Agent Card, checks the card's signature against the keys you trust when you ask for
-/// that, and builds an SDK client for the interface the card advertises. The card is cached for <see cref="CardLifetime"/>.
+/// Reaches a remote agent from its address: fetches its Agent Card, requires a valid signature from a key you trust, and builds an SDK client for
+/// the interface the card advertises. The card is cached for <see cref="CardLifetime"/>.
+/// <para>
+/// A signed card is the default and the only thing accepted unless you call <see cref="AllowUnsignedCard"/>. Even then a card that carries a
+/// signature must carry a valid one: an unsigned card is merely unvouched for, a card with a bad signature is a forgery.
+/// </para>
 /// </summary>
 public sealed class A2aAgentConnector(Uri baseAddress, HttpClient http, AgentCardVerifier? verifier = null) : IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool _allowUnsigned;
     private IA2aAgentEndpoint? _endpoint;
     private DateTimeOffset _fetched;
 
@@ -154,8 +168,32 @@ public sealed class A2aAgentConnector(Uri baseAddress, HttpClient http, AgentCar
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
-    /// <summary>When true (the default whenever a verifier is given), a card without a valid signature from a trusted key is refused.</summary>
-    public bool RequireSignedCard { get; init; } = verifier is not null;
+    /// <summary>True unless <see cref="AllowUnsignedCard"/> was called: a card without a valid signature from a trusted key is refused.</summary>
+    public bool RequireSignedCard => !_allowUnsigned;
+
+    /// <summary>
+    /// Accepts a card that has no signature at all, for an agent whose publisher does not sign (a prototype, a partner who has not caught up).
+    /// This is a decision about one agent, made in code where it can be reviewed. A card that has a signature that does not verify is still refused.
+    /// </summary>
+    public A2aAgentConnector AllowUnsignedCard()
+    {
+        _allowUnsigned = true;
+        return this;
+    }
+
+    private static bool HasSignatures(byte[] raw)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(raw);
+            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("signatures", out JsonElement s) &&
+                !(s.ValueKind == JsonValueKind.Array && s.GetArrayLength() == 0) && s.ValueKind != JsonValueKind.Null;
+        }
+        catch (JsonException)
+        {
+            return true; // not even JSON: let the verifier refuse it
+        }
+    }
 
     public void Dispose() => _gate.Dispose();
 
@@ -170,12 +208,18 @@ public sealed class A2aAgentConnector(Uri baseAddress, HttpClient http, AgentCar
             }
 
             var cardUri = new Uri(baseAddress, ".well-known/agent-card.json");
+            if (verifier is null && RequireSignedCard)
+            {
+                // Refused before anything is fetched: there is no way this card could be accepted.
+                throw new UntrustedAgentCardException(
+                    $"Signed Agent Cards are required for {baseAddress} and no verifier with trusted keys was given. Give the connector a verifier, or call AllowUnsignedCard() to accept this agent without one.");
+            }
+
             byte[] raw = await http.GetByteArrayAsync(cardUri, cancellationToken).ConfigureAwait(false);
-            if (RequireSignedCard)
+            if (verifier is not null && (RequireSignedCard || HasSignatures(raw)))
             {
                 // Checked on the bytes as received, so fields this SDK version does not model are part of what was signed.
-                AgentCardVerification result = (verifier ?? throw new InvalidOperationException("A signed card is required but no verifier is configured."))
-                    .VerifyJson(raw);
+                AgentCardVerification result = verifier.VerifyJson(raw);
                 if (!result.IsValid)
                 {
                     throw new UntrustedAgentCardException($"The Agent Card at {cardUri} is not trusted: {result.Reason}.");
@@ -225,10 +269,17 @@ public sealed class A2aClientsBuilder
         return AddAgent(name, (_, _) => ValueTask.FromResult(endpoint));
     }
 
-    /// <summary>Registers an agent by address. With a verifier, its card must carry a valid signature from a trusted key.</summary>
-    public A2aClientsBuilder AddAgent(string name, Uri baseAddress, HttpClient http, AgentCardVerifier? verifier = null)
+    /// <summary>Registers an agent by address. Its Agent Card must carry a valid signature from a key in <paramref name="verifier"/>.</summary>
+    public A2aClientsBuilder AddAgent(string name, Uri baseAddress, HttpClient http, AgentCardVerifier verifier)
     {
-        var connector = new A2aAgentConnector(baseAddress, http, verifier);
+        ArgumentNullException.ThrowIfNull(verifier, nameof(verifier) + " (to accept an agent without signed cards, register new A2aAgentConnector(...).AllowUnsignedCard())");
+        return AddAgent(name, new A2aAgentConnector(baseAddress, http, verifier));
+    }
+
+    /// <summary>Registers an agent through a connector, for options such as <see cref="A2aAgentConnector.AllowUnsignedCard"/>.</summary>
+    public A2aClientsBuilder AddAgent(string name, A2aAgentConnector connector)
+    {
+        ArgumentNullException.ThrowIfNull(connector);
         return AddAgent(name, (_, ct) => connector.ConnectAsync(ct));
     }
 

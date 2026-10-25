@@ -73,6 +73,9 @@ public interface IAgentContext
     /// <summary>Who the agent acts for. Used as the requester of approvals and recorded on tool credentials. Set it from the workflow input.</summary>
     string? OnBehalfOf { get; set; }
 
+    /// <summary>The innermost saga running through this context, or null. Steps that start work elsewhere use it to register its undo.</summary>
+    ISaga? CurrentSaga { get; }
+
     /// <summary>Chooses the tools a model call may use.</summary>
     AgentToolSet Tools(params string[] names);
 
@@ -103,6 +106,8 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
     public IWorkflowContext Workflow => workflow;
 
     public string? OnBehalfOf { get; set; }
+
+    public ISaga? CurrentSaga => _saga;
 
     public AgentToolSet Tools(params string[] names)
     {
@@ -323,8 +328,11 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
         }
     }
 
-    public Task<T> RunSagaAsync<T>(Func<ISaga, Task<T>> body, SagaOptions? options = null) =>
-        SagaScope.RunAsync(workflow, body, options ?? new SagaOptions(), saga => _saga = saga);
+    public Task<T> RunSagaAsync<T>(Func<ISaga, Task<T>> body, SagaOptions? options = null)
+    {
+        SagaScope? outer = _saga;
+        return SagaScope.RunAsync(workflow, body, options ?? new SagaOptions(), saga => _saga = saga ?? outer); // an inner saga that ends hands back to the outer one
+    }
 }
 
 /// <summary>

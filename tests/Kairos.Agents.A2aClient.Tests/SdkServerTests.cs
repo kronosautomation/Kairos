@@ -79,10 +79,24 @@ public sealed class SdkServerTests
         return (app, port);
     }
 
-    private static async Task<(A2aRig Rig, RunKey Run, RunState State)> CallAsync(int port, AgentCardVerifier? verifier)
+    private static async Task<(A2aRig Rig, RunKey Run, RunState State)> CallAsync(int port, AgentCardVerifier? verifier, bool allowUnsigned = false, HttpClient? client = null)
     {
-        var http = new HttpClient();
-        var rig = new A2aRig(b => b.AddAgent("reports", new Uri($"http://127.0.0.1:{port}/"), http, verifier).ReadOnlyAgents("reports"));
+        HttpClient http = client ?? new HttpClient();
+        var uri = new Uri($"http://127.0.0.1:{port}/");
+        var rig = new A2aRig(b =>
+        {
+            if (verifier is not null && !allowUnsigned)
+            {
+                b.AddAgent("reports", uri, http, verifier);
+            }
+            else
+            {
+                A2aAgentConnector connector = new A2aAgentConnector(uri, http, verifier);
+                b.AddAgent("reports", allowUnsigned ? connector.AllowUnsignedCard() : connector);
+            }
+
+            b.ReadOnlyAgents("reports");
+        });
         rig.Workflow("call", async (ctx, _) =>
         {
             A2aAgentResult r = await ctx.CallA2aAgentAsync("reports", "Ada", new A2aCallOptions { MinimumPollInterval = TimeSpan.FromMilliseconds(100) });
@@ -158,15 +172,109 @@ public sealed class SdkServerTests
     }
 
     [Fact]
-    public async Task Without_a_verifier_an_unsigned_card_is_accepted()
+    public async Task An_unsigned_card_is_accepted_only_when_the_agent_is_explicitly_allowed_to_be_unsigned()
     {
         (WebApplication app, int port) = await ServeAsync(Card);
         await using (app)
         {
-            (A2aRig rig, RunKey run, RunState state) = await CallAsync(port, verifier: null);
+            (A2aRig rig, RunKey run, RunState state) = await CallAsync(port, verifier: null, allowUnsigned: true);
 
             Assert.True(state == RunState.Completed, await Why(rig, run));
             Assert.Equal("report for Ada", await rig.ResultAsync(run));
+        }
+    }
+
+    private sealed class CountingHandler : DelegatingHandler
+    {
+        public int Requests;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Requests);
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task By_default_an_agent_without_trusted_keys_is_refused_before_anything_is_fetched()
+    {
+        (WebApplication app, int port) = await ServeAsync(Card);
+        await using (app)
+        {
+            var handler = new CountingHandler { InnerHandler = new HttpClientHandler() };
+            using var http = new HttpClient(handler);
+            var connector = new A2aAgentConnector(new Uri($"http://127.0.0.1:{port}/"), http);
+
+            Assert.True(connector.RequireSignedCard);
+            UntrustedAgentCardException ex = await Assert.ThrowsAsync<UntrustedAgentCardException>(async () => await connector.ConnectAsync(default));
+            Assert.Contains("AllowUnsignedCard()", ex.Message, StringComparison.Ordinal);
+            Assert.Equal(0, handler.Requests);
+        }
+    }
+
+    [Fact]
+    public async Task Registering_by_address_without_a_verifier_is_a_configuration_error_that_names_the_opt_out()
+    {
+        var builder = new A2aClientsBuilder();
+        using var http = new HttpClient();
+
+        ArgumentNullException ex = Assert.Throws<ArgumentNullException>(() => builder.AddAgent("x", new Uri("http://127.0.0.1:1/"), http, verifier: null!));
+
+        Assert.Contains("AllowUnsignedCard()", ex.Message, StringComparison.Ordinal);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Allowing_unsigned_cards_does_not_excuse_a_signature_that_does_not_verify()
+    {
+        using var publisher = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var impostor = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var verifier = new AgentCardVerifier(new Dictionary<string, byte[]> { ["reports-2026"] = new AgentCardSigner(publisher, "reports-2026").ExportPublicKey() });
+        var forger = new AgentCardSigner(impostor, "reports-2026");
+        (WebApplication app, int port) = await ServeAsync(p => forger.Sign(Card(p)));
+        await using (app)
+        {
+            (_, _, RunState state) = await CallAsync(port, verifier, allowUnsigned: true);
+
+            Assert.Equal(RunState.Failed, state); // unsigned would have been fine; a forged signature is not
+        }
+    }
+
+    [Fact]
+    public async Task Allowing_unsigned_cards_still_accepts_a_correctly_signed_one()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var signer = new AgentCardSigner(key, "reports-2026");
+        var verifier = new AgentCardVerifier(new Dictionary<string, byte[]> { ["reports-2026"] = signer.ExportPublicKey() });
+        (WebApplication app, int port) = await ServeAsync(p => signer.Sign(Card(p)));
+        await using (app)
+        {
+            (_, _, RunState state) = await CallAsync(port, verifier, allowUnsigned: true);
+
+            Assert.Equal(RunState.Completed, state);
+        }
+    }
+
+    [Fact]
+    public async Task Cancelling_a_task_that_has_already_finished_is_not_an_error()
+    {
+        (WebApplication app, int port) = await ServeAsync(Card);
+        await using (app)
+        {
+            using var http = new HttpClient();
+            using var connector = new A2aAgentConnector(new Uri($"http://127.0.0.1:{port}/"), http);
+            IA2aAgentEndpoint endpoint = await connector.AllowUnsignedCard().ConnectAsync(default);
+            A2aReply started = await endpoint.SendAsync(Guid.NewGuid().ToString("N"), "Ada", null, null, null, default);
+            A2aReply done = started;
+            for (int i = 0; i < 100 && done.State != A2aState.Completed; i++)
+            {
+                await Task.Delay(50);
+                done = await endpoint.GetTaskAsync(started.TaskId!, default);
+            }
+
+            Assert.Equal(A2aState.Completed, done.State);
+            await endpoint.CancelTaskAsync(started.TaskId!, default); // the agent says it cannot be cancelled; that is fine, it is over
+            await endpoint.CancelTaskAsync("no-such-task", default);
         }
     }
 }

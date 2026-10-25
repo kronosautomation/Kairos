@@ -39,6 +39,13 @@ public static class A2aExamples
     }
     #endregion
 
+    #region a2a-unsigned
+    // The default is to require a signed card. An agent whose publisher does not sign must be named as an exception, in code where it can be reviewed.
+    public static A2aClientRuntime ConfigureUnsignedPartner(HttpClient http) => new A2aClientsBuilder()
+        .AddAgent("partner", new A2aAgentConnector(new Uri("https://partner.example.com/"), http).AllowUnsignedCard())
+        .Build();
+    #endregion
+
     #region a2a-call
     public static async Task<byte[]> CollectInvoiceAsync(IAgentContext ctx, byte[] input)
     {

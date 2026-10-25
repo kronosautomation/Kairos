@@ -25,11 +25,24 @@ Register `runtime.Activities` on every worker that runs the workflow (in embedde
 - **Questions.** A task that needs input throws `A2aInputRequiredException` with the agent's question and the task id. Answer by calling again with
   `A2aCallOptions.TaskId` set. `failed`, `rejected` and `canceled` tasks throw `A2aAgentFailedException`, `A2aAgentRejectedException` and
   `A2aAgentCancelledException`; a task that needs authentication throws `A2aAuthRequiredException`.
+- **Cancelling.** Inside a [saga](sagas.md) the call is cancel-aware: a cancel request ends the wait between polls at once, and rolling the saga back
+  (for a cancel or for any later failure) cancels the agent's task as one of its undo steps, retried until it works. If the task has already ended by itself
+  there is nothing to cancel and the undo is dropped; a task that stopped to ask a question is still alive, so its undo stays. Cancelling a task that is
+  already over is not an error. A message whose answer was lost before its task id was known cannot be cancelled remotely, because nothing recorded the id.
 - **Safety.** An agent acts in the world, so it is treated like any other [tool](tool-policy-and-credentials.md): only agents you declare read-only
   run without asking; the others wait for an [approval](approvals.md) and run with it attached, and a rejected approval throws
   `ApprovalRejectedException`. Policy sees the agent as `a2a.<name>`. `UseRedactor` applies to what is recorded.
 
 ## Signed Agent Cards
+
+**A signed card is required by default.** `AddAgent(name, address, http, verifier)` takes the keys you trust and refuses a card that is missing,
+unsigned or signed by anyone else. An agent whose publisher does not sign is an exception you make in code, one agent at a time:
+
+[!code-csharp[](../../samples/AgentSamples/A2aExamples.cs#a2a-unsigned)]
+
+`AllowUnsignedCard()` accepts a card with no signature at all. It does not excuse a bad one: a card that carries a signature that does not
+verify is still refused, because an unsigned card is merely unvouched for while a failed signature is a forgery. A connector with neither a
+verifier nor the opt-out refuses to connect, before anything is fetched.
 
 An Agent Card says where an agent is and what it can do. Whoever can change it can send your messages somewhere else, so a card can carry a
 signature. Kairos signs and verifies them as the A2A specification describes: a JWS (RFC 7515) over the card's canonical JSON (RFC 8785), with

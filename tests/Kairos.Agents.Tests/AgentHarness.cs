@@ -87,7 +87,7 @@ internal sealed class AgentHarness
     }
 
     /// <summary>Drives until the run closes or only an outside event (a signal) can move it. The clock jumps to the next wakeup when idle.</summary>
-    public async Task<RunState> RunAsync(RunKey run)
+    public async Task<RunState> RunAsync(RunKey run, bool jumpClock = true)
     {
         while (true)
         {
@@ -102,7 +102,7 @@ internal sealed class AgentHarness
             }
 
             RunState state = (await Client.GetStateAsync(run))!.Value;
-            if (state != RunState.Running || MemoryStore.NextWakeup(DefaultScope, Time.GetUtcNow()) is not { } wake)
+            if (state != RunState.Running || !jumpClock || MemoryStore.NextWakeup(DefaultScope, Time.GetUtcNow()) is not { } wake)
             {
                 return state;
             }

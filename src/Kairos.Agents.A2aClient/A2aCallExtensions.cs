@@ -182,6 +182,11 @@ public static class AgentContextA2aExtensions
     /// <exception cref="A2aInputRequiredException">The agent asked a question.</exception>
     /// <exception cref="A2aAuthRequiredException">The agent needs authentication an agent cannot provide.</exception>
     /// <exception cref="TimeoutException">The task did not finish within <see cref="A2aCallOptions.Timeout"/>.</exception>
+    /// <remarks>
+    /// Inside a saga (<see cref="IAgentContext.RunSagaAsync{T}"/>) the call is cancel-aware: a cancel request ends the wait at once, and rolling the saga back
+    /// (for a cancel or for any failure) cancels the remote task as one of its undo steps, retried until it works. Once the task has ended by itself there
+    /// is nothing left to cancel and the undo is dropped. A task that stopped to ask a question is still alive, so its undo stays registered.
+    /// </remarks>
     public static async Task<A2aAgentResult> CallA2aAgentAsync(this IAgentContext context, string agent, string text, A2aCallOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -223,19 +228,33 @@ public static class AgentContextA2aExtensions
         }
 
         A2aReply current = reply.Reply!;
+        ISaga? saga = context.CurrentSaga;
+        SagaCompensationHandle? undo = null;
         TimeSpan wait = TimeSpan.FromSeconds(2);
         while (true)
         {
+            // While the agent's task is alive, rolling the saga back must cancel it there. The undo is registered as soon as the task id is known and
+            // dropped once the task has ended by itself, so a rollback never cancels work that is already over.
+            if (current.TaskId is not null && saga is not null && undo is null && current.State is not (A2aState.Message or A2aState.Completed or A2aState.Failed or A2aState.Rejected or A2aState.Canceled))
+            {
+                string taskId = current.TaskId;
+                undo = saga.Compensate($"cancel the A2A task {taskId} on {agent}", retryPolicy => workflow.ExecuteActivityAsync(A2aClientRuntime.CancelActivity, PollInput(agent, taskId), retryPolicy));
+            }
+
             switch (current.State)
             {
                 case A2aState.Message:
                 case A2aState.Completed:
+                    undo?.Discard();
                     return new A2aAgentResult(current.Text, current.DataJson, current.TaskId, current.ContextId);
                 case A2aState.Failed:
+                    undo?.Discard();
                     throw new A2aAgentFailedException(current.StatusText ?? current.Text ?? "The agent's task failed.") { TaskId = current.TaskId, ContextId = current.ContextId };
                 case A2aState.Rejected:
+                    undo?.Discard();
                     throw new A2aAgentRejectedException(current.StatusText ?? "The agent declined the work.") { TaskId = current.TaskId, ContextId = current.ContextId };
                 case A2aState.Canceled:
+                    undo?.Discard();
                     throw new A2aAgentCancelledException("The agent's task was cancelled.") { TaskId = current.TaskId, ContextId = current.ContextId };
                 case A2aState.InputRequired:
                     throw new A2aInputRequiredException($"Agent '{agent}' asks: {current.StatusText}") { Question = current.StatusText, TaskId = current.TaskId, ContextId = current.ContextId };
@@ -249,21 +268,35 @@ public static class AgentContextA2aExtensions
                 throw new A2aAgentException($"Agent '{agent}' reported a task without an id.");
             }
 
+            saga?.ThrowIfCancelled(); // a cancel that arrived while the last poll ran: roll back now, which cancels the remote task
+
             if (workflow.Now - started >= options.Timeout)
             {
                 try
                 {
                     await workflow.ExecuteActivityAsync(A2aClientRuntime.CancelActivity, PollInput(agent, current.TaskId), RetryPolicy.Default);
+                    undo?.Discard();
                 }
                 catch (ActivityFailureException)
                 {
-                    // best effort
+                    // best effort; if it failed, the undo stays registered and a rollback tries again
                 }
 
                 throw new TimeoutException($"The A2A task {current.TaskId} on '{agent}' did not finish within {options.Timeout}.");
             }
 
-            await workflow.DelayAsync(Clamp(wait, options));
+            Task delay = workflow.DelayAsync(Clamp(wait, options));
+            if (saga is null)
+            {
+                await delay;
+            }
+            else
+            {
+                // A durable timer does not notice a cancel request by itself, so race the two: a cancel ends the wait at once.
+                await Task.WhenAny(delay, saga.WhenCancelled);
+                saga.ThrowIfCancelled();
+            }
+
             byte[] bytes = await workflow.ExecuteActivityAsync(A2aClientRuntime.PollActivity, PollInput(agent, current.TaskId), RetryPolicy.Default);
             current = JsonSerializer.Deserialize(bytes, A2aJson.Default.SendReply)!.Reply!;
             wait = TimeSpan.FromSeconds(Math.Min(wait.TotalSeconds * 1.5, options.MaximumPollInterval.TotalSeconds));

@@ -45,6 +45,13 @@ approval, or when your code calls `saga.ThrowIfCancelled()`. The run then rolls 
 - **Visible.** A rollback leaves marker steps in the history. `SagaHistory.Rollbacks(history)` returns what was planned, what started and
   what finished, and `SagaHistory.CheckCompensationsComplete(history)` tells you whether a closed run left a rollback unfinished.
 
+## Steps that start work elsewhere
+
+A step that starts long work in another system (a remote agent's task, say) registers its undo while the work is running, and **discards it
+when the work has ended by itself**: `saga.Compensate(...)` returns a handle, and `handle.Discard()` removes the undo so a later rollback does not
+undo something that is already over. `saga.WhenCancelled` completes when a cancel is requested, so a step can race it against a durable timer and
+stop waiting at once. `ctx.CurrentSaga` gives such a step the saga that is running through the agent context. Calls to remote A2A agents do all of this for you.
+
 ## Rules for undo steps
 
 - **Make them idempotent, and make them cope with "nothing to undo".** A step can fail after its effect, or an earlier attempt of the
