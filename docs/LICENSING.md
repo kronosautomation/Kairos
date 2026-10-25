@@ -31,6 +31,9 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Agents.Policies | Commercial | Pro | Argument-level policy rules, token/cost/step budgets, policy console (the read-only baseline is free) |
 | Kairos.Mcp.TaskStore | Apache 2.0 | Community | Durable `IMcpTaskStore` for any C# MCP server, backed by Kairos runs (the adoption entry point) |
 | Kairos.Agents.McpClient | Apache 2.0 | Community | Durable, idempotent MCP client steps for agent workflows |
+| Kairos.A2A | Apache 2.0 | Community | Agent Card signing and verification; a Kairos run projected as an A2A task |
+| Kairos.Agents.A2aClient | Apache 2.0 | Community | Durable, idempotent outbound A2A calls with Agent Card verification |
+| Kairos.Agents.A2a | Commercial | Pro | The hosted A2A server: workflows published as agents, signed cards served, server-stamped identity |
 | Kairos.Agents.Mcp | Commercial | Pro | The Kairos MCP server: workflows as tools, approvals as input requests with verified approvers, operator tools |
 | Kairos.Cloud.Azure, .Aws, .Gcp | Commercial | Pro | Managed key, identity, blob and event adapters (self-hosted equivalents stay free) |
 | Kairos.Telemetry | Commercial | Pro | Packaged OpenTelemetry/GenAI exporters and dashboards (raw metrics stay in Core) |

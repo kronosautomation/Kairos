@@ -28,6 +28,9 @@ spans both (a new core API plus its commercial user) is two commits, core first.
 | Kairos.Testing, Kairos.Conformance | Kairos (tests/) | Shipped as packages for customers' tests |
 | **Kairos.Mcp.TaskStore** | **Kairos** | Durable `IMcpTaskStore` for any C# MCP server (ModelContextProtocol.Extensions.Tasks), backed by Kairos runs. Free on purpose: the adoption entry point. |
 | **Kairos.Agents.McpClient** | **Kairos** | Durable, idempotent MCP client steps for agent workflows (`ctx.CallMcpToolAsync`). Agent durability is free. |
+| **Kairos.A2A** | **Kairos** | The A2A protocol layer: Agent Card signing and verification (JWS over RFC 8785 canonical JSON, ES256), and the projection of a Kairos run as an A2A task. Security-relevant, so free. Built on the official `A2A` SDK (pinned preview). |
+| **Kairos.Agents.A2aClient** | **Kairos** | Durable, idempotent outbound A2A calls for agent workflows (`ctx.CallA2aAgentAsync`), with Agent Card verification. Agent durability is free. |
+| **Kairos.Agents.A2a** | **Kairos.Commercial** (Pro) | Hosted A2A server: workflows published as A2A agents, signed Agent Cards served, server-stamped caller identity. Mirrors Kairos.Agents.Mcp. |
 | **Kairos.Agents.Mcp** | **Kairos.Commercial** (Pro) | The Kairos MCP server: workflows exposed as tools, approvals as input requests with server-stamped, verified approver identity, operator tools. Uses Kairos.Mcp.TaskStore. |
 | Kairos.Agents.Policies, Telemetry, Dashboard, Cloud.Azure/Aws/Gcp | Kairos.Commercial (Pro) | Future |
 | Kairos.Server, Admin, Dashboard.Enterprise, Agents.AgentFramework | Kairos.Commercial (Business) | Future |
