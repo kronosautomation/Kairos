@@ -789,7 +789,8 @@ public abstract partial class StoreContractTests
 
         Assert.Equal(RunState.Completed, await client.GetStateAsync(run, Ct));
         AuditEntry audit = Assert.Single(await store.GetAuditLogAsync(A, Ct));
-        Assert.Equal(("ResumeWorkflowTask", "ops@example.com", run.RunId), (audit.Action, audit.Actor, audit.RunId));
+        Assert.Equal(("ResumeWorkflowTask", "ops@example.com", run.RunId), (audit.Action, audit.ClaimedActor, audit.RunId));
+        Assert.Equal("db:" + audit.SessionUser, audit.Actor); // the supplied name is a claim, never the actor
         Assert.Empty(await store.GetAuditLogAsync(B, Ct));
     }
 

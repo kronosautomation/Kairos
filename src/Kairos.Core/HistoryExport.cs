@@ -39,7 +39,7 @@ public static class HistoryExporter
             throw new UnauthorizedAccessException($"A {caller.Role} may not export histories in this namespace.");
         }
 
-        return await ExportCoreAsync(store, caller.Subject, $"{caller.Role}:{caller.Subject}", run, reason, metadataOnly, time, recordedBy, cancellationToken)
+        return await ExportCoreAsync(store, caller.Subject, caller.AuditName, run, reason, metadataOnly, time, recordedBy, cancellationToken)
             .ConfigureAwait(false);
     }
 

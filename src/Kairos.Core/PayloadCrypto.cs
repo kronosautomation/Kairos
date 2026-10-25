@@ -71,6 +71,8 @@ public sealed class PayloadCrypto(IPayloadProtector protector)
                 open && !string.Equals(f.Message, StoreRules.LeaseExpiredMessage, StringComparison.Ordinal) ? throw new PayloadProtectionException() : f,
             ActivityFailed f =>
                 f with { Message = await Text(f.Message, $"act-fail-{f.Attempt}", f.ActivityId).ConfigureAwait(false) },
+            // The cancel request written by the store itself has no payload to seal; an empty one is accepted as is. It grants nothing a server cannot already do (it can close a run).
+            SignalReceived { SignalName: ReservedSignals.Cancel, Payload.Length: 0 } s when open => s,
             SignalReceived s => s with { Payload = await Bytes(s.Payload, SignalField(s.SignalName, s.SignalId), 0).ConfigureAwait(false) },
             WorkflowCompleted c => c with { Result = await Bytes(c.Result, "result", 0).ConfigureAwait(false) },
             WorkflowFailed f => f with { Message = await Text(f.Message, "fail", 0).ConfigureAwait(false) },

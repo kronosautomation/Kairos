@@ -8,7 +8,7 @@ namespace Kairos;
 /// <summary>
 /// Makes parked workflow tasks visible (nothing stalls silently). Each time it looks, it logs every newly parked run once,
 /// keeps the <c>kairos.workflow_tasks.stuck</c> gauge current, and feeds the health check. Resolve a parked run with
-/// <see cref="IKairosStore.ResumeWorkflowTaskAsync"/> (after fixing the cause) or <see cref="IKairosStore.FailRunAsync"/>.
+/// <see cref="IKairosStore.ResumeWorkflowTaskVerifiedAsync"/> (after fixing the cause) or <see cref="IKairosStore.FailRunVerifiedAsync"/>.
 /// </summary>
 public sealed partial class StuckTaskMonitor
 {

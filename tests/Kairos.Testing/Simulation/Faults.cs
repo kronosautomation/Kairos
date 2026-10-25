@@ -197,6 +197,15 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
     public ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken) =>
         Faulty(nameof(FailRunAsync), () => inner.FailRunAsync(run, reason, actor, now, cancellationToken));
 
+    public ValueTask<bool> ResumeWorkflowTaskVerifiedAsync(RunKey run, Principal actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Faulty(nameof(ResumeWorkflowTaskVerifiedAsync), () => inner.ResumeWorkflowTaskVerifiedAsync(run, actor, now, cancellationToken));
+
+    public ValueTask<bool> FailRunVerifiedAsync(RunKey run, string reason, Principal actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Faulty(nameof(FailRunVerifiedAsync), () => inner.FailRunVerifiedAsync(run, reason, actor, now, cancellationToken));
+
+    public ValueTask<bool> CancelRunAsync(RunKey run, string reason, Principal actor, string traceContext, DateTimeOffset now, CancellationToken cancellationToken) =>
+        Faulty(nameof(CancelRunAsync), () => inner.CancelRunAsync(run, reason, actor, traceContext, now, cancellationToken));
+
     public ValueTask<IReadOnlyList<AuditEntry>> GetAuditLogAsync(TenantScope scope, CancellationToken cancellationToken) =>
         inner.GetAuditLogAsync(scope, cancellationToken);
 

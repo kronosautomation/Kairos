@@ -11,7 +11,7 @@ namespace Kairos.Agents;
 /// </summary>
 public sealed class AgentClient(KairosClient client, TimeProvider time, HmacApprovalTokens? approvalTokens = null)
 {
-    public const string CancelSignalName = "kairos.cancel";
+    public const string CancelSignalName = ReservedSignals.Cancel;
 
     public static string ApprovalSignalName(string approvalId) => ReservedSignals.ApprovalPrefix + approvalId;
 
@@ -23,7 +23,7 @@ public sealed class AgentClient(KairosClient client, TimeProvider time, HmacAppr
 
     /// <summary>Asks a run that is inside a saga to stop and roll back. It stops at its next step boundary or approval wait.</summary>
     public ValueTask<bool> RequestCancelAsync(RunKey run, string reason, CancellationToken cancellationToken = default) =>
-        client.SignalAsync(run, CancelSignalName, Encoding.UTF8.GetBytes(reason ?? ""), signalId: "cancel", cancellationToken);
+        client.SignalAsync(run, CancelSignalName, Encoding.UTF8.GetBytes(reason ?? ""), signalId: ReservedSignals.CancelSignalId, cancellationToken);
 
     private ValueTask<bool> DecideAsync(
         RunKey run, string approvalId, bool approved, ApproverIdentity approver, string? comment, CancellationToken cancellationToken)

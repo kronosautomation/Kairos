@@ -59,7 +59,9 @@ stop waiting at once. `ctx.CurrentSaga` gives such a step the saga that is runni
 - **Undo what you did, not what you hoped to do.** Compensation is semantic (cancel the reservation, issue the refund). It is not a
   database rollback, and some actions cannot be taken back; plan an approval before those instead.
 - **A run that an operator terminates is not rolled back.** Terminating ends the run from outside without running its code. Cancel with
-  `RequestCancelAsync` when you want the undo steps to run.
+  `RequestCancelAsync` when you want the undo steps to run. A host that has authenticated the person asking uses
+  `KairosClient.CancelRunAsync(principal, run, reason)` instead: it checks the role, sends the same request without a payload (so a component that holds no
+  encryption key can send it), and records who asked in the audit log. The workflow sees an empty cancel reason in that case.
 - **A saga cannot continue as new while undo steps are registered**, because they would be lost; it rolls back instead. Keep a saga short
   enough to finish in one run.
 - Sagas nest: an inner saga that fails rolls itself back, and the exception then reaches the outer saga, which rolls back its own work.

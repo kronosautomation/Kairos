@@ -46,5 +46,8 @@ An operator then chooses:
 - **Fail the run** (`IKairosStore.FailRunAsync`) with a reason. The run is closed as failed and all of its pending work and timers are
   removed.
 
-Both actions are written to an audit log with the acting identity. A workflow task that fails *replay* (see [Determinism](determinism.md))
+Both actions are written to an audit log. **Who did it is not something the caller types.** When your application authenticates its operators, call
+`KairosClient.ResumeStuckTaskAsync`, `TerminateRunAsync` or `FailRunAsync` with the authenticated `Principal`: the role matrix is checked and the
+entry names `role:subject`. The store-level calls that take a plain name (`ResumeWorkflowTaskAsync`, `FailRunAsync`) record the database login and
+client address the database itself saw as the actor, and keep the name you passed only as a labelled claim. A workflow task that fails *replay* (see [Determinism](determinism.md))
 is retried with a delay but is not parked: the usual remedy is to deploy corrected code, after which the run continues by itself.

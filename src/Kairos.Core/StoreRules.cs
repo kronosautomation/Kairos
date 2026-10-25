@@ -23,6 +23,40 @@ public static class StoreRules
         }
     }
 
+    /// <summary>The audit action written when a run is asked to stop.</summary>
+    public const string CancelAuditAction = "CancelRun";
+
+    /// <summary>The audit action written when a stuck workflow task is resumed.</summary>
+    public const string ResumeAuditAction = "ResumeWorkflowTask";
+
+    /// <summary>The audit action written when a run is closed from outside.</summary>
+    public const string FailAuditAction = "FailRun";
+
+    /// <summary>
+    /// A verified principal may only be recorded against a run in its own scope. The role is not checked here (that is <see cref="AccessPolicy"/>, at the caller);
+    /// a mismatch is a bug in the caller, so it throws rather than answering "not found".
+    /// </summary>
+    public static void RequirePrincipalInScope(RunKey run, Principal actor)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        if (actor.Scope != run.Scope)
+        {
+            throw new ArgumentException("The principal is not in the run's tenant and namespace.", nameof(actor));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(actor.Subject);
+    }
+
+    /// <summary>An optional reason with the same bound as every other recorded reason.</summary>
+    public static void ValidateOptionalReason(string reason)
+    {
+        ArgumentNullException.ThrowIfNull(reason);
+        if (reason.Length > MaxReasonLength)
+        {
+            throw new ArgumentException($"The reason is longer than {MaxReasonLength} characters.", nameof(reason));
+        }
+    }
+
     /// <summary>
     /// The audit detail of an export: the reason (marked when metadata-only) and the hash of the last event exported, which ties a file to this entry.
     /// </summary>

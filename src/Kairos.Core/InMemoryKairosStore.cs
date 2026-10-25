@@ -496,7 +496,19 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
-    public ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    public ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        ResumeCore(run, actor, null, now);
+
+    public ValueTask<bool> ResumeWorkflowTaskVerifiedAsync(RunKey run, Principal actor, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        StoreRules.RequirePrincipalInScope(run, actor);
+        return ResumeCore(run, null, actor.AuditName, now);
+    }
+
+    /// <summary>Who an entry names: the verified principal, else the store's view of the connection. A supplied name is only ever <see cref="AuditEntry.ClaimedActor"/>.</summary>
+    private static string ActorOf(string? verified) => verified ?? "db:" + SessionUserName;
+
+    private ValueTask<bool> ResumeCore(RunKey run, string? claimed, string? verified, DateTimeOffset now)
     {
         lock (_gate)
         {
@@ -510,12 +522,26 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             row.Leased = false;
             row.Attempt = 1;
             row.VisibleAt = now;
-            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, "ResumeWorkflowTask", actor, now, "unparked after repeated lease expiry") { SessionUser = SessionUserName });
+            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, StoreRules.ResumeAuditAction, ActorOf(verified), now, "unparked after repeated lease expiry")
+            {
+                SessionUser = SessionUserName,
+                ClaimedActor = claimed,
+                VerifiedPrincipal = verified,
+            });
             return ValueTask.FromResult(true);
         }
     }
 
-    public ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    public ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        FailCore(run, reason, actor, null, now);
+
+    public ValueTask<bool> FailRunVerifiedAsync(RunKey run, string reason, Principal actor, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        StoreRules.RequirePrincipalInScope(run, actor);
+        return FailCore(run, reason, null, actor.AuditName, now);
+    }
+
+    private ValueTask<bool> FailCore(RunKey run, string reason, string? claimed, string? verified, DateTimeOffset now)
     {
         lock (_gate)
         {
@@ -527,7 +553,45 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             Append(r, new RunTerminated(run.TenantId, run.NamespaceId, run.RunId, 0, now, reason));
             Close(data, r, RunState.Failed);
             data.WorkflowTasks.Remove(run.RunId);
-            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, "FailRun", actor, now, reason) { SessionUser = SessionUserName });
+            data.Audit.Add(new AuditEntry(run.TenantId, run.NamespaceId, run.RunId, StoreRules.FailAuditAction, ActorOf(verified), now, reason)
+            {
+                SessionUser = SessionUserName,
+                ClaimedActor = claimed,
+                VerifiedPrincipal = verified,
+            });
+            return ValueTask.FromResult(true);
+        }
+    }
+
+    public ValueTask<bool> CancelRunAsync(RunKey run, string reason, Principal actor, string traceContext, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        StoreRules.RequirePrincipalInScope(run, actor);
+        StoreRules.ValidateOptionalReason(reason);
+        ArgumentNullException.ThrowIfNull(traceContext);
+        lock (_gate)
+        {
+            if (FindRun(run) is not { State: RunState.Running } r)
+            {
+                return ValueTask.FromResult(false);
+            }
+
+            // One transaction in PostgreSQL; one lock here. The signal id is fixed, so a second request adds an audit entry but no second signal.
+            if (r.SignalIds.Add(ReservedSignals.CancelSignalId))
+            {
+                Append(r, new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, ReservedSignals.Cancel, [])
+                {
+                    SignalId = ReservedSignals.CancelSignalId,
+                    TraceContext = traceContext,
+                });
+                EnsureWorkflowTask(Scope(run.Scope, create: false)!, r, now);
+            }
+
+            Scope(run.Scope, create: false)!.Audit.Add(new AuditEntry(
+                run.TenantId, run.NamespaceId, run.RunId, StoreRules.CancelAuditAction, actor.AuditName, now, reason.Length == 0 ? "cancel requested" : reason)
+            {
+                SessionUser = SessionUserName,
+                VerifiedPrincipal = actor.AuditName,
+            });
             return ValueTask.FromResult(true);
         }
     }

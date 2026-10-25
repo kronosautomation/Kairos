@@ -218,14 +218,50 @@ public interface IKairosStore
     /// <summary>Parked workflow tasks in this scope (see <see cref="StuckWorkflowTask"/>). The hosting layer logs and meters these.</summary>
     ValueTask<IReadOnlyList<StuckWorkflowTask>> GetStuckWorkflowTasksAsync(TenantScope scope, CancellationToken cancellationToken);
 
-    /// <summary>Unparks a stuck workflow task: attempts reset, runnable now. False when the run has no parked task. Audited.</summary>
+    /// <summary>
+    /// Unparks a stuck workflow task: attempts reset, runnable now. False when the run has no parked task. Audited.
+    /// <paramref name="actor"/> is the caller's own word: the entry's <see cref="AuditEntry.Actor"/> is the store's view of the connection (<c>db:</c> plus the database login)
+    /// and the supplied name is kept apart as <see cref="AuditEntry.ClaimedActor"/>. Use <see cref="ResumeWorkflowTaskVerifiedAsync"/> when the caller was authenticated.
+    /// </summary>
     ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="ResumeWorkflowTaskAsync"/> for an <b>authenticated</b> caller: the audit entry names <paramref name="actor"/>
+    /// (<see cref="Principal.AuditName"/>, also <see cref="AuditEntry.VerifiedPrincipal"/>). The store does not authorize (that is <c>AccessPolicy</c>, at the caller) but refuses a principal
+    /// whose scope is not the run's.
+    /// </summary>
+    /// <exception cref="ArgumentException">The principal's scope is not the run's scope.</exception>
+    ValueTask<bool> ResumeWorkflowTaskVerifiedAsync(RunKey run, Principal actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot record a verified principal.");
 
     /// <summary>
     /// Closes an open run as failed (<see cref="RunTerminated"/>) and removes every task and timer it owns. False when the run is
     /// unknown or already closed. Audited.
     /// </summary>
     ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="FailRunAsync"/> for an <b>authenticated</b> caller: the audit entry names <paramref name="actor"/>
+    /// and records it as <see cref="AuditEntry.VerifiedPrincipal"/>.
+    /// </summary>
+    /// <exception cref="ArgumentException">The principal's scope is not the run's scope.</exception>
+    ValueTask<bool> FailRunVerifiedAsync(RunKey run, string reason, Principal actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot record a verified principal.");
+
+    /// <summary>
+    /// Asks an open run to stop, as an authenticated caller: appends the reserved <c>kairos.cancel</c> signal (fixed signal id, so asking twice is one request, with no payload:
+    /// a server that holds no key cannot author a sealed one) and the audit entry <c>CancelRun</c> in one transaction. The workflow decides how to stop (agent sagas roll back).
+    /// True when the run was open (also when it had already been asked); false, and nothing audited, when the run is unknown, in another scope, or closed.
+    /// </summary>
+    /// <param name="run">The run to cancel.</param>
+    /// <param name="reason">Why; optional, at most 500 characters (<c>StoreRules.MaxReasonLength</c>). Recorded in the audit entry only.</param>
+    /// <param name="actor">The authenticated caller.</param>
+    /// <param name="traceContext">W3C <c>traceparent</c> of the request, recorded in the signal event (empty for none).</param>
+    /// <param name="now">The time recorded.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <exception cref="ArgumentException">The principal's scope is not the run's scope, or the reason is too long.</exception>
+    ValueTask<bool> CancelRunAsync(RunKey run, string reason, Principal actor, string traceContext, DateTimeOffset now, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot cancel runs.");
 
     ValueTask<IReadOnlyList<AuditEntry>> GetAuditLogAsync(TenantScope scope, CancellationToken cancellationToken);
 

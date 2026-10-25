@@ -118,7 +118,11 @@ public enum Role
 }
 
 /// <summary>An authenticated caller: one tenant, one namespace, one role.</summary>
-public sealed record Principal(TenantScope Scope, Role Role, string Subject, DateTimeOffset? ExpiresAt);
+public sealed record Principal(TenantScope Scope, Role Role, string Subject, DateTimeOffset? ExpiresAt)
+{
+    /// <summary>How audit entries name this principal: <c>role:subject</c>.</summary>
+    public string AuditName => $"{Role}:{Subject}";
+}
 
 /// <summary>What a caller presents. The host validates transport-level proof (TLS chain) before building it.</summary>
 public abstract record Credential;

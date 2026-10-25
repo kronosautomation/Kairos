@@ -8,6 +8,18 @@ public static class ReservedSignals
 {
     /// <summary>Approval decisions are signals named <c>kairos.approval.&lt;approval id&gt;</c>. Only <see cref="KairosClient.DecideApprovalAsync"/> sends them.</summary>
     public const string ApprovalPrefix = "kairos.approval.";
+
+    /// <summary>Every name starting with this is the engine's. A host that lets callers name signals refuses these and offers the dedicated operations instead.</summary>
+    public const string EnginePrefix = "kairos.";
+
+    /// <summary>
+    /// The signal that asks a run to stop (agent sagas roll back). <see cref="IKairosStore.CancelRunAsync"/> sends it with an empty payload and the fixed id <see cref="CancelSignalId"/>,
+    /// and workers accept that empty, unsealed form even when payloads are sealed: it carries no data, and a server without a key could not seal one.
+    /// </summary>
+    public const string Cancel = "kairos.cancel";
+
+    /// <summary>The signal id of every cancel request, so asking twice is one request.</summary>
+    public const string CancelSignalId = "cancel";
 }
 
 public sealed class KairosClient
@@ -166,6 +178,73 @@ public sealed class KairosClient
     public async Task<HistoryExport?> ExportHistoryAsync(
         Principal verifiedPrincipal, RunKey run, string reason, bool metadataOnly = false, CancellationToken cancellationToken = default) =>
         await HistoryExporter.ExportAsync(_store, verifiedPrincipal, run, reason, metadataOnly, _time, "client", cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Asks an open run to stop, for a <b>verified</b> principal (one an authenticator returned): needs <see cref="Operation.CancelRun"/> in the run's scope. The request (the
+    /// reserved <c>kairos.cancel</c> signal) and the audit entry naming the principal are written in one transaction. False, with nothing recorded, when the run is unknown or closed.
+    /// </summary>
+    /// <exception cref="UnauthorizedAccessException">The principal's role does not allow cancelling in this scope. Nothing was sent or recorded.</exception>
+    public async ValueTask<bool> CancelRunAsync(Principal verifiedPrincipal, RunKey run, string reason = "", CancellationToken cancellationToken = default)
+    {
+        Require(verifiedPrincipal, Operation.CancelRun, run);
+        using Activity? span = KairosTelemetry.Source.StartActivity("kairos.signal.send", ActivityKind.Producer);
+        if (span is not null)
+        {
+            span.SetTag(KairosTags.TenantId, run.TenantId.ToString("D"));
+            span.SetTag(KairosTags.NamespaceId, run.NamespaceId.ToString("D"));
+            span.SetTag(KairosTags.RunId, run.RunId.ToString("D"));
+            span.SetTag(KairosTags.SignalName, ReservedSignals.Cancel);
+        }
+
+        try
+        {
+            string trace = span is null ? KairosTelemetry.CurrentTraceContext() : KairosTelemetry.ContextOf(span);
+            return await _store.CancelRunAsync(run, reason, verifiedPrincipal, trace, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            KairosTelemetry.Fail(span, ex.GetType().Name);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Closes an open run from outside the workflow, for a <b>verified</b> principal. <see cref="Operation.TerminateRun"/> (operator and above) is enough; the audit entry names the principal.
+    /// False when the run is unknown or already closed.
+    /// </summary>
+    /// <exception cref="UnauthorizedAccessException">The principal's role does not allow terminating in this scope.</exception>
+    public ValueTask<bool> TerminateRunAsync(Principal verifiedPrincipal, RunKey run, string reason, CancellationToken cancellationToken = default)
+    {
+        Require(verifiedPrincipal, Operation.TerminateRun, run);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        return _store.FailRunVerifiedAsync(run, reason, verifiedPrincipal, _time.GetUtcNow(), cancellationToken);
+    }
+
+    /// <summary>The recovery form of <see cref="TerminateRunAsync"/>: needs <see cref="Operation.FailRun"/> (admin).</summary>
+    /// <exception cref="UnauthorizedAccessException">The principal's role does not allow failing runs in this scope.</exception>
+    public ValueTask<bool> FailRunAsync(Principal verifiedPrincipal, RunKey run, string reason, CancellationToken cancellationToken = default)
+    {
+        Require(verifiedPrincipal, Operation.FailRun, run);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        return _store.FailRunVerifiedAsync(run, reason, verifiedPrincipal, _time.GetUtcNow(), cancellationToken);
+    }
+
+    /// <summary>Unparks a stuck workflow task for a <b>verified</b> principal (<see cref="Operation.ResumeStuckTask"/>, admin). False when the run has no parked task.</summary>
+    /// <exception cref="UnauthorizedAccessException">The principal's role does not allow resuming tasks in this scope.</exception>
+    public ValueTask<bool> ResumeStuckTaskAsync(Principal verifiedPrincipal, RunKey run, CancellationToken cancellationToken = default)
+    {
+        Require(verifiedPrincipal, Operation.ResumeStuckTask, run);
+        return _store.ResumeWorkflowTaskVerifiedAsync(run, verifiedPrincipal, _time.GetUtcNow(), cancellationToken);
+    }
+
+    private static void Require(Principal principal, Operation operation, RunKey run)
+    {
+        ArgumentNullException.ThrowIfNull(principal);
+        if (!AccessPolicy.IsAllowed(principal, operation, run.Scope))
+        {
+            throw new UnauthorizedAccessException($"A {principal.Role} may not perform {operation} in this namespace.");
+        }
+    }
 
     public ValueTask<RunState?> GetStateAsync(RunKey run, CancellationToken cancellationToken = default) =>
         _store.GetRunStateAsync(run, cancellationToken);

@@ -193,10 +193,26 @@ public abstract partial class StoreContractTests
         },
         [nameof(IKairosStore.ResumeWorkflowTaskAsync)] = async (a, f) =>
             Assert.False(await a.Store.ResumeWorkflowTaskAsync(In(f, a.Parked), "mallory", Time.GetUtcNow(), Ct)),
+        [nameof(IKairosStore.ResumeWorkflowTaskVerifiedAsync)] = async (a, f) =>
+            Assert.False(await a.Store.ResumeWorkflowTaskVerifiedAsync(In(f, a.Parked), AdminOf(f, "mallory"), Time.GetUtcNow(), Ct)), // an admin of their own scope, aimed at A's run id
         [nameof(IKairosStore.FailRunAsync)] = async (a, f) =>
         {
             Assert.False(await a.Store.FailRunAsync(In(f, a.Busy), "sabotage", "mallory", Time.GetUtcNow(), Ct));
             Assert.False(await a.Store.FailRunAsync(In(f, a.Parked), "sabotage", "mallory", Time.GetUtcNow(), Ct));
+        },
+        [nameof(IKairosStore.FailRunVerifiedAsync)] = async (a, f) =>
+        {
+            Assert.False(await a.Store.FailRunVerifiedAsync(In(f, a.Busy), "sabotage", AdminOf(f, "mallory"), Time.GetUtcNow(), Ct));
+            Assert.False(await a.Store.FailRunVerifiedAsync(In(f, a.Parked), "sabotage", AdminOf(f, "mallory"), Time.GetUtcNow(), Ct));
+        },
+        [nameof(IKairosStore.CancelRunAsync)] = async (a, f) =>
+        {
+            foreach (RunKey run in new[] { a.Busy, a.Leased, a.Parked })
+            {
+                Assert.False(await a.Store.CancelRunAsync(In(f, run), "sabotage", AdminOf(f, "mallory"), "", Time.GetUtcNow(), Ct));
+            }
+
+            Assert.Empty(await a.Store.GetAuditLogAsync(f, Ct));
         },
         [nameof(IKairosStore.GetAuditLogAsync)] = async (a, f) =>
             Assert.Empty(await a.Store.GetAuditLogAsync(f, Ct)),

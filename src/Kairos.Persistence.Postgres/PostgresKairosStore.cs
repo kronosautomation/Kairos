@@ -120,25 +120,34 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 return false;
             }
 
-            await using (var claim = new NpgsqlCommand(
-                "INSERT INTO kairos.signal_ids (tenant_id, namespace_id, run_id, signal_id) VALUES (@t, @n, @r, @id) ON CONFLICT DO NOTHING", conn, tx))
-            {
-                claim.Parameters.AddWithValue("t", run.TenantId);
-                claim.Parameters.AddWithValue("n", run.NamespaceId);
-                claim.Parameters.AddWithValue("r", run.RunId);
-                claim.Parameters.AddWithValue("id", signalId);
-                if (await claim.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0)
-                {
-                    return true; // already delivered: nothing more to do
-                }
-            }
-
-            var template = new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId, TraceContext = traceContext };
-            await AppendAsync(conn, tx, run, head, [template], cancellationToken).ConfigureAwait(false);
-            await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false);
-            await NotifyAsync(conn, tx, run.Scope, cancellationToken).ConfigureAwait(false);
-            return true;
+            await DeliverSignalAsync(conn, tx, run, head, signalName, signalId, payload, now, traceContext, cancellationToken).ConfigureAwait(false);
+            return true; // delivered now, or already delivered earlier
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Appends the signal and wakes the workflow, unless this signal id was delivered before. Inside the caller's transaction, with the run locked.</summary>
+    private async Task<bool> DeliverSignalAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, RunHead head, string signalName, string signalId, byte[] payload, DateTimeOffset now, string traceContext,
+        CancellationToken cancellationToken)
+    {
+        await using (var claim = new NpgsqlCommand(
+            "INSERT INTO kairos.signal_ids (tenant_id, namespace_id, run_id, signal_id) VALUES (@t, @n, @r, @id) ON CONFLICT DO NOTHING", conn, tx))
+        {
+            claim.Parameters.AddWithValue("t", run.TenantId);
+            claim.Parameters.AddWithValue("n", run.NamespaceId);
+            claim.Parameters.AddWithValue("r", run.RunId);
+            claim.Parameters.AddWithValue("id", signalId);
+            if (await claim.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0)
+            {
+                return false; // already delivered: nothing more to do
+            }
+        }
+
+        var template = new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId, TraceContext = traceContext };
+        await AppendAsync(conn, tx, run, head, [template], cancellationToken).ConfigureAwait(false);
+        await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false);
+        await NotifyAsync(conn, tx, run.Scope, cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     // ---- workflow tasks ---------------------------------------------------------------------------------------
@@ -1101,7 +1110,16 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         }).ConfigureAwait(false);
     }
 
-    public async ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    public ValueTask<bool> ResumeWorkflowTaskAsync(RunKey run, string actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        ResumeCoreAsync(run, actor, null, now, cancellationToken);
+
+    public ValueTask<bool> ResumeWorkflowTaskVerifiedAsync(RunKey run, Principal actor, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        StoreRules.RequirePrincipalInScope(run, actor);
+        return ResumeCoreAsync(run, null, actor.AuditName, now, cancellationToken);
+    }
+
+    private async ValueTask<bool> ResumeCoreAsync(RunKey run, string? claimed, string? verified, DateTimeOffset now, CancellationToken cancellationToken)
     {
         return await InTransaction(run.Scope, async (conn, tx) =>
         {
@@ -1119,7 +1137,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 return false;
             }
 
-            await AuditAsync(conn, tx, run, "ResumeWorkflowTask", actor, now, "unparked after repeated lease expiry", cancellationToken).ConfigureAwait(false);
+            await AuditAsync(conn, tx, run, StoreRules.ResumeAuditAction, verified, now, "unparked after repeated lease expiry", cancellationToken, claimed, verified).ConfigureAwait(false);
             await NotifyAsync(conn, tx, run.Scope, cancellationToken).ConfigureAwait(false);
             return true;
         }, cancellationToken).ConfigureAwait(false);
@@ -1133,7 +1151,16 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         "DELETE FROM kairos.timers WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r",
     ];
 
-    public async ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    public ValueTask<bool> FailRunAsync(RunKey run, string reason, string actor, DateTimeOffset now, CancellationToken cancellationToken) =>
+        FailCoreAsync(run, reason, actor, null, now, cancellationToken);
+
+    public ValueTask<bool> FailRunVerifiedAsync(RunKey run, string reason, Principal actor, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        StoreRules.RequirePrincipalInScope(run, actor);
+        return FailCoreAsync(run, reason, null, actor.AuditName, now, cancellationToken);
+    }
+
+    private async ValueTask<bool> FailCoreAsync(RunKey run, string reason, string? claimed, string? verified, DateTimeOffset now, CancellationToken cancellationToken)
     {
         return await InTransaction(run.Scope, async (conn, tx) =>
         {
@@ -1153,7 +1180,29 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            await AuditAsync(conn, tx, run, "FailRun", actor, now, reason, cancellationToken).ConfigureAwait(false);
+            await AuditAsync(conn, tx, run, StoreRules.FailAuditAction, verified, now, reason, cancellationToken, claimed, verified).ConfigureAwait(false);
+            return true;
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<bool> CancelRunAsync(RunKey run, string reason, Principal actor, string traceContext, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        StoreRules.RequirePrincipalInScope(run, actor);
+        StoreRules.ValidateOptionalReason(reason);
+        ArgumentNullException.ThrowIfNull(traceContext);
+        return await InTransaction(run.Scope, async (conn, tx) =>
+        {
+            RunHead? head = await LockRunAsync(conn, tx, run, cancellationToken).ConfigureAwait(false);
+            if (head is not { State: 0 })
+            {
+                return false; // unknown, in another scope, or closed: nothing happens and nothing is recorded
+            }
+
+            // The signal and the audit entry are one transaction: no cancel without a record of who asked, no record of a cancel that was not sent.
+            await DeliverSignalAsync(conn, tx, run, head, ReservedSignals.Cancel, ReservedSignals.CancelSignalId, [], now, traceContext, cancellationToken).ConfigureAwait(false);
+            await AuditAsync(
+                conn, tx, run, StoreRules.CancelAuditAction, actor.AuditName, now, reason.Length == 0 ? "cancel requested" : reason, cancellationToken,
+                claimedActor: null, verifiedPrincipal: actor.AuditName).ConfigureAwait(false);
             return true;
         }, cancellationToken).ConfigureAwait(false);
     }
