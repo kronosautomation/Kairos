@@ -13,7 +13,7 @@ public sealed class AnalyzerTests
     private static MetadataReference[] BuildReferences()
     {
         string[] trusted = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
-        return [.. trusted.Append(typeof(IWorkflowContext).Assembly.Location).Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))];
+        return [.. trusted.Append(typeof(IWorkflowContext).Assembly.Location).Append(typeof(Kairos.Agents.IAgentContext).Assembly.Location).Append(typeof(Microsoft.Extensions.AI.ChatMessage).Assembly.Location).Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))];
     }
 
     private static async Task<string[]> RunAsync(string body, string usings = "")
@@ -164,5 +164,32 @@ public sealed class AnalyzerTests
         ImmutableArray<Diagnostic> diagnostics = await compilation.WithAnalyzers([new WorkflowDeterminismAnalyzer()]).GetAnalyzerDiagnosticsAsync();
 
         Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public async Task A_method_taking_the_agent_context_is_workflow_code()
+    {
+        string[] ids = await RunAsync(
+            "public static class A { public static async Task<byte[]> RunAsync(Kairos.Agents.IAgentContext ctx, byte[] input) { var t = DateTime.UtcNow; await Task.CompletedTask; return input; } }");
+
+        Assert.Equal(["KAI001"], ids);
+    }
+
+    [Fact]
+    public async Task A_lambda_registered_as_an_agent_workflow_is_workflow_code()
+    {
+        string[] ids = await RunAsync(
+            "public static class A { public static Func<Kairos.Agents.IAgentContext, byte[], Task<byte[]>> Make() => async (ctx, input) => { var g = Guid.NewGuid(); await Task.CompletedTask; return input; }; }");
+
+        Assert.Equal(["KAI002"], ids);
+    }
+
+    [Fact]
+    public async Task A_credential_like_parameter_on_an_agent_workflow_is_flagged()
+    {
+        string[] ids = await RunAsync(
+            "public static class A { public static Task<byte[]> RunAsync(Kairos.Agents.IAgentContext ctx, string apiKey) => Task.FromResult(new byte[0]); }");
+
+        Assert.Equal(["KAI006"], ids);
     }
 }

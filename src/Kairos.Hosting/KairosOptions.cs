@@ -1,4 +1,4 @@
-using Kairos.Persistence.Postgres;
+﻿using Kairos.Persistence.Postgres;
 using Npgsql;
 
 namespace Kairos;
@@ -73,6 +73,18 @@ public sealed class KairosOptions
     public KairosOptions AddActivity(string activityType, ActivityFunc activity)
     {
         Activities.Register(activityType, activity);
+        return this;
+    }
+
+    /// <summary>Registers several activities at once, for example <c>AgentsRuntime.Activities</c>.</summary>
+    public KairosOptions AddActivities(IEnumerable<KeyValuePair<string, ActivityFunc>> activities)
+    {
+        ArgumentNullException.ThrowIfNull(activities);
+        foreach ((string type, ActivityFunc activity) in activities)
+        {
+            Activities.Register(type, activity);
+        }
+
         return this;
     }
 

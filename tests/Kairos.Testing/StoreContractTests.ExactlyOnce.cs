@@ -1,8 +1,8 @@
 namespace Kairos.Testing;
 
 /// <summary>
-/// Exactly-once checklist for the store (docs/RESEARCH.md R4): the failure cases that the published exactly-once designs
-/// (Beldi, Halfmoon) guard against and that are not already pinned by another contract test. A caller that never learned the
+/// Exactly-once checklist for the store: the failure cases that published exactly-once designs
+/// guard against and that are not already pinned by another contract test. A caller that never learned the
 /// outcome of a request must be able to repeat it safely, and an operation racing another must leave exactly one effect.
 /// </summary>
 public abstract partial class StoreContractTests

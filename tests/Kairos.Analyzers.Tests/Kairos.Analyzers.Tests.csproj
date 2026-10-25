@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Kairos.Analyzers\Kairos.Analyzers.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Abstractions\Kairos.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Kairos.Agents\Kairos.Agents.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />

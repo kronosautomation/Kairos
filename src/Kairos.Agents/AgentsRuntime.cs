@@ -1,0 +1,459 @@
+using System.Diagnostics;
+using System.Text.Json;
+using Microsoft.Extensions.AI;
+
+namespace Kairos.Agents;
+
+/// <summary>The activity types the agent steps use. Register them on every worker that runs agent workflows (<see cref="AgentsRuntime.Activities"/>).</summary>
+public static class AgentActivityNames
+{
+    public const string Chat = "kairos.agent.chat";
+    public const string Tool = "kairos.agent.tool";
+    public const string ApprovalRequest = "kairos.agent.approval.request";
+    public const string SagaMark = "kairos.saga.mark";
+}
+
+/// <summary>Shows a person or a UI the text of a reply while the model is still writing it. Only the final reply is recorded.</summary>
+public interface IAgentObserver
+{
+    ValueTask OnTextAsync(RunKey run, int stepId, string delta, CancellationToken cancellationToken);
+}
+
+/// <summary>Collects what an agent application needs: models, tools, a policy and credentials. <see cref="Build"/> makes the runtime.</summary>
+public sealed class AgentsBuilder
+{
+    private readonly Dictionary<string, Func<RunKey, IChatClient>> _models = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AgentTool> _tools = new(StringComparer.Ordinal);
+
+    internal IToolPolicy Policy { get; private set; } = new BaselineToolPolicy();
+
+    internal IToolCredentialIssuer? Issuer { get; private set; }
+
+    internal IAgentObserver? Observer { get; private set; }
+
+    internal IApprovalNotifier? Notifier { get; private set; }
+
+    internal Func<string, string>? Redactor { get; private set; }
+
+    internal TimeProvider Time { get; private set; } = TimeProvider.System;
+
+    internal TimeSpan ModelTimeout { get; private set; } = TimeSpan.FromMinutes(2);
+
+    internal TimeSpan CredentialLifetime { get; private set; } = TimeSpan.FromMinutes(5);
+
+    internal RetryPolicy ModelRetry { get; private set; } = new()
+    {
+        MaximumAttempts = 3,
+        InitialInterval = TimeSpan.FromSeconds(2),
+        MaximumInterval = TimeSpan.FromSeconds(30),
+        NonRetryableErrorTypes = [nameof(UnknownModelException), nameof(UnknownToolException), nameof(NotSupportedException)],
+    };
+
+    internal RetryPolicy ToolRetry { get; private set; } = new()
+    {
+        MaximumAttempts = 3,
+    };
+
+    internal Dictionary<string, Func<RunKey, IChatClient>> Models => _models;
+
+    internal Dictionary<string, AgentTool> Tools => _tools;
+
+    /// <summary>
+    /// Makes <paramref name="client"/> available to workflows as <paramref name="alias"/>. Pass the provider's own client, not one wrapped in
+    /// automatic function invocation: tools must run through <see cref="IAgentContext.InvokeToolAsync"/> to be durable.
+    /// </summary>
+    public AgentsBuilder AddModel(string alias, IChatClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        return AddModel(alias, _ => client);
+    }
+
+    /// <summary>Resolves the model per run, for example a different deployment per namespace.</summary>
+    public AgentsBuilder AddModel(string alias, Func<RunKey, IChatClient> resolver)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+        ArgumentNullException.ThrowIfNull(resolver);
+        _models[alias] = resolver;
+        return this;
+    }
+
+    public AgentsBuilder AddTool(AgentTool tool)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        _tools[tool.Name] = tool;
+        return this;
+    }
+
+    /// <summary>Replaces the baseline policy (read-only tools run; the rest wait for approval).</summary>
+    public AgentsBuilder UsePolicy(IToolPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        Policy = policy;
+        return this;
+    }
+
+    /// <summary>Adjusts the baseline policy: which write tools are allowed, denied, or need particular approvers.</summary>
+    public AgentsBuilder ConfigureBaselinePolicy(Action<BaselineToolPolicy> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var baseline = new BaselineToolPolicy();
+        configure(baseline);
+        Policy = baseline;
+        return this;
+    }
+
+    /// <summary>Gives every tool call a short-lived credential limited to that run and tool.</summary>
+    public AgentsBuilder UseCredentials(IToolCredentialIssuer issuer, TimeSpan? lifetime = null)
+    {
+        ArgumentNullException.ThrowIfNull(issuer);
+        Issuer = issuer;
+        if (lifetime is { } l)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(l, TimeSpan.Zero);
+            CredentialLifetime = l;
+        }
+
+        return this;
+    }
+
+    public AgentsBuilder UseObserver(IAgentObserver observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+        Observer = observer;
+        return this;
+    }
+
+    public AgentsBuilder UseApprovalNotifier(IApprovalNotifier notifier)
+    {
+        ArgumentNullException.ThrowIfNull(notifier);
+        Notifier = notifier;
+        return this;
+    }
+
+    /// <summary>Applied to every piece of text before it is recorded (messages, tool arguments and results, approval details).</summary>
+    public AgentsBuilder UseRedactor(Func<string, string> redactor)
+    {
+        ArgumentNullException.ThrowIfNull(redactor);
+        Redactor = redactor;
+        return this;
+    }
+
+    public AgentsBuilder UseTimeProvider(TimeProvider time)
+    {
+        ArgumentNullException.ThrowIfNull(time);
+        Time = time;
+        return this;
+    }
+
+    public AgentsBuilder WithModelRetry(RetryPolicy retry, TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        ModelRetry = retry;
+        if (timeout is { } t)
+        {
+            ModelTimeout = t;
+        }
+
+        return this;
+    }
+
+    public AgentsBuilder WithToolRetry(RetryPolicy retry)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        ToolRetry = retry;
+        return this;
+    }
+
+    public AgentsRuntime Build() => new(this);
+}
+
+/// <summary>A model alias that no client was registered for.</summary>
+public sealed class UnknownModelException : Exception
+{
+    public UnknownModelException()
+        : base("Unknown model alias.")
+    {
+    }
+
+    public UnknownModelException(string message)
+        : base(message)
+    {
+    }
+
+    public UnknownModelException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>A tool name that no tool was registered under.</summary>
+public sealed class UnknownToolException : Exception
+{
+    public UnknownToolException()
+        : base("Unknown tool.")
+    {
+    }
+
+    public UnknownToolException(string message)
+        : base(message)
+    {
+    }
+
+    public UnknownToolException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// The configured agent layer. <see cref="Activities"/> is what workers register; <see cref="CreateContext"/> is what workflow code uses.
+/// </summary>
+public sealed class AgentsRuntime
+{
+    /// <summary>Passed to the model client in <see cref="ChatOptions.AdditionalProperties"/>; stable across retries of one step.</summary>
+    public const string IdempotencyKeyProperty = "kairos.idempotency_key";
+
+    private readonly AgentsBuilder _config;
+    private readonly Dictionary<string, ActivityFunc> _activities;
+
+    internal AgentsRuntime(AgentsBuilder config)
+    {
+        _config = config;
+        _activities = new Dictionary<string, ActivityFunc>(StringComparer.Ordinal)
+        {
+            [AgentActivityNames.Chat] = ChatStepAsync,
+            [AgentActivityNames.Tool] = ToolStepAsync,
+            [AgentActivityNames.ApprovalRequest] = ApprovalRequestStepAsync,
+            [AgentActivityNames.SagaMark] = (_, input, _) => Task.FromResult(input),
+        };
+    }
+
+    /// <summary>Register these on every worker that can run the workflows (<c>options.AddActivities(agents.Activities)</c> in embedded mode).</summary>
+    public IReadOnlyDictionary<string, ActivityFunc> Activities => _activities;
+
+    internal AgentsBuilder Config => _config;
+
+    /// <summary>Puts the agent activities into a registry.</summary>
+    public void RegisterInto(ActivityRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        foreach ((string name, ActivityFunc activity) in _activities)
+        {
+            registry.Register(name, activity);
+        }
+    }
+
+    /// <summary>Wraps workflow code that wants the agent steps.</summary>
+    public IAgentContext CreateContext(IWorkflowContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return new AgentContext(this, context);
+    }
+
+    /// <summary>Turns <paramref name="body"/> into a registered workflow: <c>options.AddWorkflow("support", agents.Workflow(...))</c>.</summary>
+    public WorkflowFunc Workflow(Func<IAgentContext, byte[], Task<byte[]>> body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        return (context, input) => body(CreateContext(context), input);
+    }
+
+    // ---- worker side -----------------------------------------------------------------------------------------
+
+    private async Task<byte[]> ChatStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
+    {
+        ChatStepRequest request = WireCodec.Read(input, AgentJson.Default.ChatStepRequest);
+        if (!_config.Models.TryGetValue(request.Model, out Func<RunKey, IChatClient>? resolve))
+        {
+            throw new UnknownModelException($"No model is registered as '{request.Model}'.");
+        }
+
+        IChatClient client = resolve(context.Run);
+        var tools = new List<AITool>(request.Tools.Length);
+        foreach (string name in request.Tools)
+        {
+            tools.Add(_config.Tools.TryGetValue(name, out AgentTool? tool) ? tool.Declaration : throw new UnknownToolException($"No tool is registered as '{name}'."));
+        }
+
+        var messages = new List<ChatMessage>(request.Messages.Length);
+        foreach (WireMessage m in request.Messages)
+        {
+            messages.Add(WireCodec.FromWire(m));
+        }
+
+        var options = new ChatOptions
+        {
+            Tools = tools.Count == 0 ? null : tools,
+            Temperature = request.Options?.Temperature,
+            MaxOutputTokens = request.Options?.MaxOutputTokens,
+            Seed = request.Options?.Seed,
+            AdditionalProperties = new AdditionalPropertiesDictionary { [IdempotencyKeyProperty] = context.IdempotencyKey },
+        };
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_config.ModelTimeout);
+        ChatResponse response;
+        try
+        {
+            response = _config.Observer is null
+                ? await client.GetResponseAsync(messages, options, timeout.Token).ConfigureAwait(false)
+                : await StreamAsync(client, messages, options, context, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The model '{request.Model}' did not answer within {_config.ModelTimeout.TotalSeconds:0} seconds.");
+        }
+
+        var reply = new ChatStepResponse
+        {
+            Messages = [.. response.Messages.Select(m => WireCodec.ResponseToWire(m, _config.Redactor))],
+            FinishReason = response.FinishReason?.Value,
+            ModelId = response.ModelId,
+            Usage = response.Usage is { } u ? new WireUsage(u.InputTokenCount, u.OutputTokenCount, u.TotalTokenCount) : null,
+        };
+        return WireCodec.Write(reply, AgentJson.Default.ChatStepResponse);
+    }
+
+    private async Task<ChatResponse> StreamAsync(
+        IChatClient client, List<ChatMessage> messages, ChatOptions options, ActivityContext context, CancellationToken cancellationToken)
+    {
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (ChatResponseUpdate update in client.GetStreamingResponseAsync(messages, options, cancellationToken).ConfigureAwait(false))
+        {
+            updates.Add(update);
+            if (!string.IsNullOrEmpty(update.Text))
+            {
+                await NotifyObserverAsync(context, update.Text, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return updates.ToChatResponse();
+    }
+
+#pragma warning disable CA1031 // A broken UI observer must never fail a model step.
+    private async Task NotifyObserverAsync(ActivityContext context, string delta, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _config.Observer!.OnTextAsync(context.Run, context.ActivityId, delta, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Debug.WriteLine($"Agent observer failed: {ex.GetType().Name}");
+        }
+    }
+#pragma warning restore CA1031
+
+    private async Task<byte[]> ToolStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
+    {
+        ToolStepRequest request = WireCodec.Read(input, AgentJson.Default.ToolStepRequest);
+        if (!_config.Tools.TryGetValue(request.Name, out AgentTool? tool))
+        {
+            // A model asking for a tool that does not exist is the model's mistake: tell it, do not retry.
+            return Reply(new ToolStepResponse { Outcome = ToolOutcomes.Completed, IsError = true, Content = $"There is no tool named '{request.Name}'." });
+        }
+
+        ApprovalDecision? approval = request.Approval is null ? null : ToDecision(request.Approval);
+        ToolDecision decision = await _config.Policy
+            .EvaluateAsync(new ToolPolicyContext(context.Run, tool, request.ArgumentsJson, approval), cancellationToken).ConfigureAwait(false);
+        switch (decision.Verdict)
+        {
+            case ToolVerdict.Deny:
+                return Reply(new ToolStepResponse { Outcome = ToolOutcomes.Denied, Reason = decision.Reason ?? "denied by policy" });
+            case ToolVerdict.RequireApproval:
+                return Reply(new ToolStepResponse
+                {
+                    Outcome = ToolOutcomes.ApprovalRequired,
+                    Reason = decision.Reason,
+                    Requirement = ToWire(decision.Approval ?? new ApprovalRequirement()),
+                });
+        }
+
+        ToolCredential? credential = null;
+        if (_config.Issuer is { } issuer)
+        {
+            // Read-only tools get a token that can only read, whatever their code tries; write scope exists only because the policy said Auto.
+            string[] scopes = tool.Access == ToolAccess.ReadOnly ? [$"{tool.Name}:read"] : [$"{tool.Name}:read", $"{tool.Name}:write"];
+            credential = await issuer.IssueAsync(
+                new ToolCredentialRequest(context.Run, tool.Name, scopes, _config.CredentialLifetime, request.OnBehalfOf),
+                _config.Time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+        }
+
+        using JsonDocument arguments = JsonDocument.Parse(request.ArgumentsJson);
+        var invocation = new ToolInvocation(
+            context.Run, tool.Name, request.CallId, arguments.RootElement.Clone(), context.IdempotencyKey, credential, approval, request.OnBehalfOf);
+
+        string content;
+        bool isError = false;
+        try
+        {
+            content = await tool.Handler(invocation, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ToolException ex)
+        {
+            content = ex.Message;
+            isError = true;
+        }
+
+        if (credential is not null)
+        {
+            content = content.Replace(credential.Token, "[credential removed]", StringComparison.Ordinal); // a token must never reach history
+        }
+
+        if (_config.Redactor is { } redact)
+        {
+            content = redact(content);
+        }
+
+        return Reply(new ToolStepResponse { Outcome = ToolOutcomes.Completed, Content = content, IsError = isError });
+    }
+
+    private async Task<byte[]> ApprovalRequestStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
+    {
+        if (_config.Notifier is { } notifier)
+        {
+            WireApprovalRequest wire = WireCodec.Read(input, AgentJson.Default.WireApprovalRequest);
+            var request = new ApprovalRequest
+            {
+                Action = wire.Action,
+                Details = wire.Details,
+                Tool = wire.Tool,
+                Requirement = FromWire(wire.Requirement),
+            };
+            await notifier.NotifyAsync(new ApprovalNotice(context.Run, wire.ApprovalId, request, wire.RequestedBy, wire.RequestedAt), cancellationToken).ConfigureAwait(false);
+        }
+
+        return input;
+    }
+
+    private static byte[] Reply(ToolStepResponse response) => WireCodec.Write(response, AgentJson.Default.ToolStepResponse);
+
+    internal static WireApprovalRequirement ToWire(ApprovalRequirement r) => new()
+    {
+        Approvers = [.. r.Approvers ?? []],
+        Roles = [.. r.Roles ?? []],
+        TimeoutSeconds = r.Timeout?.TotalSeconds,
+        ForbidSelfApproval = r.ForbidSelfApproval,
+    };
+
+    internal static ApprovalRequirement FromWire(WireApprovalRequirement w) =>
+        new(w.Approvers, w.Roles, w.TimeoutSeconds is { } s ? TimeSpan.FromSeconds(s) : null, w.ForbidSelfApproval);
+
+    internal static ApprovalDecision ToDecision(WireApprovalDecision w) => new(
+        w.ApprovalId, w.Approved ? ApprovalOutcome.Approved : ApprovalOutcome.Rejected,
+        new ApproverIdentity(w.Approver.Subject, w.Approver.Name, w.Approver.Roles, w.Approver.Evidence), w.Comment, w.DecidedAt);
+
+    internal static WireApprovalDecision ToWire(ApprovalDecision d) => new()
+    {
+        ApprovalId = d.ApprovalId,
+        Approved = d.IsApproved,
+        Approver = new WireApprover
+        {
+            Subject = d.Approver?.Subject ?? "",
+            Name = d.Approver?.Name,
+            Roles = [.. d.Approver?.Roles ?? []],
+            Evidence = d.Approver?.Evidence,
+        },
+        Comment = d.Comment,
+        DecidedAt = d.DecidedAt ?? default,
+    };
+}

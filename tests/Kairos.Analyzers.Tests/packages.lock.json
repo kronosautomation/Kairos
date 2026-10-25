@@ -108,14 +108,33 @@
       "kairos.abstractions": {
         "type": "Project"
       },
+      "kairos.agents": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )",
+          "Microsoft.Extensions.AI.Abstractions": "[10.11.0, )"
+        }
+      },
       "kairos.analyzers": {
         "type": "Project"
+      },
+      "kairos.core": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Abstractions": "[1.0.0, )"
+        }
       },
       "Microsoft.CodeAnalysis.Analyzers": {
         "type": "CentralTransitive",
         "requested": "[3.11.0, )",
         "resolved": "3.11.0",
         "contentHash": "v/EW3UE8/lbEYHoC2Qq7AR/DnmvpgdtAMndfQNmpuIMx/Mto8L5JnuCfdBYtgvalQOtfNCnxFejxuRrryvUTsg=="
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "CentralTransitive",
+        "requested": "[10.11.0, )",
+        "resolved": "10.11.0",
+        "contentHash": "h4DX/TdJU4fk1GGaf19n6Kujkj6VXbGeL4UEOsQ8+ZJC5fVApPauokCtvBP684BYbczUYZQNfo1mbmyHG4WVSg=="
       }
     }
   }

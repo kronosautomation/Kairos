@@ -8,7 +8,7 @@ namespace Kairos.Analyzers;
 /// <summary>
 /// Flags code that makes a workflow non-deterministic. A workflow method is replayed from history, so it may only observe the
 /// world through <c>IWorkflowContext</c>; anything else (the clock, randomness, I/O, threads, mutable statics) can give a different
-/// answer on replay. Workflow code is a method marked <c>[Workflow]</c> or taking an <c>IWorkflowContext</c>, and any lambda or local
+/// answer on replay. Workflow code is a method marked <c>[Workflow]</c> or taking an <c>IWorkflowContext</c> (or the agent context that wraps it), and any lambda or local
 /// function inside one. A method marked <c>[Activity]</c> is never workflow code. Helpers called from a workflow are not followed.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -110,6 +110,7 @@ public sealed class WorkflowDeterminismAnalyzer : DiagnosticAnalyzer
 
         var scope = new Scope(
             workflowContext,
+            start.Compilation.GetTypeByMetadataName("Kairos.Agents.IAgentContext"),
             start.Compilation.GetTypeByMetadataName("Kairos.WorkflowAttribute"),
             start.Compilation.GetTypeByMetadataName("Kairos.ActivityAttribute"),
             Resolve(start.Compilation));
@@ -135,10 +136,13 @@ public sealed class WorkflowDeterminismAnalyzer : DiagnosticAnalyzer
     }
 
     private sealed class Scope(
-        INamedTypeSymbol workflowContext, INamedTypeSymbol? workflowAttribute, INamedTypeSymbol? activityAttribute,
+        INamedTypeSymbol workflowContext, INamedTypeSymbol? agentContext, INamedTypeSymbol? workflowAttribute, INamedTypeSymbol? activityAttribute,
         List<(INamedTypeSymbol Type, string[]? Members, Kind Kind)> banned)
     {
         public INamedTypeSymbol WorkflowContext { get; } = workflowContext;
+
+        /// <summary>The agent context wraps the workflow context, so a method that takes it is workflow code too.</summary>
+        public INamedTypeSymbol? AgentContext { get; } = agentContext;
 
         public INamedTypeSymbol? WorkflowAttribute { get; } = workflowAttribute;
 
@@ -152,7 +156,8 @@ public sealed class WorkflowDeterminismAnalyzer : DiagnosticAnalyzer
         public bool IsWorkflowMethod(IMethodSymbol method) =>
             !HasAttribute(method, ActivityAttribute)
             && (HasAttribute(method, WorkflowAttribute)
-                || method.Parameters.Any(p => SymbolEqualityComparer.Default.Equals(p.Type, WorkflowContext)));
+                || method.Parameters.Any(p => SymbolEqualityComparer.Default.Equals(p.Type, WorkflowContext)
+                    || (AgentContext is not null && SymbolEqualityComparer.Default.Equals(p.Type, AgentContext))));
 
         /// <summary>True when the operation is workflow code or nested (lambda, local function) inside it.</summary>
         public bool InWorkflowCode(IOperation operation, ISymbol? containing)

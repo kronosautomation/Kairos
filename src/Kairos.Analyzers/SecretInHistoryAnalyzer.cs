@@ -41,18 +41,21 @@ public sealed class SecretInHistoryAnalyzer : DiagnosticAnalyzer
                 return;
             }
 
+            INamedTypeSymbol? agentContext = start.Compilation.GetTypeByMetadataName("Kairos.Agents.IAgentContext");
             INamedTypeSymbol? workflow = start.Compilation.GetTypeByMetadataName("Kairos.WorkflowAttribute");
             INamedTypeSymbol? activity = start.Compilation.GetTypeByMetadataName("Kairos.ActivityAttribute");
-            start.RegisterSymbolAction(c => OnMethod(c, workflowContext, workflow, activity), SymbolKind.Method);
+            start.RegisterSymbolAction(c => OnMethod(c, workflowContext, agentContext, workflow, activity), SymbolKind.Method);
         });
     }
 
-    private static void OnMethod(SymbolAnalysisContext context, INamedTypeSymbol workflowContext, INamedTypeSymbol? workflow, INamedTypeSymbol? activity)
+    private static void OnMethod(
+        SymbolAnalysisContext context, INamedTypeSymbol workflowContext, INamedTypeSymbol? agentContext, INamedTypeSymbol? workflow, INamedTypeSymbol? activity)
     {
         var method = (IMethodSymbol)context.Symbol;
         bool carriesHistory =
             method.GetAttributes().Any(a => IsAttribute(a, workflow) || IsAttribute(a, activity))
-            || method.Parameters.Any(p => SymbolEqualityComparer.Default.Equals(p.Type, workflowContext));
+            || method.Parameters.Any(p => SymbolEqualityComparer.Default.Equals(p.Type, workflowContext)
+                || (agentContext is not null && SymbolEqualityComparer.Default.Equals(p.Type, agentContext)));
         if (!carriesHistory)
         {
             return;
