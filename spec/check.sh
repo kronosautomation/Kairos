@@ -9,8 +9,9 @@ tlc() { java -XX:+UseParallelGC -cp "$TLA2TOOLS" tlc2.TLC -workers auto -deadloc
 
 # TLC_MODE=quick (default, every commit: seconds) or full (nightly: tens of minutes, ~12M+ states).
 MODE="${TLC_MODE:-quick}"
-if [ "$MODE" = "full" ]; then CFG=Kairos.cfg; MUT=KairosUnfenced.cfg; else CFG=KairosQuick.cfg; MUT=KairosUnfencedQuick.cfg; fi
-echo "== mode: $MODE ($CFG, $MUT) =="
+if [ "$MODE" = "full" ]; then CFG=Kairos.cfg; MUT=KairosUnfenced.cfg; RCFG=KairosReaper.cfg; else CFG=KairosQuick.cfg; MUT=KairosUnfencedQuick.cfg; RCFG=KairosReaperQuick.cfg; fi
+RMUT=KairosReaperUnrecordedQuick.cfg
+echo "== mode: $MODE ($CFG, $MUT, $RCFG, $RMUT) =="
 
 echo "== engine model: invariants I2 I3 I9, properties AppendOnly + Liveness (I1) =="
 tlc -config "$CFG" Kairos.tla || { echo "FAIL: the engine model violates a property"; exit 1; }
@@ -20,4 +21,13 @@ if tlc -config "$MUT" Kairos.tla; then
   echo "FAIL: the unfenced model passed, so the invariants do not detect missing fencing"
   exit 1
 fi
-echo "OK: both checks behaved as expected"
+
+echo "== reaper model (no crash bound): I2 I3 I9 ParkedIsVisible, AppendOnly, Resolved =="
+tlc -config "$RCFG" KairosReaper.tla || { echo "FAIL: the reaper model violates a property"; exit 1; }
+
+echo "== mutation: exhausted tasks dropped without a record, TLC must find an unresolved run =="
+if tlc -config "$RMUT" KairosReaper.tla; then
+  echo "FAIL: the unrecorded-reaper model passed, so Resolved does not detect lost work"
+  exit 1
+fi
+echo "OK: all checks behaved as expected"

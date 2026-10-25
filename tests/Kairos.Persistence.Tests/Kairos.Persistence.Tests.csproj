@@ -17,6 +17,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The failover test builds the same primary and replica as docker/compose.yml, from the same scripts. -->
+    <Content Include="..\..\docker\postgres\*.sh" Link="Faults\scripts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 

@@ -185,7 +185,10 @@ public sealed class StuckTaskVisibilityTests
         await host.StartAsync();
 
         await EventuallyAsync(() => Task.FromResult(Interlocked.Read(ref faults)), f => f >= 1);
-        Assert.Contains(logs.Entries, e => e.Level == LogLevel.Error && e.Message.Contains(run.RunId.ToString(), StringComparison.Ordinal));
+        // The counter is bumped just before the worker raises the fault that the host logs, so give the log line a moment.
+        await EventuallyAsync(
+            () => Task.FromResult(logs.Entries.Any(e => e.Level == LogLevel.Error && e.Message.Contains(run.RunId.ToString(), StringComparison.Ordinal))),
+            logged => logged);
         Assert.Equal(RunState.Running, await client.GetStateAsync(run)); // kept, retrying until a fixed build is deployed
         Assert.Equal(0, store.GetStats().StuckWorkflowTasks); // replay failures retry; they never park
         await host.StopAsync();
