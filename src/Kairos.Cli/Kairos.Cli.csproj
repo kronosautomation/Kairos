@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>kairos</AssemblyName>
+    <RootNamespace>Kairos.Cli</RootNamespace>
+    <PackageId>Kairos.Cli</PackageId>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>kairos</ToolCommandName>
+    <Description>The kairos command line: replay-check replays recorded histories against a candidate build and fails the pipeline on nondeterminism, without printing any payload.</Description>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Kairos.Core\Kairos.Core.csproj" />
+    <ProjectReference Include="..\Kairos.Hosting\Kairos.Hosting.csproj" />
+    <ProjectReference Include="..\Kairos.Persistence.Postgres\Kairos.Persistence.Postgres.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Kairos.Cli.Tests" />
+  </ItemGroup>
+
+</Project>

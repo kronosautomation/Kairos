@@ -1,0 +1,45 @@
+# Azure DevOps: replay recent production histories against the build you are about to deploy, before the deploy stage.
+#
+# The job runs where it is allowed to read the Kairos database (a read-only role) and, if the application uses client-side encryption, to open payloads
+# through your key provider. Production payloads never leave the job: the tool prints verdicts, ids, names and sizes only.
+# Credentials come from workload identity federation; nothing is stored in the pipeline.
+
+parameters:
+- name: kairosCliVersion
+  type: string
+  default: '1.0.0'
+
+stages:
+- stage: ReplayCheck
+  displayName: Replay check against production histories
+  jobs:
+  - job: Replay
+    pool:
+      name: self-hosted-with-database-access          # an agent that can reach the database over its private network
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        version: 10.x
+
+    - script: dotnet publish src/MyApp/MyApp.csproj -c Release -o $(Build.ArtifactStagingDirectory)/candidate
+      displayName: Build the candidate
+
+    - script: dotnet tool install --tool-path $(Agent.TempDirectory)/tools Kairos.Cli --version ${{ parameters.kairosCliVersion }}
+      displayName: Install the kairos tool
+
+    # Reads the connection string of the read-only role from Key Vault with the pipeline's federated identity; the value is masked in logs.
+    - task: AzureKeyVault@2
+      inputs:
+        azureSubscription: 'kairos-replay-check'          # a service connection using workload identity federation
+        KeyVaultName: 'my-keyvault'
+        SecretsFilter: 'kairos-readonly-connection'
+
+    - script: >
+        $(Agent.TempDirectory)/tools/kairos replay-check
+        --build $(Build.ArtifactStagingDirectory)/candidate/MyApp.dll
+        --sample 50 --since 7d --strict-coverage
+        --corpus tests/histories
+      displayName: Replay check
+      env:
+        KAIROS_CONNECTION: $(kairos-readonly-connection)      # secret variables must be mapped into the environment explicitly

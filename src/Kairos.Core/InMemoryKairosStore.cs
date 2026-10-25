@@ -378,6 +378,61 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
+    public ValueTask<IReadOnlyList<RunSummary>> ListRunsAsync(TenantScope scope, RunFilter filter, int limit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        lock (_gate)
+        {
+            if (Scope(scope, create: false) is not { } data)
+            {
+                return ValueTask.FromResult<IReadOnlyList<RunSummary>>([]);
+            }
+
+            IEnumerable<RunSummary> all = data.Runs.Values
+                .Where(r => r.History.Count > 0)
+                .Select(r => new RunSummary(r.Key, r.WorkflowId, r.WorkflowType, r.BuildId, r.State, r.History[0].Timestamp))
+                .Where(s => (filter.WorkflowType is null || s.WorkflowType == filter.WorkflowType) && (filter.BuildId is null || s.BuildId == filter.BuildId))
+                .Where(s => filter.State switch
+                {
+                    RunStateFilter.Open => s.State == RunState.Running,
+                    RunStateFilter.Closed => s.State != RunState.Running,
+                    _ => true,
+                })
+                .Where(s => s.State == RunState.Running || filter.StartedSince is not { } since || s.StartedAt >= since)
+                .OrderByDescending(s => s.StartedAt).ThenByDescending(s => s.Run.RunId);
+            if (filter.After is { } after)
+            {
+                all = all.Where(s => s.StartedAt < after.StartedAt || (s.StartedAt == after.StartedAt && s.Run.RunId.CompareTo(after.RunId) < 0));
+            }
+
+            return ValueTask.FromResult<IReadOnlyList<RunSummary>>([.. all.Take(limit)]);
+        }
+    }
+
+    public ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (Scope(scope, create: false) is not { } data)
+            {
+                return ValueTask.FromResult<IReadOnlyList<RunGroup>>([]);
+            }
+
+            IReadOnlyList<RunGroup> groups =
+            [
+                .. data.Runs.Values
+                    .Where(r => r.History.Count > 0)
+                    .GroupBy(r => (r.WorkflowType, r.BuildId))
+                    .OrderBy(g => g.Key.WorkflowType, StringComparer.Ordinal).ThenBy(g => g.Key.BuildId, StringComparer.Ordinal)
+                    .Select(g => new RunGroup(
+                        g.Key.WorkflowType, g.Key.BuildId, g.Count(r => r.State == RunState.Running),
+                        g.Count(r => r.State != RunState.Running && (closedSince is not { } since || r.History[0].Timestamp >= since)))),
+            ];
+            return ValueTask.FromResult(groups);
+        }
+    }
+
     public ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
     {
         lock (_gate)

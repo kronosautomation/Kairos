@@ -202,7 +202,7 @@ public sealed class WorkflowExecution : IWorkflowContext
                     var command = Expect<ContinueAsNewCommand>(e);
                     if (command.NewRunId != continued.NewRunId || !command.Input.AsSpan().SequenceEqual(continued.Input))
                     {
-                        throw Mismatch(e, "a different continue-as-new");
+                        throw Mismatch(e, command.NewRunId != continued.NewRunId ? "a continue-as-new into a different run" : $"a continue-as-new with a different input ({command.Input.Length} bytes against {continued.Input.Length} recorded)");
                     }
 
                     _closed = true;
@@ -228,10 +228,14 @@ public sealed class WorkflowExecution : IWorkflowContext
                 {
                     var command = Expect<ScheduleActivityCommand>(e);
                     if (command.ActivityId != scheduled.ActivityId ||
-                        !string.Equals(command.ActivityType, scheduled.ActivityType, StringComparison.Ordinal) ||
-                        !command.Input.AsSpan().SequenceEqual(scheduled.Input))
+                        !string.Equals(command.ActivityType, scheduled.ActivityType, StringComparison.Ordinal))
                     {
                         throw Mismatch(e, $"activity {command.ActivityId} '{command.ActivityType}'");
+                    }
+
+                    if (!command.Input.AsSpan().SequenceEqual(scheduled.Input))
+                    {
+                        throw Mismatch(e, $"activity {command.ActivityId} '{command.ActivityType}' with a different input ({command.Input.Length} bytes against {scheduled.Input.Length} recorded)");
                     }
 
                     break;
@@ -253,7 +257,7 @@ public sealed class WorkflowExecution : IWorkflowContext
                     var command = Expect<CompleteWorkflowCommand>(e);
                     if (!command.Result.AsSpan().SequenceEqual(completed.Result))
                     {
-                        throw Mismatch(e, "a different workflow result");
+                        throw Mismatch(e, $"a different workflow result ({command.Result.Length} bytes against {completed.Result.Length} recorded)");
                     }
 
                     _closed = true;
@@ -387,10 +391,10 @@ public sealed class WorkflowExecution : IWorkflowContext
         if (!_pending.TryDequeue(out WorkflowCommand? command))
         {
             throw new NonDeterminismException(
-                $"Event {e.Sequence} ({e.Type}) is in history but the replayed workflow emitted no command for it.");
+                $"Event {e.Sequence} ({e.Type}) is in history but the replayed workflow emitted no command for it.", e.Sequence, Describe(e), "nothing");
         }
 
-        return command as T ?? throw Mismatch(e, command.GetType().Name);
+        return command as T ?? throw Mismatch(e, Describe(command));
     }
 
     private void RequireNoPendingCommands(HistoryEvent e) => RequireNoPendingCommands($"event {e.Sequence} ({e.Type})");
@@ -399,13 +403,56 @@ public sealed class WorkflowExecution : IWorkflowContext
     {
         if (_pending.Count > 0)
         {
+            WorkflowCommand extra = _pending.Peek();
             throw new NonDeterminismException(
-                $"At {at} the workflow still has an unconfirmed {_pending.Peek().GetType().Name}: the code does more than the recorded run did.");
+                $"At {at} the workflow still has an unconfirmed {extra.GetType().Name}: the code does more than the recorded run did.",
+                SequenceOf(at), at.StartsWith("end of history", StringComparison.Ordinal) ? "end of history" : at, Describe(extra));
         }
     }
 
     private static NonDeterminismException Mismatch(HistoryEvent e, string emitted) =>
-        new($"Non-determinism at event {e.Sequence}: history has {e.Type} but the workflow emitted {emitted}.");
+        new($"Non-determinism at event {e.Sequence}: history has {e.Type} but the workflow emitted {emitted}.", e.Sequence, Describe(e), emitted);
+
+    private static long SequenceOf(string at)
+    {
+        // "event 12 (ActivityCompleted)" -> 12; "end of history" -> 0.
+        const string Prefix = "event ";
+        if (!at.StartsWith(Prefix, StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        int end = at.IndexOf(' ', Prefix.Length);
+        return end > 0 && long.TryParse(at.AsSpan(Prefix.Length, end - Prefix.Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long n) ? n : 0;
+    }
+
+    /// <summary>A recorded event as names, ids and sizes. Never a payload.</summary>
+    internal static string Describe(HistoryEvent e) => e switch
+    {
+        ActivityScheduled x => $"ActivityScheduled: activity {x.ActivityId} '{x.ActivityType}' ({x.Input.Length} bytes)",
+        TimerStarted x => $"TimerStarted: timer {x.TimerId} for {x.Duration}",
+        WorkflowCompleted x => $"WorkflowCompleted ({x.Result.Length} bytes)",
+        WorkflowFailed x => $"WorkflowFailed: '{x.ErrorType}'",
+        WorkflowContinued x => $"WorkflowContinued ({x.Input.Length} bytes)",
+        PatchMarker x => $"PatchMarker: '{x.PatchId}'",
+        ActivityCompleted x => $"ActivityCompleted: activity {x.ActivityId}",
+        ActivityFailed x => $"ActivityFailed: activity {x.ActivityId} attempt {x.Attempt} '{x.ErrorType}'",
+        TimerFired x => $"TimerFired: timer {x.TimerId}",
+        SignalReceived x => $"SignalReceived: '{x.SignalName}'",
+        _ => e.Type.ToString(),
+    };
+
+    /// <summary>A command the code emitted, as names, ids and sizes. Never a payload.</summary>
+    internal static string Describe(WorkflowCommand c) => c switch
+    {
+        ScheduleActivityCommand x => $"ScheduleActivity: activity {x.ActivityId} '{x.ActivityType}' ({x.Input.Length} bytes)",
+        StartTimerCommand x => $"StartTimer: timer {x.TimerId} for {x.Duration}",
+        CompleteWorkflowCommand x => $"CompleteWorkflow ({x.Result.Length} bytes)",
+        FailWorkflowCommand x => $"FailWorkflow: '{x.ErrorType}'",
+        ContinueAsNewCommand x => $"ContinueAsNew ({x.Input.Length} bytes)",
+        RecordPatchCommand x => $"RecordPatch: '{x.PatchId}'",
+        _ => c.GetType().Name,
+    };
 
     private sealed record PendingActivity(string ActivityType, TaskCompletionSource<byte[]> Completion);
 

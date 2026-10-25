@@ -972,6 +972,83 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
 
     // ---- operator actions on parked work --------------------------------------------------------------------------
 
+    public async ValueTask<IReadOnlyList<RunSummary>> ListRunsAsync(TenantScope scope, RunFilter filter, int limit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        return await Retry<IReadOnlyList<RunSummary>>(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(scope);
+            NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
+            cmd.CommandText = """
+                SELECT run_id, workflow_id, workflow_type, build_id, state, created_at
+                FROM kairos.runs
+                WHERE tenant_id = @t AND namespace_id = @n
+                  AND (@wt::text IS NULL OR workflow_type = @wt)
+                  AND (@b::text IS NULL OR build_id = @b)
+                  AND (@f = 0 OR (@f = 1 AND state = 0) OR (@f = 2 AND state <> 0))
+                  AND (state = 0 OR @since::timestamptz IS NULL OR created_at >= @since)
+                  AND (@at::timestamptz IS NULL OR (created_at, run_id) < (@at, @after))
+                ORDER BY created_at DESC, run_id DESC
+                LIMIT @lim
+                """;
+            Scope(cmd, scope);
+            cmd.Parameters.Add(new NpgsqlParameter("wt", NpgsqlDbType.Text) { Value = (object?)filter.WorkflowType ?? DBNull.Value });
+            cmd.Parameters.Add(new NpgsqlParameter("b", NpgsqlDbType.Text) { Value = (object?)filter.BuildId ?? DBNull.Value });
+            cmd.Parameters.Add(new NpgsqlParameter("f", NpgsqlDbType.Integer) { Value = (int)filter.State });
+            cmd.Parameters.Add(new NpgsqlParameter("since", NpgsqlDbType.TimestampTz) { Value = filter.StartedSince is { } since ? since.UtcDateTime : DBNull.Value });
+            cmd.Parameters.Add(new NpgsqlParameter("at", NpgsqlDbType.TimestampTz) { Value = filter.After is { } after ? after.StartedAt.UtcDateTime : DBNull.Value });
+            cmd.Parameters.Add(new NpgsqlParameter("after", NpgsqlDbType.Uuid) { Value = filter.After is { } cursor ? cursor.RunId : Guid.Empty });
+            cmd.Parameters.Add(new NpgsqlParameter("lim", NpgsqlDbType.Integer) { Value = limit });
+            batch.BatchCommands.Add(cmd);
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            var runs = new List<RunSummary>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                runs.Add(new RunSummary(
+                    new RunKey(scope.TenantId, scope.NamespaceId, reader.GetGuid(0)), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                    (RunState)reader.GetInt16(4), new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(5), DateTimeKind.Utc))));
+            }
+
+            return runs;
+        }).ConfigureAwait(false);
+    }
+
+    public async ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken)
+    {
+        return await Retry<IReadOnlyList<RunGroup>>(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(scope);
+            NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
+            cmd.CommandText = """
+                SELECT workflow_type, build_id,
+                       count(*) FILTER (WHERE state = 0),
+                       count(*) FILTER (WHERE state <> 0 AND (@since::timestamptz IS NULL OR created_at >= @since))
+                FROM kairos.runs
+                WHERE tenant_id = @t AND namespace_id = @n
+                GROUP BY workflow_type, build_id
+                ORDER BY workflow_type, build_id
+                """;
+            Scope(cmd, scope);
+            cmd.Parameters.Add(new NpgsqlParameter("since", NpgsqlDbType.TimestampTz) { Value = closedSince is { } since ? since.UtcDateTime : DBNull.Value });
+            batch.BatchCommands.Add(cmd);
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            var groups = new List<RunGroup>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                groups.Add(new RunGroup(reader.GetString(0), reader.GetString(1), (int)reader.GetInt64(2), (int)reader.GetInt64(3)));
+            }
+
+            return groups;
+        }).ConfigureAwait(false);
+    }
+
     public async ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
     {
         return await Retry<WorkBacklog?>(async () =>

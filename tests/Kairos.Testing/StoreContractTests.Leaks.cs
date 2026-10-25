@@ -173,6 +173,10 @@ public abstract partial class StoreContractTests
             Assert.Equal(0, await a.Store.FireDueTimersAsync(f, Time.GetUtcNow().AddYears(1), Ct)),
         [nameof(IKairosStore.GetStuckWorkflowTasksAsync)] = async (a, f) =>
             Assert.Empty(await a.Store.GetStuckWorkflowTasksAsync(f, Ct)),
+        [nameof(IKairosStore.ListRunsAsync)] = async (a, f) =>
+            Assert.Empty(await a.Store.ListRunsAsync(f, new RunFilter(), 1000, Ct)),
+        [nameof(IKairosStore.GetRunGroupsAsync)] = async (a, f) =>
+            Assert.Empty(await a.Store.GetRunGroupsAsync(f, null, Ct)),
         [nameof(IKairosStore.GetBacklogAsync)] = async (a, f) =>
         {
             WorkBacklog? backlog = await a.Store.GetBacklogAsync(f, Time.GetUtcNow().AddYears(1), Ct);

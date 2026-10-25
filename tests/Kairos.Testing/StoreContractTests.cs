@@ -78,6 +78,74 @@ public abstract partial class StoreContractTests
     }
 
     [Fact]
+    public async Task Runs_are_listed_newest_first_in_pages_and_filtered_by_type_build_and_state()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        try
+        {
+            await store.ListRunsAsync(A, new RunFilter(), 1, Ct);
+        }
+        catch (NotSupportedException)
+        {
+            return; // a store that cannot list says so (and the replay check built on it refuses to run)
+        }
+
+        var started = new List<Guid>();
+        foreach ((string id, string type, string build) in new[] { ("r1", "wf", "default"), ("r2", "wf", "b2"), ("r3", "other", "default"), ("r4", "wf", "default") })
+        {
+            started.Add((await client.StartAsync(A, id, type, [], build, Ct)).RunId);
+            Time.Advance(TimeSpan.FromMinutes(1));
+        }
+
+        await client.StartAsync(B, "foreign", "wf", [], cancellationToken: Ct);
+
+        // Newest first, paged by cursor, with nothing repeated or missed.
+        var seen = new List<RunSummary>();
+        RunCursor? cursor = null;
+        while (true)
+        {
+            IReadOnlyList<RunSummary> page = await store.ListRunsAsync(A, new RunFilter { After = cursor }, 3, Ct);
+            if (page.Count == 0)
+            {
+                break;
+            }
+
+            seen.AddRange(page);
+            cursor = page[^1].Cursor;
+        }
+
+        Assert.Equal(Enumerable.Reverse(started), seen.Select(r => r.Run.RunId));
+        Assert.All(seen, r => Assert.Equal(A, r.Run.Scope));
+        Assert.Equal(["wf", "wf", "other", "wf"], Enumerable.Reverse(seen).Select(r => r.WorkflowType));
+        Assert.Equal(["r4", "r3", "r2", "r1"], seen.Select(r => r.WorkflowId));
+
+        Assert.Equal(2, (await store.ListRunsAsync(A, new RunFilter { WorkflowType = "wf", BuildId = "default" }, 10, Ct)).Count);
+        Assert.Single(await store.ListRunsAsync(A, new RunFilter { BuildId = "b2" }, 10, Ct));
+        Assert.Equal(4, (await store.ListRunsAsync(A, new RunFilter { State = RunStateFilter.Open }, 10, Ct)).Count);
+        Assert.Empty(await store.ListRunsAsync(A, new RunFilter { State = RunStateFilter.Closed }, 10, Ct));
+        Assert.Single(await store.ListRunsAsync(A, new RunFilter(), 1, Ct));
+
+        // Finish the default-build runs of "wf" and "other"; the b2 run stays open.
+        WorkflowFunc echo = (_, input) => Task.FromResult(input);
+        await DriveAsync(store, A, new WorkflowRegistry().Register("wf", "default", echo).Register("other", "default", echo), Activities());
+        Assert.Equal(RunState.Completed, (await store.ListRunsAsync(A, new RunFilter { WorkflowType = "other" }, 10, Ct)).Single().State);
+        Assert.Equal(3, (await store.ListRunsAsync(A, new RunFilter { State = RunStateFilter.Closed }, 10, Ct)).Count);
+
+        // StartedSince trims closed runs only; the open one is listed whenever it started.
+        DateTimeOffset cutoff = Time.GetUtcNow();
+        IReadOnlyList<RunSummary> recent = await store.ListRunsAsync(A, new RunFilter { StartedSince = cutoff }, 10, Ct);
+        Assert.Equal(["r2"], recent.Select(r => r.WorkflowId));
+
+        Assert.Equal(
+            [("other", "default", 0, 1), ("wf", "b2", 1, 0), ("wf", "default", 0, 2)],
+            (await store.GetRunGroupsAsync(A, null, Ct)).Select(g => (g.WorkflowType, g.BuildId, g.Open, g.Closed)));
+        Assert.Equal(
+            [("other", "default", 0, 0), ("wf", "b2", 1, 0), ("wf", "default", 0, 0)],
+            (await store.GetRunGroupsAsync(A, cutoff, Ct)).Select(g => (g.WorkflowType, g.BuildId, g.Open, g.Closed)));
+        Assert.Equal([("wf", "default", 1, 0)], (await store.GetRunGroupsAsync(B, null, Ct)).Select(g => (g.WorkflowType, g.BuildId, g.Open, g.Closed)));
+    }
+
+    [Fact]
     public async Task The_backlog_counts_ready_work_of_this_scope_only()
     {
         (IKairosStore store, KairosClient client) = await NewAsync();

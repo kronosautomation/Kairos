@@ -1,0 +1,48 @@
+# GitHub Actions: replay recent production histories against the build you are about to deploy, before the deploy job.
+#
+# The job runs where it is allowed to read the Kairos database (a read-only role) and, if the application uses client-side encryption, to open payloads
+# through your key provider. Production payloads never leave the job: the tool prints verdicts, ids, names and sizes only.
+# Credentials come from OpenID Connect federation; no long-lived secret is stored in the repository settings.
+
+name: replay-check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  id-token: write     # for the federated sign-in
+  contents: read
+
+jobs:
+  replay:
+    runs-on: [self-hosted, with-database-access]      # a runner that can reach the database over its private network
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.x
+
+    - run: dotnet publish src/MyApp/MyApp.csproj -c Release -o candidate
+      name: Build the candidate
+
+    - run: dotnet tool install --tool-path "$RUNNER_TEMP/tools" Kairos.Cli --version 1.0.0
+      name: Install the kairos tool
+
+    - uses: azure/login@v2
+      with:
+        client-id: ${{ vars.AZURE_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Replay check
+      run: |
+        # The connection string of the read-only role comes from Key Vault with the federated identity, and is masked before it is used.
+        connection="$(az keyvault secret show --vault-name my-keyvault --name kairos-readonly-connection --query value -o tsv)"
+        echo "::add-mask::$connection"
+        export KAIROS_CONNECTION="$connection"
+        "$RUNNER_TEMP/tools/kairos" replay-check \
+          --build candidate/MyApp.dll \
+          --sample 50 --since 7d --strict-coverage \
+          --corpus tests/histories

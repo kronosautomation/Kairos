@@ -62,6 +62,47 @@ public sealed record ActivityTask(
     public string IdempotencyKey => $"{Run.RunId:N}:{ActivityId}";
 }
 
+/// <summary>Which runs a listing returns by state.</summary>
+public enum RunStateFilter
+{
+    /// <summary>Open and closed runs.</summary>
+    Any,
+
+    /// <summary>Runs that are still running.</summary>
+    Open,
+
+    /// <summary>Runs that completed, failed, were terminated or continued as new.</summary>
+    Closed,
+}
+
+/// <summary>A position in a newest-first listing: the next page starts strictly after it.</summary>
+public readonly record struct RunCursor(DateTimeOffset StartedAt, Guid RunId);
+
+/// <summary>What <see cref="IKairosStore.ListRunsAsync"/> returns.</summary>
+public sealed record RunFilter
+{
+    public string? WorkflowType { get; init; }
+
+    public string? BuildId { get; init; }
+
+    public RunStateFilter State { get; init; }
+
+    /// <summary>Closed runs started before this time are left out. Open runs are always included, whenever they started: they are the ones still running on some build.</summary>
+    public DateTimeOffset? StartedSince { get; init; }
+
+    /// <summary>Continue a listing after this position (the <see cref="RunSummary"/> that ended the previous page).</summary>
+    public RunCursor? After { get; init; }
+}
+
+/// <summary>One run in a listing. Metadata only: no payload.</summary>
+public sealed record RunSummary(RunKey Run, string WorkflowId, string WorkflowType, string BuildId, RunState State, DateTimeOffset StartedAt)
+{
+    public RunCursor Cursor => new(StartedAt, Run.RunId);
+}
+
+/// <summary>How many runs of one workflow type and build there are, open and closed (closed ones filtered like <see cref="RunFilter.StartedSince"/>).</summary>
+public sealed record RunGroup(string WorkflowType, string BuildId, int Open, int Closed);
+
 /// <summary>Work that is ready to be claimed right now. Growth means workers are not keeping up.</summary>
 public sealed record WorkBacklog(int WorkflowTasks, int ActivityTasks, int DueTimers);
 
@@ -132,6 +173,17 @@ public interface IKairosStore
     /// until an operator intervenes). Returns the number of leases handled.
     /// </summary>
     ValueTask<int> ReapExpiredLeasesAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Runs in this scope, newest first (by start time, then run id), at most <paramref name="limit"/>. Read-only, metadata only. Page with <see cref="RunFilter.After"/>.
+    /// Stores that cannot list throw <see cref="NotSupportedException"/> rather than answer with an empty list, so that a check built on it cannot pass by seeing nothing.
+    /// </summary>
+    ValueTask<IReadOnlyList<RunSummary>> ListRunsAsync(TenantScope scope, RunFilter filter, int limit, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot list runs.");
+
+    /// <summary>The workflow types and builds with runs in this scope and how many are open or closed. Closed runs are counted from <paramref name="closedSince"/> (null: all).</summary>
+    ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot list runs.");
 
     /// <summary>Counts of ready work in this scope, for queue-depth metrics. Null when the store cannot say (the default).</summary>
     ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) => ValueTask.FromResult<WorkBacklog?>(null);

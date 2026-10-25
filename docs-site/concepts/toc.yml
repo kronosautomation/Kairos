@@ -36,3 +36,5 @@
   href: a2a.md
 - name: Observability and Aspire
   href: observability.md
+- name: Deploy safety (replay check)
+  href: deploy-safety.md

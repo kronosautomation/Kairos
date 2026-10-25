@@ -42,6 +42,12 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
         ActivityTask task, HistoryEvent outcome, DateTimeOffset? retryAt, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.CompleteActivityTaskAsync(task, outcome, retryAt, now, cancellationToken);
 
+    public virtual ValueTask<IReadOnlyList<RunSummary>> ListRunsAsync(TenantScope scope, RunFilter filter, int limit, CancellationToken cancellationToken) =>
+        inner.ListRunsAsync(scope, filter, limit, cancellationToken);
+
+    public virtual ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
+        inner.GetRunGroupsAsync(scope, closedSince, cancellationToken);
+
     public virtual ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.GetBacklogAsync(scope, now, cancellationToken);
 

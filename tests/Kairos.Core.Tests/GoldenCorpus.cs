@@ -49,57 +49,15 @@ internal static class GoldenCorpus
 
     // ---- file format ----------------------------------------------------------------------------------------------
 
-    public static string Serialize(CorpusEntry entry)
-    {
-        var sb = new StringBuilder();
-        sb.Append("# kairos-history ").Append(RecordedBy).Append('\n');
-        sb.Append("# note: ").Append(entry.Note).Append('\n');
-        sb.Append("replay-with: ").Append(entry.ReplayWith).Append('\n');
-        sb.Append("outcome: ").Append(Outcome(entry.History[^1])).Append('\n');
-        foreach (HistoryEvent e in entry.History)
-        {
-            sb.Append("event: ").Append(Convert.ToBase64String(HistoryEventCodec.Encode(e)))
-              .Append(' ').Append(Convert.ToBase64String(e.PrevHash))
-              .Append(' ').Append(Convert.ToBase64String(e.Hash)).Append('\n');
-        }
-
-        return sb.ToString();
-    }
+    public static string Serialize(CorpusEntry entry) => HistoryFile.Serialize(entry.History, RecordedBy, entry.Note, entry.ReplayWith);
 
     public static CorpusEntry Parse(string file, string text)
     {
-        string replayWith = "";
-        string note = "";
-        var events = new List<HistoryEvent>();
-        foreach (string raw in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            string line = raw.TrimEnd('\r');
-            if (line.StartsWith("# note: ", StringComparison.Ordinal))
-            {
-                note = line["# note: ".Length..];
-            }
-            else if (line.StartsWith("replay-with: ", StringComparison.Ordinal))
-            {
-                replayWith = line["replay-with: ".Length..];
-            }
-            else if (line.StartsWith("event: ", StringComparison.Ordinal))
-            {
-                string[] parts = line["event: ".Length..].Split(' ');
-                events.Add(HistoryEventCodec.Decode(Convert.FromBase64String(parts[0]), Convert.FromBase64String(parts[1]), Convert.FromBase64String(parts[2])));
-            }
-        }
-
-        return new CorpusEntry(file, replayWith, note, events);
+        HistoryFileContents contents = HistoryFile.Parse(text);
+        return new CorpusEntry(file, contents.ReplayWith, contents.Note, contents.History);
     }
 
-    public static string Outcome(HistoryEvent last) => last switch
-    {
-        WorkflowCompleted => "Completed",
-        WorkflowFailed => "Failed",
-        WorkflowContinued => "ContinuedAsNew",
-        RunTerminated => "Terminated",
-        _ => "Open",
-    };
+    public static string Outcome(HistoryEvent last) => HistoryFile.Outcome(last);
 
     // ---- recording (run once per release; never re-record to make a failing replay pass) --------------------------------
 

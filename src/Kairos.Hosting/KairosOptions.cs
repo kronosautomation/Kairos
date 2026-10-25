@@ -14,6 +14,9 @@ public sealed class KairosOptions
 
     internal WorkflowRegistry Workflows { get; } = new();
 
+    /// <summary>The workflow code registered so far, per type and build. Read by tools that replay histories against a build (<c>kairos replay-check</c>).</summary>
+    public WorkflowRegistry WorkflowRegistry => Workflows;
+
     internal ActivityRegistry Activities { get; } = new();
 
     public TenantScope Scope { get; set; } = DefaultScope;
@@ -38,7 +41,8 @@ public sealed class KairosOptions
     /// </summary>
     public TimeSpan WorkerStallThreshold { get; set; } = TimeSpan.FromSeconds(30);
 
-    internal IPayloadProtector? PayloadProtector { get; private set; }
+    /// <summary>The payload protector set with <see cref="UsePayloadProtector"/>, or null.</summary>
+    public IPayloadProtector? PayloadProtector { get; private set; }
 
     /// <summary>
     /// Client-side payload encryption: inputs, results, signals and failure messages are sealed before they reach the database and opened

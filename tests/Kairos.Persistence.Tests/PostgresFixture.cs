@@ -121,6 +121,10 @@ public sealed class TestDatabase(string name, PostgresFixture fixture) : IAsyncD
     public string DataPlaneConnectionString =>
         fixture.ConnectionString(Name, PostgresProvisioning.DataPlaneRole, PostgresFixture.PasswordFor(PostgresProvisioning.DataPlaneRole));
 
+    /// <summary>For tools that connect as the reporting role (read-only, bound by row-level security like everything else).</summary>
+    public string ReadOnlyConnectionString =>
+        fixture.ConnectionString(Name, PostgresProvisioning.ReadOnlyRole, PostgresFixture.PasswordFor(PostgresProvisioning.ReadOnlyRole));
+
     private NpgsqlDataSource For(string? role)
     {
         string key = role ?? "";

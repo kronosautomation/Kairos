@@ -175,6 +175,12 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
         return first;
     }
 
+    public ValueTask<IReadOnlyList<RunSummary>> ListRunsAsync(TenantScope scope, RunFilter filter, int limit, CancellationToken cancellationToken) =>
+        Faulty(nameof(ListRunsAsync), () => inner.ListRunsAsync(scope, filter, limit, cancellationToken));
+
+    public ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
+        Faulty(nameof(GetRunGroupsAsync), () => inner.GetRunGroupsAsync(scope, closedSince, cancellationToken));
+
     public ValueTask<WorkBacklog?> GetBacklogAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
         Faulty(nameof(GetBacklogAsync), () => inner.GetBacklogAsync(scope, now, cancellationToken));
 

@@ -482,6 +482,14 @@
           "Microsoft.Extensions.AI.Abstractions": "[10.11.0, )"
         }
       },
+      "kairos.cli": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )",
+          "Kairos.Hosting": "[1.0.0, )",
+          "Kairos.Persistence.Postgres": "[1.0.0, )"
+        }
+      },
       "kairos.cloud.selfhosted": {
         "type": "Project",
         "dependencies": {
