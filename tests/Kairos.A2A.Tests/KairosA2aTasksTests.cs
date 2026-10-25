@@ -256,4 +256,35 @@ public sealed class KairosA2aTasksTests
         Assert.Throws<ArgumentException>(() => b.Tasks.TaskIdFor(run));
         Assert.Throws<ArgumentException>(() => new KairosA2aTasks(a.Client, ScopeA, new KairosA2aTasksOptions { IdKey = new byte[8] }));
     }
+
+    [Fact]
+    public void The_caller_fingerprint_is_stable_distinct_per_caller_and_tenant_and_hides_the_subject()
+    {
+        var tasks = new KairosA2aTasks(new KairosClient(new InMemoryKairosStore(), TimeProvider.System), ScopeA);
+        Guid tenant = ScopeA.TenantId;
+
+        string a = tasks.CallerFingerprint(tenant, "agent:alice");
+
+        Assert.Equal(32, a.Length);
+        Assert.Equal(a, tasks.CallerFingerprint(tenant, "agent:alice"));
+        Assert.NotEqual(a, tasks.CallerFingerprint(tenant, "agent:bob"));
+        Assert.NotEqual(a, tasks.CallerFingerprint(Guid.NewGuid(), "agent:alice"));
+        Assert.DoesNotContain("alice", a, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void With_an_id_key_the_fingerprint_cannot_be_recomputed_without_it_and_differs_per_key()
+    {
+        var client = new KairosClient(new InMemoryKairosStore(), TimeProvider.System);
+        var keyed1 = new KairosA2aTasks(client, ScopeA, new KairosA2aTasksOptions { IdKey = RandomNumberGenerator.GetBytes(32) });
+        var keyed2 = new KairosA2aTasks(client, ScopeA, new KairosA2aTasksOptions { IdKey = RandomNumberGenerator.GetBytes(32) });
+        var unkeyed = new KairosA2aTasks(client, ScopeA);
+        Guid tenant = ScopeA.TenantId;
+
+        // An attacker who guesses the subject can compute the unkeyed value, and gets nothing useful against the keyed ones.
+        string guess = unkeyed.CallerFingerprint(tenant, "agent:alice");
+        Assert.NotEqual(guess, keyed1.CallerFingerprint(tenant, "agent:alice"));
+        Assert.NotEqual(keyed1.CallerFingerprint(tenant, "agent:alice"), keyed2.CallerFingerprint(tenant, "agent:alice"));
+        Assert.Equal(keyed1.CallerFingerprint(tenant, "agent:alice"), keyed1.CallerFingerprint(tenant, "agent:alice"));
+    }
 }

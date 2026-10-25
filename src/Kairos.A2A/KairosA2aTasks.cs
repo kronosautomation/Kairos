@@ -72,6 +72,25 @@ public sealed class KairosA2aTasks
         return IdPrefix + Convert.ToBase64String(all).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
+    /// <summary>
+    /// A stable, opaque name for a caller, safe to put in an identifier that others can see: 32 hex characters derived from the tenant and the subject.
+    /// When the tasks were given an <see cref="KairosA2aTasksOptions.IdKey"/> it is an HMAC under a key derived from it (with its own label, so it can never
+    /// be mistaken for a task-id signature), which makes it impossible to compute without the key; otherwise it is a plain SHA-256, which hides the subject
+    /// from a casual reader but can be recomputed by anyone who guesses it.
+    /// </summary>
+    public string CallerFingerprint(Guid tenantId, string subject)
+    {
+        ArgumentNullException.ThrowIfNull(subject);
+        byte[] data = Encoding.UTF8.GetBytes($"{tenantId:N}/{subject}");
+        if (_options.IdKey is null)
+        {
+            return Convert.ToHexString(SHA256.HashData(data))[..32].ToLowerInvariant();
+        }
+
+        byte[] key = HMACSHA256.HashData(_options.IdKey, "kairos.a2a.caller-fingerprint.v1"u8);
+        return Convert.ToHexString(HMACSHA256.HashData(key, data))[..32].ToLowerInvariant();
+    }
+
     /// <summary>The run a task id names, or null for an id that is malformed, altered, or belongs to another tenant or namespace.</summary>
     public RunKey? RunFor(string taskId)
     {
