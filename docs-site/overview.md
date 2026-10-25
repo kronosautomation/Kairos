@@ -32,7 +32,7 @@ seal them with keys that only your application can use, so the database holds ci
 - Business processes that span several systems and must complete: orders, onboarding, payments, provisioning, document handling.
 - Anything that waits for a person or an external event, or for a long time: approvals, reminders, trials, renewals.
 - Jobs where a retry must not repeat a side effect.
-- Processes that call AI models or external tools: put each call in an activity and it is recorded once and not repeated when the workflow is replayed.
+- Processes that call AI models or external tools: [model and tool calls](concepts/agents.md) are recorded steps, so they are not repeated when the workflow is replayed, risky tools wait for a person's [approval](concepts/approvals.md), and work that has to be undone is rolled back by a [saga](concepts/sagas.md).
 - Teams that want durable workflows as plain C# and already run PostgreSQL.
 
 ## When it is the wrong tool

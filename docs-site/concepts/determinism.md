@@ -53,7 +53,7 @@ workflows:
 <PackageReference Include="Kairos.Analyzers" PrivateAssets="all" />
 ```
 
-A method marked `[Workflow]`, or any method that takes an `IWorkflowContext`, is workflow code, and so is every lambda and local
+A method marked `[Workflow]`, or any method that takes an `IWorkflowContext` (or an `IAgentContext`, which wraps one), is workflow code, and so is every lambda and local
 function inside one. A method marked `[Activity]` is never workflow code, so the same calls are fine there.
 
 | Rule | Severity | Reports |

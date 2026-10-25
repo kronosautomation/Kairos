@@ -18,3 +18,13 @@
   href: versioning.md
 - name: Long-running workflows
   href: continue-as-new.md
+- name: AI agents
+  href: agents.md
+- name: Tool policy and credentials
+  href: tool-policy-and-credentials.md
+- name: Approvals
+  href: approvals.md
+- name: Sagas and compensation
+  href: sagas.md
+- name: Testing agents
+  href: testing-agents.md

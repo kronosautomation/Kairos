@@ -13,3 +13,8 @@ Read these in order the first time; each one builds on the one before.
 | [Leases and heartbeats](leases-and-heartbeats.md) | How work is handed to workers, long-running activities, and runs that get stuck. |
 | [Versioning](versioning.md) | Changing workflow code while runs are in flight. |
 | [Long-running workflows](continue-as-new.md) | Keeping a workflow that runs for months bounded. |
+| [AI agents](agents.md) | Model calls and tool calls as recorded steps that are never repeated on replay. |
+| [Tool policy and credentials](tool-policy-and-credentials.md) | Read-only by default, approval for changes, and short-lived credentials limited to one run and one tool. |
+| [Approvals](approvals.md) | Waiting durably for a named person, and recording who decided. |
+| [Sagas and compensation](sagas.md) | Undoing earlier steps in reverse when a later one fails, surviving crashes mid-rollback. |
+| [Testing agents](testing-agents.md) | Recorded model fixtures, scripted models and what to assert. |
