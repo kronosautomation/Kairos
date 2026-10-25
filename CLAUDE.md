@@ -9,6 +9,10 @@ and runs survive crashes and redeploys by deterministic replay. Product of Krono
 **Embedded mode is first-class:** `services.AddKairos(o => o.UsePostgres(...))` with in-process workers must always work;
 the standalone server is the same engine with a host around it. No AWS/Azure dependency in core projects.
 
+## Where things go
+Repositories and project placement are decided in `docs/REPO-LAYOUT.md`. Read it before creating any project; if it
+does not cover a case, ask instead of guessing.
+
 ## Licensing
 This repository is Apache-2.0 (LICENSE, NOTICE). The open-core boundary is in `docs/LICENSING.md`. Never add
 commercial-tier code here (dashboard, policies, MCP server, managed-cloud adapters, Server/Admin, Agent Framework

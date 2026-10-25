@@ -29,7 +29,9 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Testing, Kairos.Conformance | Apache 2.0 | Community | Simulator test kit and provider conformance suite (customers test their own workflows) |
 | Kairos.Dashboard | Commercial | Pro | Run list, history and replay view, approval inbox |
 | Kairos.Agents.Policies | Commercial | Pro | Argument-level policy rules, token/cost/step budgets, policy console (the read-only baseline is free) |
-| Kairos.Agents.Mcp | Commercial | Pro | MCP server (workflows as tools, Tasks mapping) |
+| Kairos.Mcp.TaskStore | Apache 2.0 | Community | Durable `IMcpTaskStore` for any C# MCP server, backed by Kairos runs (the adoption entry point) |
+| Kairos.Agents.McpClient | Apache 2.0 | Community | Durable, idempotent MCP client steps for agent workflows |
+| Kairos.Agents.Mcp | Commercial | Pro | The Kairos MCP server: workflows as tools, approvals as input requests with verified approvers, operator tools |
 | Kairos.Cloud.Azure, .Aws, .Gcp | Commercial | Pro | Managed key, identity, blob and event adapters (self-hosted equivalents stay free) |
 | Kairos.Telemetry | Commercial | Pro | Packaged OpenTelemetry/GenAI exporters and dashboards (raw metrics stay in Core) |
 | Kairos.Server, Kairos.Admin | Commercial | Business | Standalone multi-tenant data plane and control plane |

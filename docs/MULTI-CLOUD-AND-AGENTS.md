@@ -30,7 +30,8 @@ infra/
   Kairos.Infra (Pulumi C#)      cell stacks: AWS ECS Fargate, Azure Container Apps, GCP Cloud Run; Helm chart
 ```
 
-Licensing (docs/LICENSING.md): Kairos.Agents.Mcp, Kairos.Agents.AgentFramework, Kairos.Cloud.Aws/Azure/Gcp,
+Licensing (docs/LICENSING.md, placement in docs/REPO-LAYOUT.md): Kairos.Mcp.TaskStore and Kairos.Agents.McpClient are Apache
+(this repository); Kairos.Agents.Mcp (the MCP server), Kairos.Agents.AgentFramework, Kairos.Cloud.Aws/Azure/Gcp,
 Kairos.Server and Kairos.Admin are commercial and are built in the private Kairos.Commercial repository against the
 public Apache packages. Everything else above stays in this repository.
 
