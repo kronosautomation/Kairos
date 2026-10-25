@@ -82,6 +82,14 @@
           "Microsoft.Extensions.Logging.Abstractions": "10.0.13"
         }
       },
+      "kairos.a2a": {
+        "type": "Project",
+        "dependencies": {
+          "A2A": "[1.0.0-preview3, )",
+          "Kairos.Agents": "[1.0.0, )",
+          "Kairos.Core": "[1.0.0, )"
+        }
+      },
       "kairos.abstractions": {
         "type": "Project"
       },
@@ -90,6 +98,13 @@
         "dependencies": {
           "Kairos.Core": "[1.0.0, )",
           "Microsoft.Extensions.AI.Abstractions": "[10.11.0, )"
+        }
+      },
+      "kairos.agents.a2aclient": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.A2A": "[1.0.0-preview, )",
+          "Kairos.Agents": "[1.0.0, )"
         }
       },
       "kairos.agents.mcpclient": {
@@ -128,6 +143,16 @@
         "dependencies": {
           "Kairos.Core": "[1.0.0, )",
           "Npgsql": "[10.0.3, )"
+        }
+      },
+      "A2A": {
+        "type": "CentralTransitive",
+        "requested": "[1.0.0-preview3, )",
+        "resolved": "1.0.0-preview3",
+        "contentHash": "18nGNS2+ZzHfkQB6uPIkokeUfZrMt2EPsHC9CdRG+yOKatDWwFDfE4+x7UoZd9vQFnzvkd5Od+DASdyQ3yDEpw==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.10.1",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.12"
         }
       },
       "Microsoft.Extensions.AI.Abstractions": {

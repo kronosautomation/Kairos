@@ -11,6 +11,8 @@
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
+    <PackageVersion Include="A2A" Version="1.0.0-preview3" />
+    <PackageVersion Include="A2A.AspNetCore" Version="1.0.0-preview3" />
     <PackageVersion Include="ModelContextProtocol" Version="2.3.0" />
     <PackageVersion Include="ModelContextProtocol.Extensions.Tasks" Version="2.3.0" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />

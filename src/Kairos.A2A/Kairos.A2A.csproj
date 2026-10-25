@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Agent2Agent (A2A) protocol support for Kairos: signed Agent Cards (JWS over canonical JSON) and a Kairos run reported as an A2A task.</Description>
+    <!-- Built on the official A2A SDK, which is a prerelease; this package is versioned as a prerelease until the SDK is stable. -->
+    <VersionSuffix>preview</VersionSuffix>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Kairos.Core\Kairos.Core.csproj" />
+    <ProjectReference Include="..\Kairos.Agents\Kairos.Agents.csproj" />
+    <PackageReference Include="A2A" />
+  </ItemGroup>
+
+</Project>

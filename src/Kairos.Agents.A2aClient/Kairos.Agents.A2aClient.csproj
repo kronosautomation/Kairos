@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Durable, idempotent outbound A2A calls for Kairos agent workflows: one recorded step per call, long tasks polled across restarts, Agent Cards verified, risky agents wait for approval.</Description>
+    <VersionSuffix>preview</VersionSuffix>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Kairos.A2A\Kairos.A2A.csproj" />
+    <ProjectReference Include="..\Kairos.Agents\Kairos.Agents.csproj" />
+  </ItemGroup>
+
+</Project>

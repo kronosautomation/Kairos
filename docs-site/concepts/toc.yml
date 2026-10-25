@@ -32,3 +32,5 @@
   href: mcp-tasks.md
 - name: Calling MCP tools from an agent
   href: mcp-client.md
+- name: Calling other agents with A2A
+  href: a2a.md

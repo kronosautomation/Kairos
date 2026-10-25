@@ -20,3 +20,4 @@ Read these in order the first time; each one builds on the one before.
 | [Testing agents](testing-agents.md) | Recorded model fixtures, scripted models and what to assert. |
 | [Durable tasks for MCP servers](mcp-tasks.md) | A task store for any C# MCP server whose tasks survive restarts, backed by Kairos runs. |
 | [Calling MCP tools from an agent](mcp-client.md) | MCP tool calls as recorded, idempotent steps; long calls polled across restarts. |
+| [Calling other agents with A2A](a2a.md) | Durable A2A calls, signed Agent Cards, and a Kairos run reported as an A2A task. |

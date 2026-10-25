@@ -10,6 +10,7 @@
     <ProjectReference Include="..\..\src\Kairos.Agents\Kairos.Agents.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Mcp.TaskStore\Kairos.Mcp.TaskStore.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Agents.McpClient\Kairos.Agents.McpClient.csproj" />
+    <ProjectReference Include="..\..\src\Kairos.Agents.A2aClient\Kairos.Agents.A2aClient.csproj" />
     <PackageReference Include="ModelContextProtocol" />
   </ItemGroup>
 
