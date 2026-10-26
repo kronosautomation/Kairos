@@ -33,6 +33,19 @@ The data plane cannot create tenants or keys. The control plane cannot read work
    - `kairos_readonly` — reporting/support, RLS-bound.
 4. **Enterprise tier:** dedicated database (or dedicated cluster) per tenant, same code path.
 5. **Noisy-neighbor limits** per namespace: request rate, concurrent runs, payload size, history length, timer count.
+6. **`LISTEN/NOTIFY` is outside row-level security.** Any connection to the database can `LISTEN` on a channel and read every
+   payload, whatever its role and whatever RLS says about tables. So a notification payload never carries an identifier or
+   anything about the work: no tenant id, no namespace id, no queue or task name, no build name, no workflow type. It is exactly
+   `{tag}:{count}`, where the tag is the first 16 bytes (hex) of HMAC-SHA256 over tenant, namespace and queue under a
+   per-deployment key that only the application processes hold (`PostgresStoreOptions.NotificationKey`, from the secret store;
+   `Server:NotificationKey`), and the count is the number of tasks that became ready. A listener computes the tags of the scopes
+   it serves and recognises only those; a bystander sees stable, opaque hex (it can tell that *something* happens, and how often
+   per tag, which the database's own statistics already show it). Anything finer than the count, such as which build a workflow
+   task is pinned to, is read by the listener through the ordinary RLS-scoped query, never from the payload. Embedded
+   single-tenant mode uses the same format. A notice is only a hint: a listener with a different key does not recognise it and
+   falls back to its other wake-ups, so the key can be rotated by restarting nodes without losing work. A test subscribes as a
+   plain connection through a multi-tenant workload and fails if any tenant, namespace, queue or build identifier appears in any
+   notification.
 
 ## 4. Data protection
 
@@ -97,8 +110,8 @@ Dependency rule: Core depends only on Abstractions; Server/Admin never reference
 ### Speed
 - **One transaction per workflow task:** append new events, update run state, and enqueue follow-up tasks/timers in a
   single Postgres round-trip (batched statements). No read-modify-write chatter.
-- **Push, not poll:** workers long-poll; the server wakes them via Postgres `LISTEN/NOTIFY`, with `FOR UPDATE SKIP LOCKED`
-  task claims so many workers never contend on the same row.
+- **Push, not poll:** workers long-poll; the server wakes them via Postgres `LISTEN/NOTIFY` (opaque tag and count only, see section 3.6; no more pollers
+  are woken than there are ready tasks), with `FOR UPDATE SKIP LOCKED` task claims so many workers never contend on the same row.
 - **Sticky execution:** a worker keeps hot workflow state cached, so a new task only replays the *new* events.
   Full replay happens only on cache miss or failover.
 - gRPC over HTTP/2 between workers and server, binary payloads, prepared statements, connection pooling.

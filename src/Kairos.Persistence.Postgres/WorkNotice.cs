@@ -1,20 +1,20 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
 
 namespace Kairos.Persistence.Postgres;
 
 /// <summary>
-/// What the store tells listeners when work appears: which scope, which queue, how many tasks became ready and, for workflow tasks, which build they are pinned to. It is the payload of
-/// the <c>kairos_work</c> notification: <c>{tenant}:{namespace}:{queue}:{count}[:{build}]</c> (guids as 32 hex digits, the build last because it may contain colons). A listener wakes at
-/// most <see cref="Count"/> waiters of that queue and leaves the rest waiting. An older writer's payload (<c>{tenant}:{namespace}</c>) and a writer that did not count
-/// (<see cref="Unknown"/>) mean "something is ready here, ask the store how much".
+/// What the store tells listeners when work appears. <b>It tells nothing a bystander could use.</b> <c>LISTEN</c> is not covered by row level security: any connection to the database can
+/// listen on the channel and read every payload. So the payload is <c>{tag}:{count}</c> and nothing else, where the tag is the first 16 bytes (hex) of HMAC-SHA256, under a key only the
+/// application processes of a deployment hold, over the tenant, the namespace and the queue. A listener computes the tags of the scopes it serves and recognises them; everyone else sees
+/// opaque, stable hex. Which build a task is pinned to is never sent: a listener that needs the breakdown asks the store, through the ordinary row-level-security-scoped backlog query.
+/// A notice is only a hint (a lost one delays, never loses, work), so a process with a different key simply does not recognise it and falls back to its other wake-ups.
 /// </summary>
-/// <param name="TenantId">The tenant.</param>
-/// <param name="NamespaceId">The namespace.</param>
-/// <param name="Queue"><see cref="Workflow"/>, <see cref="Activity"/> or <see cref="Unknown"/>.</param>
-/// <param name="Count">Ready tasks that appeared (0 for <see cref="Unknown"/>).</param>
-/// <param name="Build">The build of the workflow tasks, for <see cref="Workflow"/>.</param>
-public readonly record struct WorkNotice(Guid TenantId, Guid NamespaceId, char Queue, int Count, string? Build)
+/// <param name="Tag">The opaque scope-and-queue tag, 32 hex digits; empty for a payload that could not be understood.</param>
+/// <param name="Count">Ready tasks that appeared (0 when the writer did not count).</param>
+public readonly record struct WorkNotice(string Tag, int Count)
 {
     /// <summary>Workflow tasks became ready.</summary>
     public const char Workflow = 'w';
@@ -22,54 +22,59 @@ public readonly record struct WorkNotice(Guid TenantId, Guid NamespaceId, char Q
     /// <summary>Activity tasks became ready.</summary>
     public const char Activity = 'a';
 
-    /// <summary>Something became ready that the writer did not count.</summary>
+    /// <summary>Something became ready that the writer did not count (a fired timer, a reaped lease, a resumed task): ask the store how much.</summary>
     public const char Unknown = '*';
 
+    /// <summary>Shortest key accepted.</summary>
+    public const int MinimumKeyBytes = 32;
+
+    private const int TagBytes = 16;
     private const int MaxCount = 1_000_000;
-    private const int MaxBuildLength = 128;
 
-    public TenantScope Scope => new(TenantId, NamespaceId);
+    /// <summary>A payload that could not be understood at all: a listener should look everywhere it has waiters.</summary>
+    public bool IsUnparsed => Tag.Length == 0;
 
-    /// <summary>A payload that could not be understood at all: the scope is unknown, so a listener should look everywhere it has waiters.</summary>
-    public bool IsUnparsed => TenantId == Guid.Empty && NamespaceId == Guid.Empty;
+    /// <summary>The tag of a scope and queue under the deployment notification key.</summary>
+    public static string TagOf(ReadOnlySpan<byte> key, TenantScope scope, char queue)
+    {
+        if (key.Length < MinimumKeyBytes)
+        {
+            throw new ArgumentException($"The notification key must be at least {MinimumKeyBytes} bytes.", nameof(key));
+        }
 
-    public static string Format(TenantScope scope, char queue, int count, string? build) =>
-        string.Create(CultureInfo.InvariantCulture, $"{scope.TenantId:N}:{scope.NamespaceId:N}:{queue}:{count}{(build is null ? "" : ":" + build)}");
+        Span<byte> message = stackalloc byte[32 + 1 + 32 + 1 + 1];
+        Encoding.ASCII.GetBytes(string.Create(CultureInfo.InvariantCulture, $"{scope.TenantId:N}:{scope.NamespaceId:N}:{queue}"), message);
+        Span<byte> mac = stackalloc byte[32];
+        HMACSHA256.HashData(key, message, mac);
+        return Convert.ToHexStringLower(mac[..TagBytes]);
+    }
 
-    /// <summary>Reads a payload. False for anything that is not one; a two-part payload from an older writer parses as <see cref="Unknown"/>.</summary>
+    public static string Format(ReadOnlySpan<byte> key, TenantScope scope, char queue, int count) =>
+        string.Create(CultureInfo.InvariantCulture, $"{TagOf(key, scope, queue)}:{count}");
+
+    /// <summary>Reads a payload. False for anything that is not exactly 32 lowercase hex digits, a colon and a count.</summary>
     public static bool TryParse(string? payload, out WorkNotice notice)
     {
         notice = default;
-        if (payload is null)
+        if (payload is null || payload.Length < 34 || payload.Length > 42 || payload[32] != ':')
         {
             return false;
         }
 
-        string[] parts = payload.Split(':', 5);
-        if (parts.Length < 2 || !Guid.TryParseExact(parts[0], "N", out Guid tenant) || !Guid.TryParseExact(parts[1], "N", out Guid ns))
+        foreach (char c in payload.AsSpan(0, 32))
+        {
+            if (c is not ((>= '0' and <= '9') or (>= 'a' and <= 'f')))
+            {
+                return false;
+            }
+        }
+
+        if (!int.TryParse(payload.AsSpan(33), NumberStyles.None, CultureInfo.InvariantCulture, out int count) || count > MaxCount)
         {
             return false;
         }
 
-        if (parts.Length == 2)
-        {
-            notice = new WorkNotice(tenant, ns, Unknown, 0, null);
-            return true;
-        }
-
-        if (parts.Length < 4 || parts[2].Length != 1 || parts[2][0] is not (Workflow or Activity or Unknown) ||
-            !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out int count) || count > MaxCount)
-        {
-            return false;
-        }
-
-        string? build = parts.Length == 5 ? parts[4] : null;
-        if (build is { Length: > MaxBuildLength } || (build is not null && build.Any(char.IsControl)))
-        {
-            return false;
-        }
-
-        notice = new WorkNotice(tenant, ns, parts[2][0], count, build);
+        notice = new WorkNotice(payload[..32], count);
         return true;
     }
 }

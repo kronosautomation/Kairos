@@ -27,6 +27,11 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
 
     public const string NotifyChannel = "kairos_work";
 
+    private readonly byte[] _notificationKey = ValidKey(options?.NotificationKey) ?? System.Security.Cryptography.RandomNumberGenerator.GetBytes(WorkNotice.MinimumKeyBytes);
+
+    private static byte[]? ValidKey(byte[]? key) =>
+        key is null || key.Length >= WorkNotice.MinimumKeyBytes ? key : throw new ArgumentException($"The notification key must be at least {WorkNotice.MinimumKeyBytes} bytes.", nameof(key));
+
     private const int MaxAttempts = 4;
     private const string SetScopeSql = "SELECT set_config('app.tenant_id', @scope_t, true), set_config('app.namespace_id', @scope_n, true)";
     private static readonly byte[] NoHash = [];
@@ -77,7 +82,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             cmd.Parameters.AddWithValue("body", body);
             cmd.Parameters.Add(Ts("now", request.Now));
             batch.BatchCommands.Add(cmd);
-            batch.BatchCommands.Add(NotifyIfRunCreated(request.Run.Scope, request.Run.RunId, request.BuildId));
+            batch.BatchCommands.Add(NotifyIfRunCreated(request.Run.Scope, request.Run.RunId));
 
             await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
             batch.Connection = conn;
@@ -147,7 +152,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         await AppendAsync(conn, tx, run, head, [template], cancellationToken).ConfigureAwait(false);
         if (await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false) is { } build)
         {
-            await NotifyAsync(conn, tx, run.Scope, cancellationToken, WorkNotice.Workflow, 1, build).ConfigureAwait(false);
+            await NotifyAsync(conn, tx, run.Scope, cancellationToken, WorkNotice.Workflow, 1).ConfigureAwait(false);
         }
 
         return true;
@@ -408,7 +413,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
 
             if (await EnsureWorkflowTaskAsync(conn, tx, next, now, ct).ConfigureAwait(false) is { } nextBuild)
             {
-                await NotifyAsync(conn, tx, run.Scope, ct, WorkNotice.Workflow, 1, nextBuild).ConfigureAwait(false);
+                await NotifyAsync(conn, tx, run.Scope, ct, WorkNotice.Workflow, 1).ConfigureAwait(false);
             }
 
             return true;
@@ -738,7 +743,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 await DeleteActivityTaskAsync(conn, tx, run, task.ActivityId, cancellationToken).ConfigureAwait(false);
                 if (await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false) is { } build)
                 {
-                    await NotifyAsync(conn, tx, run.Scope, cancellationToken, WorkNotice.Workflow, 1, build).ConfigureAwait(false);
+                    await NotifyAsync(conn, tx, run.Scope, cancellationToken, WorkNotice.Workflow, 1).ConfigureAwait(false);
                 }
             }
 
@@ -1650,34 +1655,34 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
     }
 
     /// <summary>
-    /// Tells listeners that work appeared: <paramref name="count"/> ready tasks in <paramref name="queue"/> (<see cref="WorkNotice.Workflow"/>, whose build is <paramref name="build"/>;
-    /// <see cref="WorkNotice.Activity"/>), or, for <see cref="WorkNotice.Unknown"/>, that something became ready that the writer did not count (a fired timer, a reaped lease, a resumed
-    /// task). A listener wakes at most that many waiters and, for Unknown, asks the store how much is ready.
+    /// Tells listeners that work appeared: <paramref name="count"/> ready tasks in <paramref name="queue"/> (<see cref="WorkNotice.Workflow"/> or <see cref="WorkNotice.Activity"/>), or, for
+    /// <see cref="WorkNotice.Unknown"/>, that something became ready that the writer did not count (a fired timer, a reaped lease, a resumed task). The payload is an opaque tag and the count
+    /// (see <see cref="WorkNotice"/>): <c>LISTEN</c> bypasses row level security, so it never carries an identifier.
     /// </summary>
-    private static async Task NotifyAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, TenantScope scope, CancellationToken ct, char queue = WorkNotice.Unknown, int count = 0, string? build = null)
+    private async Task NotifyAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, TenantScope scope, CancellationToken ct, char queue = WorkNotice.Unknown, int count = 0)
     {
         await using var cmd = new NpgsqlCommand("SELECT pg_notify(@ch, @payload)", conn, tx);
         cmd.Parameters.AddWithValue("ch", NotifyChannel);
-        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(scope, queue, count, build));
+        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(_notificationKey, scope, queue, count));
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    private static NpgsqlBatchCommand Notify(TenantScope scope, char queue = WorkNotice.Unknown, int count = 0, string? build = null)
+    private NpgsqlBatchCommand Notify(TenantScope scope, char queue = WorkNotice.Unknown, int count = 0)
     {
         var cmd = new NpgsqlBatchCommand("SELECT pg_notify(@ch, @payload)");
         cmd.Parameters.AddWithValue("ch", NotifyChannel);
-        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(scope, queue, count, build));
+        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(_notificationKey, scope, queue, count));
         return cmd;
     }
 
     /// <summary>The notification of a start, sent only if the run with this id exists in the same transaction: a start that was a duplicate of an existing workflow id readies nothing.</summary>
-    private static NpgsqlBatchCommand NotifyIfRunCreated(TenantScope scope, Guid runId, string build)
+    private NpgsqlBatchCommand NotifyIfRunCreated(TenantScope scope, Guid runId)
     {
         var cmd = new NpgsqlBatchCommand(
             "SELECT pg_notify(@ch, @payload) WHERE EXISTS (SELECT 1 FROM kairos.workflow_tasks WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r)");
         cmd.Parameters.AddWithValue("ch", NotifyChannel);
-        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(scope, WorkNotice.Workflow, 1, build));
+        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(_notificationKey, scope, WorkNotice.Workflow, 1));
         cmd.Parameters.AddWithValue("t", scope.TenantId);
         cmd.Parameters.AddWithValue("n", scope.NamespaceId);
         cmd.Parameters.AddWithValue("r", runId);
@@ -1784,4 +1789,11 @@ public sealed class PostgresStoreOptions
     public LeaseClock LeaseClock { get; init; } = LeaseClock.Database;
 
     public StoreLimits Limits { get; init; } = new();
+
+    /// <summary>
+    /// The deployment notification key (at least 32 bytes, from a secret store; every application process of the deployment must hold the same one). It makes the tags in
+    /// <c>LISTEN/NOTIFY</c> payloads opaque to any other connection to the database (see <see cref="WorkNotice"/>). Without it the store makes a random key for its own process: its own
+    /// listeners still recognise its notices, other processes do not (and fall back to their other wake-ups), and the embedded notifier, which wakes on any notice, is unaffected.
+    /// </summary>
+    public byte[]? NotificationKey { get; init; }
 }

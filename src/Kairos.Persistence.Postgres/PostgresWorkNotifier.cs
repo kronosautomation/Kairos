@@ -95,7 +95,7 @@ public sealed class PostgresWorkNotifier : IAsyncDisposable
                     if (e.Channel == PostgresKairosStore.NotifyChannel)
                     {
                         Wake();
-                        Notified?.Invoke(WorkNotice.TryParse(e.Payload, out WorkNotice notice) ? notice : new WorkNotice(Guid.Empty, Guid.Empty, WorkNotice.Unknown, 0, null));
+                        Notified?.Invoke(WorkNotice.TryParse(e.Payload, out WorkNotice notice) ? notice : new WorkNotice("", 0));
                     }
                 };
                 await using (var listen = new NpgsqlCommand($"LISTEN {PostgresKairosStore.NotifyChannel}", conn))
