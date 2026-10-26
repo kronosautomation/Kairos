@@ -61,7 +61,7 @@ metadata can therefore confirm that it belongs to the history the signed bundle 
 |---|---|
 | `run` | The run, its workflow type and build, who started it (the authenticated caller, when the starting host recorded one), the run it continued. |
 | `approval` | The approval's id and tool, when it was requested and decided, how it ended (approved, rejected, unresolved), the approver and roles **as verified** (not as claimed), and how many decisions were refused. |
-| `policy_decision` | For each tool call, whether the policy allowed it, held it for approval, or refused it, with the policy's reason. |
+| `policy_decision` | For each tool call, whether the policy allowed it, held it for approval, or refused it, with the policy's reason. When the policy records its decisions: the rule that decided, and the version and hash of the policy it came from (the rule's own name and the paths it looked at, never the values at them). |
 | `credential` | The scopes and expiry of a credential issued to a tool for a call, and on whose behalf. Never the token. |
 | `history_export` | Each export of a run's history: who, why, whether metadata only, and the chain head it was cut at. |
 | `admin_action` | Every other entry of the audit log: cancel, resume, fail, with the database's own record of who connected. |

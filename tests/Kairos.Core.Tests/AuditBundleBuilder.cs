@@ -105,7 +105,8 @@ internal sealed class AuditBundleBuilder
         Add(AuditEvidenceFormat.KindApproval, started.Timestamp.AddSeconds(2),
             ("run", run), ("approvalId", "ap-" + run.ToString("N")[..8]), ("tool", "issue_refund"), ("requestedAt", started.Timestamp.AddSeconds(1)), ("decidedAt", started.Timestamp.AddSeconds(2)),
             ("outcome", "approved"), ("approver", "olivia@example.test"), ("roles", Finance), ("refused", 0));
-        Add(AuditEvidenceFormat.KindPolicyDecision, started.Timestamp.AddSeconds(1), ("run", run), ("step", 1), ("tool", "issue_refund"), ("verdict", "require_approval"), ("reason", "refunds over 100 need a person"));
+        Add(AuditEvidenceFormat.KindPolicyDecision, started.Timestamp.AddSeconds(1), ("run", run), ("step", 1), ("tool", "issue_refund"), ("verdict", "require_approval"), ("reason", "refunds over 100 need a person"),
+            ("rule", "refunds-large"), ("policyVersion", 3), ("policyHash", new string('c', 64)));
         Add(AuditEvidenceFormat.KindCredential, started.Timestamp.AddSeconds(3), ("run", run), ("step", 2), ("tool", "issue_refund"), ("scopes", Scopes),
             ("expiresAt", started.Timestamp.AddSeconds(303)), ("onBehalfOf", "customer-77"));
         HistoryEvent last = history[^1];

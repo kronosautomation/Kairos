@@ -47,7 +47,7 @@ public static class AuditEvidenceFormat
         // G guid, g guid or null, S string, s string or null, T time, t time or null, I integer, B boolean, A array of strings, H 64 hex digits, E one of a set (checked by the kind)
         [KindRun] = [("run", 'G'), ("workflowType", 'S'), ("buildId", 'S'), ("startedBy", 's'), ("previousRun", 'g')],
         [KindApproval] = [("run", 'G'), ("approvalId", 'S'), ("tool", 's'), ("requestedAt", 't'), ("decidedAt", 't'), ("outcome", 'E'), ("approver", 's'), ("roles", 'A'), ("refused", 'I')],
-        [KindPolicyDecision] = [("run", 'G'), ("step", 'I'), ("tool", 'S'), ("verdict", 'E'), ("reason", 's')],
+        [KindPolicyDecision] = [("run", 'G'), ("step", 'I'), ("tool", 'S'), ("verdict", 'E'), ("reason", 's'), ("rule", 's'), ("policyVersion", 'I'), ("policyHash", 'h')],
         [KindCredential] = [("run", 'G'), ("step", 'I'), ("tool", 'S'), ("scopes", 'A'), ("expiresAt", 'T'), ("onBehalfOf", 's')],
         [KindHistoryExport] = [("run", 'g'), ("actor", 'S'), ("reason", 'S'), ("metadataOnly", 'B'), ("head", 'h')],
         [KindAdminAction] = [("run", 'g'), ("action", 'S'), ("actor", 'S'), ("detail", 'S'), ("sessionUser", 's'), ("clientAddress", 's'), ("claimedActor", 's')],

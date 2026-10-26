@@ -206,6 +206,32 @@ public sealed class AuditEvidenceTests
     }
 
     [Fact]
+    public void A_policy_decision_must_name_its_rule_and_the_version_and_hash_of_the_policy_that_decided()
+    {
+        void Case(Func<string, string> edit, string description)
+        {
+            var b = new AuditBundleBuilder();
+            b.AddRun(AuditBundleBuilder.History(RunA, "Operator:ci"), "Operator:ci");
+            int index = b.Lines.FindIndex(l => l.Contains("\"kind\":\"policy_decision\"", StringComparison.Ordinal));
+            Assert.True(index > 0, "the builder writes a policy decision");
+            b.Lines[index] = edit(b.Lines[index]);
+            b.Relink();
+
+            Assert.False(VerifySigned(b).Passed, description);
+        }
+
+        var good = new AuditBundleBuilder();
+        good.AddRun(AuditBundleBuilder.History(RunA, "Operator:ci"), "Operator:ci");
+        Assert.True(VerifySigned(good).Passed);
+        Assert.Contains(good.Lines, l => l.Contains("\"rule\":\"refunds-large\"", StringComparison.Ordinal) && l.Contains("\"policyVersion\":3", StringComparison.Ordinal));
+        Case(l => l.Replace(",\"rule\":\"refunds-large\"", "", StringComparison.Ordinal), "a policy decision with no rule");
+        Case(l => l.Replace("\"policyVersion\":3", "\"policyVersion\":\"3\"", StringComparison.Ordinal), "a policy version written as text");
+        Case(l => l.Replace("\"policyVersion\":3", "\"policyVersion\":-3", StringComparison.Ordinal), "a negative policy version");
+        Case(l => l.Replace(new string('c', 64), new string('c', 63), StringComparison.Ordinal), "a policy hash that is not 64 digits");
+        Case(l => l.Replace(new string('c', 64), new string('g', 64), StringComparison.Ordinal), "a policy hash that is not hexadecimal");
+    }
+
+    [Fact]
     public void A_manifest_that_disagrees_with_the_records_fails_even_when_signed()
     {
         Assert.Equal("records", FailedCheck(VerifySigned(Good().Builder, m => m.Replace("\"records\":12", "\"records\":13", StringComparison.Ordinal))));
