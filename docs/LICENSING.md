@@ -31,6 +31,7 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Testing, Kairos.Conformance | Apache 2.0 | Community | Simulator test kit and provider conformance suite (customers test their own workflows) |
 | Kairos.Dashboard | Commercial | Pro | Run list, history and replay view, approval inbox, cost by agent and budget meters (priced and enforced by the server) |
 | Kairos.Agents.Policies | Commercial | Pro | Declarative argument-level policy rules (allow, deny, require approval by one or two people, rate limit), versioned and audited policy storage, token/money/step budgets enforced by atomic reservation, price tables with effective dates (the read-only baseline is free). The hooks they plug into are Community: `IRecordedToolPolicy` and recorded decisions, `IModelCallGuard`, `ApprovalRequirement.Count`, `ToolPolicyContext.StartedBy` |
+| Kairos.Agents.Policies.Remote | Commercial | Pro | The worker side of the Policy service for workers that hold no database connection: policy source, rate counters, model call guard and tool step counter over gRPC with the worker's own credential, failing closed. Needs Kairos.Server with policies enabled |
 | Kairos.Mcp.TaskStore | Apache 2.0 | Community | Durable `IMcpTaskStore` for any C# MCP server, backed by Kairos runs (the adoption entry point) |
 | Kairos.Agents.McpClient | Apache 2.0 | Community | Durable, idempotent MCP client steps for agent workflows |
 | Kairos.A2A | Apache 2.0 | Community | Agent Card signing and verification; a Kairos run projected as an A2A task |
