@@ -8,6 +8,20 @@
         "docfx"
       ],
       "rollForward": false
+    },
+    "cyclonedx": {
+      "version": "6.2.1",
+      "commands": [
+        "dotnet-CycloneDX"
+      ],
+      "rollForward": false
+    },
+    "sign": {
+      "version": "0.9.1-beta.26475.3",
+      "commands": [
+        "sign"
+      ],
+      "rollForward": false
     }
   }
 }

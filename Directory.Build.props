@@ -10,7 +10,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
 
+  <!-- Reproducible builds: no path of the machine that built it may end up in the output. The compiler writes the PDB's location into the assembly, so building the same commit in
+       another directory gives other bytes unless the root is mapped. (The SDK does this itself only when source control information is available; this does not depend on that.) -->
+  <PropertyGroup Condition="'$(ContinuousIntegrationBuild)' == 'true'">
+    <DeterministicSourcePaths>false</DeterministicSourcePaths>
+    <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
+  </PropertyGroup>
+
+  <PropertyGroup>
     <!-- Warnings are errors; analyzers run at the strictest recommended level, including in the build. -->
     <!-- Package metadata: everything in this repository is Apache-2.0 (docs/LICENSING.md). -->
     <Authors>Kronos Automation LLC</Authors>
