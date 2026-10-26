@@ -25,6 +25,7 @@ public sealed class AccessPolicyTests
         [Operation.ExportHistory] = "  xx ",
         [Operation.ManagePolicy] = "   x ",
         [Operation.ReadPolicy] = "  xx ",
+        [Operation.EvaluatePolicy] = " x   ",
     };
 
     private static readonly Role[] Roles = [Role.Reader, Role.Worker, Role.Operator, Role.Admin, Role.Approver];

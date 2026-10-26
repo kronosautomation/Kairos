@@ -58,6 +58,29 @@ public sealed class RecordedPolicyTests
     // ---- the decision is recorded before the tool runs ---------------------------------------------------------------
 
     [Fact]
+    public async Task A_policy_is_told_which_step_it_is_deciding_for_so_a_retry_can_be_told_from_a_second_call()
+    {
+        int asked = 0;
+        var policy = new ScriptedPolicy(_ => ++asked == 1 ? throw new InvalidOperationException("the policy store blinked") : Allowed());
+        AgentHarness h = Harness(policy);
+        h.Workflow("two", async (ctx, _) =>
+        {
+            await ctx.InvokeToolWithOutcomeAsync(new FunctionCallContent("c1", "refund", AgentHarness.WireArgs("{}")));
+            await ctx.InvokeToolWithOutcomeAsync(new FunctionCallContent("c2", "refund", AgentHarness.WireArgs("{}")));
+            return [];
+        });
+
+        RunKey run = await h.StartAsync("two");
+        Assert.Equal(RunState.Completed, await h.RunAsync(run));
+
+        string[] keys = [.. policy.Seen.Select(c => c.StepKey)];
+        Assert.Equal(3, keys.Length); // the first call was asked twice (its first try failed), the second once
+        Assert.Equal(keys[0], keys[1]); // a retry of the same step is the same step
+        Assert.NotEqual(keys[1], keys[2]);
+        Assert.All(keys, k => Assert.StartsWith(run.RunId.ToString("N") + ":", k, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_recording_policy_decides_in_a_step_of_its_own_before_the_tool_step_and_is_not_asked_again()
     {
         int ran = 0;

@@ -47,6 +47,11 @@ public sealed record ToolPolicyContext(RunKey Run, AgentTool Tool, string Argume
 
     /// <summary>The time of the evaluation, by the clock the agent runtime was given.</summary>
     public DateTimeOffset Now { get; init; }
+
+    /// <summary>
+    /// Names this evaluation across retries (<c>run:activity</c> of the step that makes it), so a policy that counts what it allows counts a retried step once. Empty when the policy is asked outside a step.
+    /// </summary>
+    public string StepKey { get; init; } = "";
 }
 
 /// <summary>

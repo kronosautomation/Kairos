@@ -508,7 +508,7 @@ public sealed class AgentsRuntime
         else
         {
             decision = await _config.Policy
-                .EvaluateAsync(new ToolPolicyContext(context.Run, tool, request.ArgumentsJson, approval) { StartedBy = request.StartedBy ?? "", Now = _config.Time.GetUtcNow() }, cancellationToken).ConfigureAwait(false);
+                .EvaluateAsync(new ToolPolicyContext(context.Run, tool, request.ArgumentsJson, approval) { StartedBy = request.StartedBy ?? "", Now = _config.Time.GetUtcNow(), StepKey = context.IdempotencyKey }, cancellationToken).ConfigureAwait(false);
         }
 
         switch (decision.Verdict)
@@ -593,7 +593,7 @@ public sealed class AgentsRuntime
 
         DateTimeOffset now = _config.Time.GetUtcNow();
         ToolDecision decision = await _config.Policy
-            .EvaluateAsync(new ToolPolicyContext(context.Run, tool, request.ArgumentsJson, request.Approval is null ? null : ToDecision(request.Approval)) { StartedBy = request.StartedBy ?? "", Now = now }, cancellationToken)
+            .EvaluateAsync(new ToolPolicyContext(context.Run, tool, request.ArgumentsJson, request.Approval is null ? null : ToDecision(request.Approval)) { StartedBy = request.StartedBy ?? "", Now = now, StepKey = context.IdempotencyKey }, cancellationToken)
             .ConfigureAwait(false);
 
         PolicyDecisionRecord record = decision.Record ?? new PolicyDecisionRecord("(unrecorded)", 0, "", decision.Verdict switch { ToolVerdict.Deny => "deny", ToolVerdict.RequireApproval => "require_approval", _ => "allow" }, []);

@@ -27,6 +27,12 @@ public enum Operation
 
     /// <summary>Read the namespace's current tool policy and price table (the rules themselves, not the budgets' status).</summary>
     ReadPolicy,
+
+    /// <summary>
+    /// What a worker that has no database of its own asks the data plane while it runs agent steps: the namespace's current policy, rate-limit counters, and the budget ledger (reserve, settle, release,
+    /// count a tool call). Workers only: it reads and writes counters on behalf of runs, and cannot read or change a policy document.
+    /// </summary>
+    EvaluatePolicy,
 }
 
 /// <summary>
@@ -39,7 +45,7 @@ public static class AccessPolicy
     {
         [Role.Reader] = [Operation.ReadRun],
         [Role.Approver] = [Operation.ReadRun, Operation.DecideApproval],
-        [Role.Worker] = [Operation.PollWorkflowTask, Operation.PollActivityTask, Operation.CompleteTask, Operation.HeartbeatTask],
+        [Role.Worker] = [Operation.PollWorkflowTask, Operation.PollActivityTask, Operation.CompleteTask, Operation.HeartbeatTask, Operation.EvaluatePolicy],
         [Role.Operator] = [Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun, Operation.ExportHistory, Operation.ReadPolicy],
         [Role.Admin] =
         [
