@@ -15,8 +15,13 @@ public enum ApprovalOutcome
 /// <param name="Roles">Roles allowed to decide. A person qualifies by subject or by role.</param>
 /// <param name="Timeout">Workflow time after which the approval expires. Null waits indefinitely.</param>
 /// <param name="ForbidSelfApproval">The person the agent acts for may not approve their own request.</param>
+/// <param name="Count">How many different people must approve (1 or 2). One rejection by a verified person ends it. The same person's second decision does not count.</param>
 public sealed record ApprovalRequirement(
-    IReadOnlyList<string>? Approvers = null, IReadOnlyList<string>? Roles = null, TimeSpan? Timeout = null, bool ForbidSelfApproval = true);
+    IReadOnlyList<string>? Approvers = null, IReadOnlyList<string>? Roles = null, TimeSpan? Timeout = null, bool ForbidSelfApproval = true, int Count = 1)
+{
+    /// <summary>The most people one approval may require.</summary>
+    public const int MaxCount = 2;
+}
 
 /// <summary>A request for a person to decide. Recorded in history, so an approvals inbox can find it.</summary>
 public sealed class ApprovalRequest
@@ -36,6 +41,9 @@ public sealed class ApprovalRequest
 public sealed record ApprovalDecision(
     string ApprovalId, ApprovalOutcome Outcome, ApproverIdentity? Approver, string? Comment, DateTimeOffset? DecidedAt)
 {
+    /// <summary>Everyone whose approval counted, in the order they approved (more than one when <see cref="ApprovalRequirement.Count"/> asked for it). <see cref="Approver"/> is the first.</summary>
+    public IReadOnlyList<ApproverIdentity> Approvers { get; init; } = [];
+
     public bool IsApproved => Outcome == ApprovalOutcome.Approved;
 
     /// <exception cref="ApprovalRejectedException">The request was rejected or expired. Inside a saga this rolls the work back.</exception>

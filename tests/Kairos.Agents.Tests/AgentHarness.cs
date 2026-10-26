@@ -94,6 +94,15 @@ internal sealed class AgentHarness
         return key;
     }
 
+    /// <summary>Starts a run on behalf of a verified principal, so its history records who started it.</summary>
+    public async Task<RunKey> StartAsAsync(Principal by, string type, string input = "")
+    {
+        StartRunResult result = await Retry(async () => await Client.StartAsync(by, $"wf-{_counter++}", type, Encoding.UTF8.GetBytes(input)));
+        var key = new RunKey(by.Scope.TenantId, by.Scope.NamespaceId, result.RunId);
+        _runs.Add(key);
+        return key;
+    }
+
     /// <summary>Drives until the run closes or only an outside event (a signal) can move it. The clock jumps to the next wakeup when idle.</summary>
     public async Task<RunState> RunAsync(RunKey run, bool jumpClock = true)
     {

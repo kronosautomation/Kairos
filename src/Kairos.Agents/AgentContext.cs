@@ -140,6 +140,34 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
 
         byte[] result = await workflow.ExecuteActivityAsync(AgentActivityNames.Chat, WireCodec.Write(request, AgentJson.Default.ChatStepRequest), runtime.Config.ModelRetry);
         ChatStepResponse response = WireCodec.Read(result, AgentJson.Default.ChatStepResponse);
+        if (response.Outcome == BudgetOutcomes.Exceeded)
+        {
+            // A budget refused the call, and the refusal is recorded (a replay does not ask again). Either the run ends, or a person is asked to let this one call through.
+            string limit = response.BudgetLimit ?? "budget";
+            if (response.OnExceed != "pause")
+            {
+                throw new BudgetExceededException($"The budget '{limit}' was reached.") { Limit = limit };
+            }
+
+            ApprovalDecision raise = await RequestApprovalAsync(new ApprovalRequest
+            {
+                Action = $"Raise the budget '{limit}' for one more model call",
+                Requirement = AgentsRuntime.FromWire(response.BudgetApproval ?? new WireApprovalRequirement()),
+            });
+            if (!raise.IsApproved)
+            {
+                throw new BudgetExceededException($"The budget '{limit}' was reached and nobody raised it.") { Limit = limit };
+            }
+
+            result = await workflow.ExecuteActivityAsync(
+                AgentActivityNames.Chat, WireCodec.Write(request with { BudgetAllowance = raise.ApprovalId }, AgentJson.Default.ChatStepRequest), runtime.Config.ModelRetry);
+            response = WireCodec.Read(result, AgentJson.Default.ChatStepResponse);
+            if (response.Outcome == BudgetOutcomes.Exceeded)
+            {
+                throw new BudgetExceededException($"The budget '{response.BudgetLimit ?? limit}' was reached again.") { Limit = response.BudgetLimit ?? limit };
+            }
+        }
+
         return new AgentReply(
             [.. response.Messages.Select(WireCodec.FromWire)],
             response.Usage is { } u ? new AgentUsage(u.Input, u.Output, u.Total) : null,
@@ -158,10 +186,23 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
         Func<string, string>? redact = runtime.Config.Redactor;
         string argumentsJson = WireCodec.ArgumentsToJson(toolCall.Arguments);
 
+        // A recording policy decides in a step of its own, so the decision is in history before the tool can run; the tool step then honours it.
+        WirePolicyDecision? recorded = null;
         ToolStepResponse first;
         try
         {
-            first = await RunToolAsync(toolCall.Name, callId, argumentsJson, approval: null);
+            if (runtime.Config.Policy is IRecordedToolPolicy)
+            {
+                PolicyStepResponse policy = await RunPolicyAsync(toolCall.Name, callId, argumentsJson);
+                recorded = policy.Decision;
+                first = policy.Outcome == PolicyOutcomes.Allowed
+                    ? await RunToolAsync(toolCall.Name, callId, argumentsJson, approval: null, recorded)
+                    : new ToolStepResponse { Outcome = policy.Outcome, Reason = policy.Reason, Requirement = policy.Requirement };
+            }
+            else
+            {
+                first = await RunToolAsync(toolCall.Name, callId, argumentsJson, approval: null, decision: null);
+            }
         }
         catch (ActivityFailureException ex)
         {
@@ -196,7 +237,7 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
                     ToolStepResponse second;
                     try
                     {
-                        second = await RunToolAsync(toolCall.Name, callId, argumentsJson, decision);
+                        second = await RunToolAsync(toolCall.Name, callId, argumentsJson, decision, recorded);
                     }
                     catch (ActivityFailureException ex)
                     {
@@ -211,7 +252,7 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
         }
     }
 
-    private Task<ToolStepResponse> RunToolAsync(string name, string callId, string argumentsJson, ApprovalDecision? approval) =>
+    private Task<ToolStepResponse> RunToolAsync(string name, string callId, string argumentsJson, ApprovalDecision? approval, WirePolicyDecision? decision) =>
         RunToolCoreAsync(
             new ToolStepRequest
             {
@@ -220,7 +261,23 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
                 ArgumentsJson = argumentsJson,
                 OnBehalfOf = OnBehalfOf,
                 Approval = approval is null ? null : AgentsRuntime.ToWire(approval),
+                StartedBy = workflow.StartedBy.Length == 0 ? null : workflow.StartedBy,
+                Decision = decision,
             });
+
+    private async Task<PolicyStepResponse> RunPolicyAsync(string name, string callId, string argumentsJson)
+    {
+        var request = new ToolStepRequest
+        {
+            Name = name,
+            CallId = callId,
+            ArgumentsJson = argumentsJson,
+            OnBehalfOf = OnBehalfOf,
+            StartedBy = workflow.StartedBy.Length == 0 ? null : workflow.StartedBy,
+        };
+        byte[] result = await workflow.ExecuteActivityAsync(AgentActivityNames.Policy, WireCodec.Write(request, AgentJson.Default.ToolStepRequest), runtime.Config.ToolRetry);
+        return WireCodec.Read(result, AgentJson.Default.PolicyStepResponse);
+    }
 
     private async Task<ToolStepResponse> RunToolCoreAsync(ToolStepRequest request)
     {
@@ -287,6 +344,8 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
 
         string signal = AgentClient.ApprovalSignalName(approvalId);
         Task? timeout = request.Requirement.Timeout is { } t ? workflow.DelayAsync(t) : null;
+        int needed = Math.Clamp(request.Requirement.Count, 1, ApprovalRequirement.MaxCount);
+        var approvers = new List<ApproverIdentity>(needed);
         Task<byte[]>? cancel = _saga?.CancelTask;
         while (true)
         {
@@ -333,9 +392,22 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
 
                 if (verified is { Ok: true })
                 {
-                    return new ApprovalDecision(
-                        approvalId, claimed.Approved ? ApprovalOutcome.Approved : ApprovalOutcome.Rejected,
-                        new ApproverIdentity(verified.Subject, claimed.Approver.Name, verified.Roles, claimed.Approver.Evidence), claimed.Comment, claimed.DecidedAt);
+                    var who = new ApproverIdentity(verified.Subject, claimed.Approver.Name, verified.Roles, claimed.Approver.Evidence);
+                    if (!claimed.Approved)
+                    {
+                        return new ApprovalDecision(approvalId, ApprovalOutcome.Rejected, who, claimed.Comment, claimed.DecidedAt) { Approvers = [who] };
+                    }
+
+                    // The same person approving twice is one approval.
+                    if (!approvers.Exists(a => string.Equals(a.Subject, who.Subject, StringComparison.Ordinal)))
+                    {
+                        approvers.Add(who);
+                    }
+
+                    if (approvers.Count >= needed)
+                    {
+                        return new ApprovalDecision(approvalId, ApprovalOutcome.Approved, approvers[0], claimed.Comment, claimed.DecidedAt) { Approvers = [.. approvers] };
+                    }
                 }
             }
 

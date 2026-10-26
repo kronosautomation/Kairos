@@ -15,6 +15,12 @@ public interface IWorkflowContext
     /// <summary>The build this run is pinned to (set when the run started).</summary>
     string BuildId { get; }
 
+    /// <summary>
+    /// Who started the run, as the host that verified the caller recorded it (<c>role:subject</c>, <see cref="WorkflowStarted.StartedBy"/>), or empty when none was recorded.
+    /// It comes from history, so it is the same on every replay, and workflow code cannot choose it.
+    /// </summary>
+    string StartedBy { get; }
+
     /// <summary>Workflow time: the timestamp of the history event being processed. Never the wall clock.</summary>
     DateTimeOffset Now { get; }
 

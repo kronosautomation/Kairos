@@ -25,6 +25,7 @@ An `ApprovalRequirement` says who counts:
 | `Roles` | Roles allowed to decide. A person qualifies by subject **or** by role. With neither set, any identity your application passes counts. |
 | `ForbidSelfApproval` | On by default. The person the agent acts for (`ctx.OnBehalfOf`) may not approve their own request. |
 | `Timeout` | Workflow time after which the approval expires. Nothing is waited on forever unless you leave it unset. |
+| `Count` | How many different people must approve: 1 (the default) or 2. A verified rejection by anyone ends the approval at once. The same person approving twice counts once. The approval stays in `PendingApprovals` until enough different people have approved, and the decision records everyone whose approval counted (`ApprovalDecision.Approvers`). |
 
 A decision from someone who does not qualify, or one that is malformed, names another approval, or cannot be verified, is **ignored**: the
 run keeps waiting, the approval stays in `PendingApprovals`, and the stray decision stays in the history. An approval can only be given

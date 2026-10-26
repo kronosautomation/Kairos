@@ -40,7 +40,17 @@ public sealed record ApprovalAuditRecord(
 /// <param name="Tool">The tool.</param>
 /// <param name="Verdict">Run it, hold it for a person, or refuse it.</param>
 /// <param name="Reason">The policy's reason, when it gave one. Written by the policy: do not make it carry data.</param>
-public sealed record PolicyDecisionAuditRecord(DateTimeOffset At, int Step, string Tool, ToolVerdict Verdict, string? Reason) : AgentAuditRecord(At);
+public sealed record PolicyDecisionAuditRecord(DateTimeOffset At, int Step, string Tool, ToolVerdict Verdict, string? Reason) : AgentAuditRecord(At)
+{
+    /// <summary>The rule that decided, when the policy records its decisions (<see cref="IRecordedToolPolicy"/>), else null.</summary>
+    public string? Rule { get; init; }
+
+    /// <summary>The version of the policy that decided, or 0.</summary>
+    public long PolicyVersion { get; init; }
+
+    /// <summary>The hash of that version, or null.</summary>
+    public string? PolicyHash { get; init; }
+}
 
 /// <summary>A credential issued to a tool for one call: what it allowed and until when. The token itself is never recorded.</summary>
 /// <param name="At">When the step completed.</param>
@@ -87,7 +97,20 @@ public static class AgentAudit
 
         public string[] Roles { get; set; } = [];
 
+        public List<string> Accepted { get; } = [];
+
         public int Refused { get; set; }
+    }
+
+    private static void AddToolDecision(List<(long Sequence, AgentAuditRecord Record)> records, ActivityCompleted c, ToolStepRequest asked, ToolStepResponse response)
+    {
+        ToolVerdict verdict = response.Outcome switch
+        {
+            ToolOutcomes.Denied => ToolVerdict.Deny,
+            ToolOutcomes.ApprovalRequired => ToolVerdict.RequireApproval,
+            _ => ToolVerdict.Auto,
+        };
+        records.Add((c.Sequence, new PolicyDecisionAuditRecord(c.Timestamp, c.ActivityId, asked.Name, verdict, verdict == ToolVerdict.Auto ? null : response.Reason)));
     }
 
     private static List<AgentAuditRecord> ReadCore(IReadOnlyList<HistoryEvent> history)
@@ -102,7 +125,7 @@ public static class AgentAudit
         {
             switch (e)
             {
-                case ActivityScheduled s when s.ActivityType is AgentActivityNames.Tool or AgentActivityNames.ApprovalRequest or AgentActivityNames.ApprovalVerify:
+                case ActivityScheduled s when s.ActivityType is AgentActivityNames.Tool or AgentActivityNames.Policy or AgentActivityNames.ApprovalRequest or AgentActivityNames.ApprovalVerify:
                     steps[s.ActivityId] = s;
                     if (s.ActivityType == AgentActivityNames.ApprovalRequest)
                     {
@@ -132,20 +155,54 @@ public static class AgentAudit
                         }
                         else if (state.DecidedAt is null)
                         {
-                            (state.DecidedAt, state.DecidedSequence, state.Approved, state.Approver, state.Roles) = (c.Timestamp, c.Sequence, asked.Decision.Approved, result.Subject, result.Roles);
+                            // One rejection decides; an approval decides when as many different people as the request asked for have approved.
+                            if (asked.Decision.Approved)
+                            {
+                                if (!state.Accepted.Contains(result.Subject))
+                                {
+                                    state.Accepted.Add(result.Subject);
+                                    state.Roles = [.. state.Roles.Union(result.Roles)];
+                                }
+                            }
+                            else
+                            {
+                                state.Accepted.Clear();
+                                state.Accepted.Add(result.Subject);
+                                state.Roles = result.Roles;
+                            }
+
+                            if (!asked.Decision.Approved || state.Accepted.Count >= Math.Clamp(asked.Request.Requirement.Count, 1, ApprovalRequirement.MaxCount))
+                            {
+                                (state.DecidedAt, state.DecidedSequence, state.Approved, state.Approver) = (c.Timestamp, c.Sequence, asked.Decision.Approved, string.Join(", ", state.Accepted));
+                            }
                         }
                     }
-                    else if (step.ActivityType == AgentActivityNames.Tool)
+                    else if (step.ActivityType == AgentActivityNames.Policy)
                     {
                         ToolStepRequest asked = WireCodec.Read(step.Input, AgentJson.Default.ToolStepRequest);
-                        ToolStepResponse response = WireCodec.Read(c.Result, AgentJson.Default.ToolStepResponse);
+                        PolicyStepResponse response = WireCodec.Read(c.Result, AgentJson.Default.PolicyStepResponse);
                         ToolVerdict verdict = response.Outcome switch
                         {
                             ToolOutcomes.Denied => ToolVerdict.Deny,
                             ToolOutcomes.ApprovalRequired => ToolVerdict.RequireApproval,
                             _ => ToolVerdict.Auto,
                         };
-                        records.Add((c.Sequence, new PolicyDecisionAuditRecord(c.Timestamp, c.ActivityId, asked.Name, verdict, verdict == ToolVerdict.Auto ? null : response.Reason)));
+                        records.Add((c.Sequence, new PolicyDecisionAuditRecord(c.Timestamp, c.ActivityId, asked.Name, verdict, verdict == ToolVerdict.Auto ? null : response.Reason)
+                        {
+                            Rule = response.Decision?.RuleId,
+                            PolicyVersion = response.Decision?.PolicyVersion ?? 0,
+                            PolicyHash = response.Decision?.PolicyHash is { Length: > 0 } h ? h : null,
+                        }));
+                    }
+                    else if (step.ActivityType == AgentActivityNames.Tool)
+                    {
+                        ToolStepRequest asked = WireCodec.Read(step.Input, AgentJson.Default.ToolStepRequest);
+                        ToolStepResponse response = WireCodec.Read(c.Result, AgentJson.Default.ToolStepResponse);
+                        if (asked.Decision is null)
+                        {
+                            AddToolDecision(records, c, asked, response);
+                        }
+
                         if (response.Credential is { } grant)
                         {
                             records.Add((c.Sequence, new CredentialAuditRecord(c.Timestamp, c.ActivityId, asked.Name, [.. grant.Scopes], grant.ExpiresAt, grant.OnBehalfOf)));

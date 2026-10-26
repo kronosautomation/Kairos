@@ -12,7 +12,22 @@ public enum ToolVerdict
     Deny = 2,
 }
 
-public readonly record struct ToolDecision(ToolVerdict Verdict, string? Reason = null, ApprovalRequirement? Approval = null)
+/// <summary>
+/// Why a policy decided as it did, in terms that carry no run data: which rule, which version of the policy (and its hash), the effect, and the <b>paths</b> of the argument conditions that matched
+/// (never what was at them). A policy that implements <see cref="IRecordedToolPolicy"/> returns one with every decision; the agent runtime records it before the tool can run.
+/// </summary>
+/// <param name="RuleId">The rule that decided, or one of the fixed names <c>(default)</c>, <c>(no-rule)</c> and <c>(policy-unavailable)</c>.</param>
+/// <param name="PolicyVersion">The version of the policy that was evaluated (0 when there was none).</param>
+/// <param name="PolicyHash">The hash of that version, 64 lower-case hexadecimal digits, or empty when there was none.</param>
+/// <param name="Effect">The effect: <c>allow</c>, <c>deny</c> or <c>require_approval</c>.</param>
+/// <param name="MatchedFields">Paths of the argument conditions that held. Names only.</param>
+public sealed record PolicyDecisionRecord(string RuleId, long PolicyVersion, string PolicyHash, string Effect, IReadOnlyList<string> MatchedFields)
+{
+    /// <summary>The longest rule id, path or hash that is recorded; longer ones are cut so a record stays small.</summary>
+    public const int MaxLength = 128;
+}
+
+public readonly record struct ToolDecision(ToolVerdict Verdict, string? Reason = null, ApprovalRequirement? Approval = null, PolicyDecisionRecord? Record = null)
 {
     public static ToolDecision Allow() => new(ToolVerdict.Auto);
 
@@ -25,7 +40,21 @@ public readonly record struct ToolDecision(ToolVerdict Verdict, string? Reason =
 /// <param name="Tool">The tool being called.</param>
 /// <param name="ArgumentsJson">The model's arguments.</param>
 /// <param name="Approval">The approval that already covers this call, if it was approved; null on the first look.</param>
-public sealed record ToolPolicyContext(RunKey Run, AgentTool Tool, string ArgumentsJson, ApprovalDecision? Approval);
+public sealed record ToolPolicyContext(RunKey Run, AgentTool Tool, string ArgumentsJson, ApprovalDecision? Approval)
+{
+    /// <summary>Who started the run, as recorded in its history (<c>role:subject</c>), or empty.</summary>
+    public string StartedBy { get; init; } = "";
+
+    /// <summary>The time of the evaluation, by the clock the agent runtime was given.</summary>
+    public DateTimeOffset Now { get; init; }
+}
+
+/// <summary>
+/// A policy whose every decision is recorded <b>before the tool can run</b>. The agent runtime evaluates it in a step of its own (<c>kairos.agent.policy</c>), so the decision and its
+/// <see cref="PolicyDecisionRecord"/> are in history first; the tool step then honours the recorded decision and does not evaluate again. Replays read the record; a policy edited later cannot
+/// change what was decided. The free baseline does not implement this, and keeps one step per tool call.
+/// </summary>
+public interface IRecordedToolPolicy : IToolPolicy;
 
 /// <summary>
 /// Decides, before every tool call and on the worker, whether the call may run. The decision is recorded with the step, so changing

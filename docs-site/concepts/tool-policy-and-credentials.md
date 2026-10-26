@@ -18,6 +18,19 @@ You change the default per tool when you build the runtime. A tool that is named
 
 A denial always wins: a tool that policy denies cannot be unlocked by an approval.
 
+## Policies that record their decisions
+
+The baseline decides inside the tool's own step. A policy can instead implement `IRecordedToolPolicy`. Kairos then decides each call in a step of its own, recorded before anything else happens: the
+decision, the rule that made it, the version and hash of the policy, and the *names* (never the values) of the arguments that matched are in the run's history before the tool can run. The tool step honours the
+recorded decision and does not ask the policy again, and only for the arguments it was made for. Replaying a run reads what was recorded, so a policy that is changed later cannot change what a running workflow already decided,
+and a call that has not happened yet uses the policy that is current when its decision step runs. The policy is also told who started the run (`ToolPolicyContext.StartedBy`) and the time of the evaluation.
+
+## Guarding model calls
+
+`UseModelCallGuard` registers an `IModelCallGuard`, asked before every model request. It can reserve what the call may cost, or refuse it: the model is then not called, and the refusal is recorded. A refusal either ends the
+run with a `BudgetExceededException` naming the limit, or asks a person to approve one more call through the ordinary approval flow. A guard that cannot decide stops the call (the step is retried), and a guard that
+cannot record what a finished call cost does not make the step call the model again.
+
 ## Where the decision is made, and why it is recorded
 
 The policy is evaluated on the worker, inside the tool step, immediately before the tool would run. The decision is part of the step's

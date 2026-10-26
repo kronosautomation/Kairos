@@ -47,6 +47,8 @@ public sealed class WorkflowExecution : IWorkflowContext
 
     public string BuildId { get; private set; } = "";
 
+    public string StartedBy { get; private set; } = "";
+
     public DateTimeOffset Now { get; private set; }
 
     public bool IsReplaying { get; private set; }
@@ -185,6 +187,7 @@ public sealed class WorkflowExecution : IWorkflowContext
 
                 _started = true;
                 BuildId = started.BuildId;
+                StartedBy = started.StartedBy;
                 Now = started.Timestamp;
                 byte[] input = started.Input;
                 _scheduler.Post(_ => StartWorkflow(input), null);

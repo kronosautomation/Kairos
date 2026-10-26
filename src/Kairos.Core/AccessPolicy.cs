@@ -21,6 +21,12 @@ public enum Operation
 
     /// <summary>Copy one run's history out of the system (ciphertext as stored). Always audited with who and why.</summary>
     ExportHistory,
+
+    /// <summary>Change the namespace's tool policy, price table or budgets. Administrators only; every change is audited with both hashes.</summary>
+    ManagePolicy,
+
+    /// <summary>Read the namespace's current tool policy and price table (the rules themselves, not the budgets' status).</summary>
+    ReadPolicy,
 }
 
 /// <summary>
@@ -34,11 +40,11 @@ public static class AccessPolicy
         [Role.Reader] = [Operation.ReadRun],
         [Role.Approver] = [Operation.ReadRun, Operation.DecideApproval],
         [Role.Worker] = [Operation.PollWorkflowTask, Operation.PollActivityTask, Operation.CompleteTask, Operation.HeartbeatTask],
-        [Role.Operator] = [Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun, Operation.ExportHistory],
+        [Role.Operator] = [Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun, Operation.ExportHistory, Operation.ReadPolicy],
         [Role.Admin] =
         [
             Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun, Operation.ReadAuditLog,
-            Operation.ResumeStuckTask, Operation.FailRun, Operation.ExportHistory,
+            Operation.ResumeStuckTask, Operation.FailRun, Operation.ExportHistory, Operation.ManagePolicy, Operation.ReadPolicy,
         ],
     };
 

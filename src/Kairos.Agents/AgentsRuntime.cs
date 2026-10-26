@@ -9,6 +9,7 @@ public static class AgentActivityNames
 {
     public const string Chat = "kairos.agent.chat";
     public const string Tool = "kairos.agent.tool";
+    public const string Policy = "kairos.agent.policy";
     public const string ApprovalRequest = "kairos.agent.approval.request";
     public const string ApprovalVerify = "kairos.agent.approval.verify";
     public const string SagaMark = "kairos.saga.mark";
@@ -29,6 +30,8 @@ public sealed class AgentsBuilder
     internal IToolPolicy Policy { get; private set; } = new BaselineToolPolicy();
 
     internal IToolCredentialIssuer? Issuer { get; private set; }
+
+    internal IModelCallGuard? Guard { get; private set; }
 
     internal IAgentObserver? Observer { get; private set; }
 
@@ -102,6 +105,16 @@ public sealed class AgentsBuilder
         var baseline = new BaselineToolPolicy();
         configure(baseline);
         Policy = baseline;
+        return this;
+    }
+
+    /// <summary>
+    /// Asks <paramref name="guard"/> before every model request (to reserve what it may cost, or refuse it) and tells it afterwards what it cost. See <see cref="IModelCallGuard"/>.
+    /// </summary>
+    public AgentsBuilder UseModelCallGuard(IModelCallGuard guard)
+    {
+        ArgumentNullException.ThrowIfNull(guard);
+        Guard = guard;
         return this;
     }
 
@@ -237,6 +250,7 @@ public sealed class AgentsRuntime
         {
             [AgentActivityNames.Chat] = ChatStepAsync,
             [AgentActivityNames.Tool] = ToolStepAsync,
+            [AgentActivityNames.Policy] = PolicyStepAsync,
             [AgentActivityNames.ApprovalRequest] = ApprovalRequestStepAsync,
             [AgentActivityNames.ApprovalVerify] = ApprovalVerifyStepAsync,
             [AgentActivityNames.SagaMark] = (_, input, _) => Task.FromResult(input),
@@ -299,6 +313,26 @@ public sealed class AgentsRuntime
             throw new UnknownModelException($"No model is registered as '{request.Model}'.");
         }
 
+        ModelCallInfo? call = null;
+        ModelCallPermit? permit = null;
+        if (_config.Guard is { } guard)
+        {
+            call = new ModelCallInfo(context.Run, context.ActivityId, context.Attempt, context.IdempotencyKey, request.Model, request.Options?.MaxOutputTokens, request.BudgetAllowance);
+            permit = await guard.ReserveAsync(call, cancellationToken).ConfigureAwait(false); // throws when it cannot decide: the step is retried, and the model is not called unguarded
+            if (!permit.Allowed)
+            {
+                return WireCodec.Write(
+                    new ChatStepResponse
+                    {
+                        Outcome = BudgetOutcomes.Exceeded,
+                        BudgetLimit = permit.Limit,
+                        OnExceed = permit.OnExceed,
+                        BudgetApproval = permit.OnExceed == "pause" ? ToWire(permit.Approval ?? new ApprovalRequirement()) : null,
+                    },
+                    AgentJson.Default.ChatStepResponse);
+            }
+        }
+
         IChatClient client = resolve(context.Run);
         AgentTelemetry.Provider(span, client);
         var tools = new List<AITool>(request.Tools.Length);
@@ -344,6 +378,11 @@ public sealed class AgentsRuntime
                 used.InputTokenCount ?? 0, used.OutputTokenCount ?? 0, Math.Min(used.CachedInputTokenCount ?? 0, used.InputTokenCount ?? 0), response.ModelId ?? request.Model));
         }
 
+        if (_config.Guard is { } settling && call is not null && permit is not null)
+        {
+            await SettleAsync(settling, call, permit, context.Usage, cancellationToken).ConfigureAwait(false);
+        }
+
         var reply = new ChatStepResponse
         {
             Messages = [.. response.Messages.Select(m => WireCodec.ResponseToWire(m, _config.Redactor))],
@@ -353,6 +392,20 @@ public sealed class AgentsRuntime
         };
         return WireCodec.Write(reply, AgentJson.Default.ChatStepResponse);
     }
+
+#pragma warning disable CA1031 // The call has been made and paid for; a ledger that cannot settle now is reconciled from the recorded usage, and must not make the step run the model again.
+    private static async Task SettleAsync(IModelCallGuard guard, ModelCallInfo call, ModelCallPermit permit, UsageRecord? usage, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await guard.SettleAsync(call, permit, usage, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Debug.WriteLine($"Model call guard could not settle: {ex.GetType().Name}");
+        }
+    }
+#pragma warning restore CA1031
 
     private async Task<ChatResponse> StreamAsync(
         IChatClient client, List<ChatMessage> messages, ChatOptions options, ActivityContext context, CancellationToken cancellationToken)
@@ -412,8 +465,18 @@ public sealed class AgentsRuntime
         }
 
         ApprovalDecision? approval = request.Approval is null ? null : ToDecision(request.Approval);
-        ToolDecision decision = await _config.Policy
-            .EvaluateAsync(new ToolPolicyContext(context.Run, tool, request.ArgumentsJson, approval), cancellationToken).ConfigureAwait(false);
+        ToolDecision decision;
+        if (request.Decision is { } recorded)
+        {
+            // Decided and recorded in the policy step before this one: honoured as recorded, never evaluated again, and only for the arguments it was made for.
+            decision = Honour(recorded, request.ArgumentsJson, approval);
+        }
+        else
+        {
+            decision = await _config.Policy
+                .EvaluateAsync(new ToolPolicyContext(context.Run, tool, request.ArgumentsJson, approval) { StartedBy = request.StartedBy ?? "", Now = _config.Time.GetUtcNow() }, cancellationToken).ConfigureAwait(false);
+        }
+
         switch (decision.Verdict)
         {
             case ToolVerdict.Deny:
@@ -467,6 +530,65 @@ public sealed class AgentsRuntime
         return Reply(new ToolStepResponse { Outcome = ToolOutcomes.Completed, Content = content, IsError = isError, Credential = grant });
     }
 
+    private static ToolDecision Honour(WirePolicyDecision recorded, string argumentsJson, ApprovalDecision? approval)
+    {
+        if (!string.Equals(recorded.ArgumentsDigest, ArgumentsDigest(argumentsJson), StringComparison.Ordinal))
+        {
+            return ToolDecision.Refuse("the arguments are not the ones the policy decided on");
+        }
+
+        return recorded.Effect switch
+        {
+            "allow" => ToolDecision.Allow(),
+            "require_approval" when approval is { IsApproved: true } => ToolDecision.Allow(),
+            "require_approval" => ToolDecision.NeedsApproval("the policy requires approval"),
+            _ => ToolDecision.Refuse("the policy denied the call"),
+        };
+    }
+
+    /// <summary>SHA-256 of the arguments JSON as the workflow passed it, lower-case hexadecimal: what a recorded decision is bound to.</summary>
+    internal static string ArgumentsDigest(string argumentsJson) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(argumentsJson)));
+
+    private async Task<byte[]> PolicyStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
+    {
+        ToolStepRequest request = WireCodec.Read(input, AgentJson.Default.ToolStepRequest);
+        if (!_config.Tools.TryGetValue(request.Name, out AgentTool? tool))
+        {
+            return WireCodec.Write(new PolicyStepResponse { Outcome = PolicyOutcomes.Allowed }, AgentJson.Default.PolicyStepResponse); // the tool step reports the unknown tool
+        }
+
+        DateTimeOffset now = _config.Time.GetUtcNow();
+        ToolDecision decision = await _config.Policy
+            .EvaluateAsync(new ToolPolicyContext(context.Run, tool, request.ArgumentsJson, request.Approval is null ? null : ToDecision(request.Approval)) { StartedBy = request.StartedBy ?? "", Now = now }, cancellationToken)
+            .ConfigureAwait(false);
+
+        PolicyDecisionRecord record = decision.Record ?? new PolicyDecisionRecord("(unrecorded)", 0, "", decision.Verdict switch { ToolVerdict.Deny => "deny", ToolVerdict.RequireApproval => "require_approval", _ => "allow" }, []);
+        WirePolicyDecision wire = new()
+        {
+            RuleId = Clip(record.RuleId),
+            PolicyVersion = record.PolicyVersion,
+            PolicyHash = Clip(record.PolicyHash),
+            Effect = Clip(record.Effect),
+            MatchedFields = [.. record.MatchedFields.Select(Clip)],
+            EvaluatedAt = now,
+            Starter = string.IsNullOrEmpty(request.StartedBy) ? null : request.StartedBy,
+            ArgumentsDigest = ArgumentsDigest(request.ArgumentsJson),
+        };
+        return WireCodec.Write(
+            decision.Verdict switch
+            {
+                ToolVerdict.Deny => new PolicyStepResponse { Outcome = ToolOutcomes.Denied, Reason = decision.Reason ?? "denied by policy", Decision = wire },
+                ToolVerdict.RequireApproval => new PolicyStepResponse
+                {
+                    Outcome = ToolOutcomes.ApprovalRequired, Reason = decision.Reason, Requirement = ToWire(decision.Approval ?? new ApprovalRequirement()), Decision = wire,
+                },
+                _ => new PolicyStepResponse { Outcome = PolicyOutcomes.Allowed, Decision = wire },
+            },
+            AgentJson.Default.PolicyStepResponse);
+
+        static string Clip(string s) => s.Length <= PolicyDecisionRecord.MaxLength ? s : s[..PolicyDecisionRecord.MaxLength];
+    }
+
     private async Task<byte[]> ApprovalRequestStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
     {
         if (_config.Notifier is { } notifier)
@@ -501,10 +623,11 @@ public sealed class AgentsRuntime
         Roles = [.. r.Roles ?? []],
         TimeoutSeconds = r.Timeout?.TotalSeconds,
         ForbidSelfApproval = r.ForbidSelfApproval,
+        Count = Math.Clamp(r.Count, 1, ApprovalRequirement.MaxCount),
     };
 
     internal static ApprovalRequirement FromWire(WireApprovalRequirement w) =>
-        new(w.Approvers, w.Roles, w.TimeoutSeconds is { } s ? TimeSpan.FromSeconds(s) : null, w.ForbidSelfApproval);
+        new(w.Approvers, w.Roles, w.TimeoutSeconds is { } s ? TimeSpan.FromSeconds(s) : null, w.ForbidSelfApproval, Math.Clamp(w.Count, 1, ApprovalRequirement.MaxCount));
 
     internal static ApprovalDecision ToDecision(WireApprovalDecision w) => new(
         w.ApprovalId, w.Approved ? ApprovalOutcome.Approved : ApprovalOutcome.Rejected,

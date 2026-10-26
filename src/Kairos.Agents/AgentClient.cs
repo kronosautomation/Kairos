@@ -86,17 +86,42 @@ public static class AgentHistory
             }
         }
 
-        // An approval is decided once a verification step accepted a decision for it.
-        var verifyIds = new Dictionary<int, string>();
+        // An approval is decided once verification steps accepted enough decisions for it: one rejection, or as many different approvers as the request asked for.
+        var verifies = new Dictionary<int, ApprovalVerifyRequest>();
         foreach (ActivityScheduled scheduled in history.OfType<ActivityScheduled>().Where(a => a.ActivityType == AgentActivityNames.ApprovalVerify))
         {
-            verifyIds[scheduled.ActivityId] = WireCodec.Read(scheduled.Input, AgentJson.Default.ApprovalVerifyRequest).Request.ApprovalId;
+            verifies[scheduled.ActivityId] = WireCodec.Read(scheduled.Input, AgentJson.Default.ApprovalVerifyRequest);
         }
 
         var decided = new HashSet<string>(StringComparer.Ordinal);
+        var accepted = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (ActivityCompleted done in history.OfType<ActivityCompleted>())
         {
-            if (verifyIds.TryGetValue(done.ActivityId, out string? approvalId) && WireCodec.Read(done.Result, AgentJson.Default.ApprovalVerifyResult).Ok)
+            if (!verifies.TryGetValue(done.ActivityId, out ApprovalVerifyRequest? asked))
+            {
+                continue;
+            }
+
+            ApprovalVerifyResult result = WireCodec.Read(done.Result, AgentJson.Default.ApprovalVerifyResult);
+            string approvalId = asked.Request.ApprovalId;
+            if (!result.Ok || decided.Contains(approvalId))
+            {
+                continue;
+            }
+
+            if (!asked.Decision.Approved)
+            {
+                decided.Add(approvalId);
+                continue;
+            }
+
+            if (!accepted.TryGetValue(approvalId, out HashSet<string>? subjects))
+            {
+                accepted[approvalId] = subjects = new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            subjects.Add(result.Subject);
+            if (subjects.Count >= Math.Clamp(asked.Request.Requirement.Count, 1, ApprovalRequirement.MaxCount))
             {
                 decided.Add(approvalId);
             }

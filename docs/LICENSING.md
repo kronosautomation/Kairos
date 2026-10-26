@@ -30,7 +30,7 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Cli | Apache 2.0 | Community | The `kairos` tool: `replay-check` (deploy safety gate), `history export`, `history verify` and `audit verify` (the offline verifier of signed audit evidence; the export that produces it is Business). Token usage recorded in history and `GetUsageAsync` are Core; price tables and budgets are Kairos.Agents.Policies (Pro) |
 | Kairos.Testing, Kairos.Conformance | Apache 2.0 | Community | Simulator test kit and provider conformance suite (customers test their own workflows) |
 | Kairos.Dashboard | Commercial | Pro | Run list, history and replay view, approval inbox |
-| Kairos.Agents.Policies | Commercial | Pro | Argument-level policy rules, token/cost/step budgets, policy console (the read-only baseline is free) |
+| Kairos.Agents.Policies | Commercial | Pro | Declarative argument-level policy rules (allow, deny, require approval by one or two people, rate limit), versioned and audited policy storage, token/money/step budgets enforced by atomic reservation, price tables with effective dates (the read-only baseline is free). The hooks they plug into are Community: `IRecordedToolPolicy` and recorded decisions, `IModelCallGuard`, `ApprovalRequirement.Count`, `ToolPolicyContext.StartedBy` |
 | Kairos.Mcp.TaskStore | Apache 2.0 | Community | Durable `IMcpTaskStore` for any C# MCP server, backed by Kairos runs (the adoption entry point) |
 | Kairos.Agents.McpClient | Apache 2.0 | Community | Durable, idempotent MCP client steps for agent workflows |
 | Kairos.A2A | Apache 2.0 | Community | Agent Card signing and verification; a Kairos run projected as an A2A task |

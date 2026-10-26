@@ -44,6 +44,9 @@ internal sealed record ChatStepRequest
     public string[] Tools { get; init; } = [];
 
     public WireChatOptions? Options { get; init; }
+
+    /// <summary>The id of an approval that let this one call exceed a budget (the guard permits it once). Null normally.</summary>
+    public string? BudgetAllowance { get; init; }
 }
 
 internal sealed record ChatStepResponse
@@ -55,6 +58,23 @@ internal sealed record ChatStepResponse
     public WireUsage? Usage { get; init; }
 
     public string? ModelId { get; init; }
+
+    /// <summary><see cref="BudgetOutcomes.Exceeded"/> when a budget refused the call (nothing else is in the reply), else null.</summary>
+    public string? Outcome { get; init; }
+
+    /// <summary>Which limit was reached (a name from the budget configuration, never a figure of anyone's data).</summary>
+    public string? BudgetLimit { get; init; }
+
+    /// <summary>What to do: <c>pause</c> (ask for approval) or <c>fail</c>.</summary>
+    public string? OnExceed { get; init; }
+
+    /// <summary>Who may approve raising the budget, when <see cref="OnExceed"/> is <c>pause</c>.</summary>
+    public WireApprovalRequirement? BudgetApproval { get; init; }
+}
+
+internal static class BudgetOutcomes
+{
+    public const string Exceeded = "budget-exceeded";
 }
 
 internal sealed record WireApprover
@@ -78,6 +98,8 @@ internal sealed record WireApprovalRequirement
     public double? TimeoutSeconds { get; init; }
 
     public bool ForbidSelfApproval { get; init; } = true;
+
+    public int Count { get; init; } = 1;
 }
 
 internal sealed record WireApprovalDecision
@@ -124,6 +146,50 @@ internal sealed record ToolStepRequest
 
     /// <summary>Present on the second call, after a person approved this exact call.</summary>
     public WireApprovalDecision? Approval { get; init; }
+
+    /// <summary>Who started the run (from its history), for policies that match on it.</summary>
+    public string? StartedBy { get; init; }
+
+    /// <summary>The decision of a recording policy, made in the policy step before this one. When present the tool step honours it and does not evaluate a policy.</summary>
+    public WirePolicyDecision? Decision { get; init; }
+}
+
+/// <summary>A recorded policy decision, bound to the arguments it was made for.</summary>
+internal sealed record WirePolicyDecision
+{
+    public string RuleId { get; init; } = "";
+
+    public long PolicyVersion { get; init; }
+
+    public string PolicyHash { get; init; } = "";
+
+    public string Effect { get; init; } = "";
+
+    public string[] MatchedFields { get; init; } = [];
+
+    public DateTimeOffset EvaluatedAt { get; init; }
+
+    public string? Starter { get; init; }
+
+    /// <summary>SHA-256 of the arguments JSON the decision was made for, lower-case hexadecimal.</summary>
+    public string ArgumentsDigest { get; init; } = "";
+}
+
+internal static class PolicyOutcomes
+{
+    public const string Allowed = "allowed";
+}
+
+internal sealed record PolicyStepResponse
+{
+    /// <summary><see cref="PolicyOutcomes.Allowed"/>, <see cref="ToolOutcomes.Denied"/> or <see cref="ToolOutcomes.ApprovalRequired"/>.</summary>
+    public string Outcome { get; init; } = PolicyOutcomes.Allowed;
+
+    public string? Reason { get; init; }
+
+    public WireApprovalRequirement? Requirement { get; init; }
+
+    public WirePolicyDecision? Decision { get; init; }
 }
 
 internal sealed record ApprovalVerifyRequest
@@ -197,6 +263,7 @@ internal sealed record SagaMark
 [JsonSerializable(typeof(ChatStepResponse))]
 [JsonSerializable(typeof(ToolStepRequest))]
 [JsonSerializable(typeof(ToolStepResponse))]
+[JsonSerializable(typeof(PolicyStepResponse))]
 [JsonSerializable(typeof(WireApprovalRequest))]
 [JsonSerializable(typeof(WireApprovalDecision))]
 [JsonSerializable(typeof(SagaMark))]
