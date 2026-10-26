@@ -44,3 +44,5 @@
   href: deploy-safety.md
 - name: Replay a run locally
   href: replay-locally.md
+- name: Verifying a release
+  href: verify-releases.md

@@ -162,7 +162,7 @@ stages:
                   -Output "$root/attestations" -Key '$(KAIROS_COSIGN_KEY)' -PublicKey ./build/release/cosign.pub
           - pwsh: |
               Copy-Item ./build/release/cosign.pub '$(Pipeline.Workspace)/unsigned/cosign.pub'
-              Copy-Item ./docs-site/articles/verify-releases.md '$(Pipeline.Workspace)/unsigned/VERIFY.md' -ErrorAction SilentlyContinue
+              Copy-Item ./docs-site/concepts/verify-releases.md '$(Pipeline.Workspace)/unsigned/VERIFY.md' -ErrorAction SilentlyContinue
             displayName: Add the public key and the verification instructions to the evidence
           - publish: $(Pipeline.Workspace)/unsigned
             artifact: release
