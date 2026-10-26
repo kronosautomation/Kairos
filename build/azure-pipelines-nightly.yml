@@ -138,6 +138,21 @@ stages:
     - template: steps-publish.yml
       parameters: { title: 'Soak' }
 
+  - job: Reproducible
+    displayName: Two builds of main give the same packages
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 90
+    steps:
+    - checkout: self
+      fetchDepth: 0
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        useGlobalJson: true
+    - pwsh: ./build/release/Test-Reproducible.ps1
+      displayName: Fresh clones in two directories; every file of every package must be identical (a path or a time that leaks in is found here, not on release day)
+
   - job: DocsPreview
     displayName: Documentation site preview build
     pool:

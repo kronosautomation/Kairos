@@ -46,6 +46,15 @@ The data plane cannot create tenants or keys. The control plane cannot read work
    falls back to its other wake-ups, so the key can be rotated by restarting nodes without losing work. A test subscribes as a
    plain connection through a multi-tenant workload and fails if any tenant, namespace, queue or build identifier appears in any
    notification.
+7. **Named exceptions to row-level security are listed here, and there is one.** A policy that lets the data-plane role read across
+   scopes is a hole in isolation unless it is narrow, read-only, named and tested. `open_work_sweep` (commercial policy library,
+   migration 0003) lets a session that sets `app.sweep = 'reconcile'` `SELECT` the budget reservations that still have work to do
+   (reserved and not settled, or settled after a retry whose failed attempts are not yet added) in every scope, so that a node
+   can find a scope whose workers are gone and settle what a crash left. It allows no write; it opens no other table or row; the
+   marker is set by one query (a test fails if any other source file contains it); the result is used for scope ids only. It
+   adds no power the role lacked (the role can already set `app.tenant_id` to any value, so isolation against a *compromised
+   data plane* is not a property of RLS and is not claimed); it makes the one cross-scope read explicit. Any further exception
+   belongs in this list, with its test, before it is merged.
 
 ## 4. Data protection
 

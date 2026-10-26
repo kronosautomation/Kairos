@@ -175,3 +175,20 @@ stages:
       displayName: Secret pattern scan
     - pwsh: ./docker/pin-images.ps1 -Check
       displayName: Every container image pinned to a digest
+
+  - job: ReleaseTooling
+    displayName: The release checks can fail
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 20
+    steps:
+    - checkout: self
+      fetchDepth: 1
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        useGlobalJson: true
+    - pwsh: ./build/release/Install-ReleaseTools.ps1
+      displayName: Install cosign and syft (pinned versions, pinned hashes)
+    - pwsh: ./build/release/Test-ReleaseTooling.ps1
+      displayName: Unsigned, tampered, wrong-key, changed and incomplete inputs are all refused (docs/RELEASE.md)
