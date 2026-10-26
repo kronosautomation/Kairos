@@ -46,6 +46,16 @@ public sealed record WorkflowStarted(
     /// restart, continues the same trace. It is readable metadata (random ids only), never derived from a payload.
     /// </summary>
     public string TraceContext { get; init; } = "";
+
+    /// <summary>
+    /// Who started the run: the authenticated principal the host verified, as <c>role:subject</c> (see <see cref="Principal.AuditName"/>), or empty when the start was not made by an
+    /// authenticated caller (an embedded client, a bus message) or the run was written before this was recorded. It is readable metadata, like workflow names: an identifier
+    /// the identity provider issued, never a payload. Only the host that verified the caller sets it, so a caller cannot choose it. A run that continues as new keeps it.
+    /// </summary>
+    public string StartedBy { get; init; } = "";
+
+    /// <summary>Longest <see cref="StartedBy"/> that is recorded (a role name, a colon and a subject of at most 255 characters).</summary>
+    public const int MaxStartedByLength = 280;
 }
 
 public sealed record ActivityScheduled(

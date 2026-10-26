@@ -60,7 +60,8 @@ public sealed record AuditEntry(Guid TenantId, Guid NamespaceId, Guid? RunId, st
 /// <param name="Input">The workflow input, opaque to the server (sealed on the client when encryption is on).</param>
 /// <param name="Now">The start time recorded in history.</param>
 /// <param name="TraceContext">W3C <c>traceparent</c> of the span that started the run, recorded in history (empty when there is none).</param>
-public sealed record StartRunRequest(RunKey Run, string WorkflowId, string WorkflowType, string BuildId, byte[] Input, DateTimeOffset Now, string TraceContext = "");
+/// <param name="StartedBy">The verified principal that started the run (<see cref="Principal.AuditName"/>), recorded in history; empty when there is none. At most <see cref="WorkflowStarted.MaxStartedByLength"/> characters.</param>
+public sealed record StartRunRequest(RunKey Run, string WorkflowId, string WorkflowType, string BuildId, byte[] Input, DateTimeOffset Now, string TraceContext = "", string StartedBy = "");
 
 /// <summary>The outcome of starting a run.</summary>
 /// <param name="RunId">The new run, or the existing one when deduplicated.</param>

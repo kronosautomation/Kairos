@@ -15,7 +15,7 @@ internal static class EventEncoder
     /// <summary>Upper bound of the encoded size of <paramref name="e"/>.</summary>
     public static int MaxSize(HistoryEvent e) => HeaderSize + e switch
     {
-        WorkflowStarted x => StringMax(x.WorkflowType) + StringMax(x.BuildId) + BytesMax(x.Input) + 16 + TraceMax(x.TraceContext),
+        WorkflowStarted x => StringMax(x.WorkflowType) + StringMax(x.BuildId) + BytesMax(x.Input) + 16 + TraceMax(x.TraceContext) + (x.StartedBy.Length == 0 ? 0 : StringMax(x.StartedBy)),
         WorkflowContinued x => 16 + BytesMax(x.Input),
         PatchMarker x => StringMax(x.PatchId),
         ActivityScheduled x => 4 + StringMax(x.ActivityType) + BytesMax(x.Input) + PolicyMax(x.RetryPolicy) + TraceMax(x.TraceContext),
@@ -50,7 +50,18 @@ internal static class EventEncoder
                 w.WriteString(x.BuildId);
                 w.WriteBytes(x.Input);
                 w.WriteGuid(x.PreviousRunId);
-                WriteTrace(ref w, x.TraceContext);
+                if (x.StartedBy.Length > 0)
+                {
+                    // Trailing and optional, after the trace context: a run without it keeps its exact encoding and hash. When it is present the trace context is
+                    // always written first (possibly empty), so the two optional fields can never be mistaken for one another.
+                    w.WriteString(x.TraceContext);
+                    w.WriteString(x.StartedBy);
+                }
+                else
+                {
+                    WriteTrace(ref w, x.TraceContext);
+                }
+
                 break;
             case WorkflowContinued x:
                 w.WriteGuid(x.NewRunId);

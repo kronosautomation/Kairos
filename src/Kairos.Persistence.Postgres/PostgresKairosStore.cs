@@ -45,6 +45,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             request.Run.TenantId, request.Run.NamespaceId, request.Run.RunId, 0, request.Now, request.WorkflowType, request.BuildId, request.Input)
         {
             TraceContext = request.TraceContext,
+            StartedBy = StoreRules.CheckStartedBy(request.StartedBy),
         };
         HistoryEvent first = StoreRules.Seal(started, 1, HashChain.GenesisHash);
         byte[] body = HistoryEventCodec.Encode(first);
@@ -378,7 +379,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 buildId = reader.GetString(1);
                 if (!reader.IsDBNull(2) && HistoryEventCodec.Decode(reader.GetFieldValue<byte[]>(2), NoHash, NoHash) is WorkflowStarted origin)
                 {
-                    started = started with { TraceContext = origin.TraceContext }; // one trace across the whole chain
+                    started = started with { TraceContext = origin.TraceContext, StartedBy = origin.StartedBy }; // one trace and one starter across the whole chain
                 }
             }
 

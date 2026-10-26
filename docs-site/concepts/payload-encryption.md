@@ -8,7 +8,7 @@ leaves it. Kairos, and the database under it, store ciphertext. This page says h
 - Each payload is encrypted with **AES-256-GCM** under a random **data key**.
 - The data key is **wrapped** by your key provider (Key Vault, KMS, a local key ring) and the wrapped key is stored in the payload's own header. Kairos never sees a master key or an unwrapped data key.
 - The encryption binds each payload to its **tenant, namespace, run, field and id**. A ciphertext copied into another run, another field or another tenant does not open.
-- Event types, names, ids, sequence numbers and timestamps stay readable so that the system can route and index work. Keep secrets out of those.
+- Event types, names, ids, the identifier of whoever started a run, sequence numbers and timestamps stay readable so that the system can route and index work. Keep secrets out of those.
 
 ## What one data key covers
 

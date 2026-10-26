@@ -23,6 +23,21 @@ public static class StoreRules
         }
     }
 
+    /// <summary>
+    /// The starter recorded in <see cref="WorkflowStarted.StartedBy"/>: empty, or a printable identifier of at most <see cref="WorkflowStarted.MaxStartedByLength"/> characters.
+    /// Anything else is a bug in the host that built it, so it throws rather than recording something that could not be read back.
+    /// </summary>
+    public static string CheckStartedBy(string startedBy)
+    {
+        ArgumentNullException.ThrowIfNull(startedBy);
+        if (startedBy.Length > WorkflowStarted.MaxStartedByLength || startedBy.Any(char.IsControl))
+        {
+            throw new ArgumentException("The starter must be a printable identifier of at most " + WorkflowStarted.MaxStartedByLength + " characters.", nameof(startedBy));
+        }
+
+        return startedBy;
+    }
+
     /// <summary>The audit action written when a run is asked to stop.</summary>
     public const string CancelAuditAction = "CancelRun";
 

@@ -32,6 +32,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
                 request.Run.TenantId, request.Run.NamespaceId, request.Run.RunId, 0, request.Now, request.WorkflowType, request.BuildId, request.Input)
             {
                 TraceContext = request.TraceContext,
+                StartedBy = StoreRules.CheckStartedBy(request.StartedBy),
             });
             EnsureWorkflowTask(scope, run, request.Now);
             return ValueTask.FromResult(new StartRunResult(request.Run.RunId, true));
@@ -174,6 +175,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         {
             PreviousRunId = previous.Key.RunId,
             TraceContext = previous.History.Count > 0 && previous.History[0] is WorkflowStarted first ? first.TraceContext : "", // one trace across the whole chain
+            StartedBy = previous.History.Count > 0 && previous.History[0] is WorkflowStarted origin ? origin.StartedBy : "", // and one starter
         });
         EnsureWorkflowTask(scope, next, now);
     }

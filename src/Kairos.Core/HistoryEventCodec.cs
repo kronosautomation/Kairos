@@ -101,7 +101,26 @@ public static class HistoryEventCodec
         string build = r.ReadString();
         byte[] input = r.ReadBytes();
         Guid previous = r.ReadGuid();
-        return new WorkflowStarted(tenant, ns, run, seq, ts, type, build, input) { PreviousRunId = previous, TraceContext = r.AtEnd ? "" : ReadTrace(ref r) };
+        string trace = "";
+        string startedBy = "";
+        if (!r.AtEnd)
+        {
+            trace = r.ReadString();
+            if (!r.AtEnd)
+            {
+                startedBy = r.ReadString();
+                if (startedBy.Length == 0 || startedBy.Length > WorkflowStarted.MaxStartedByLength)
+                {
+                    throw new FormatException("Invalid started-by."); // an empty one is encoded by leaving it out
+                }
+            }
+            else if (trace.Length == 0)
+            {
+                throw new FormatException("Non-canonical trace context."); // an empty one is encoded by leaving it out, unless a started-by follows
+            }
+        }
+
+        return new WorkflowStarted(tenant, ns, run, seq, ts, type, build, input) { PreviousRunId = previous, TraceContext = trace, StartedBy = startedBy };
     }
 
     private static ActivityScheduled ReadScheduled(ref Reader r, Guid tenant, Guid ns, Guid run, long seq, DateTimeOffset ts)

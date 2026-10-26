@@ -33,7 +33,9 @@ the live system does not accept such a gap. Keep that in mind when you compare e
 ## Payloads and sizes
 
 Payloads are stored as opaque bytes. With payload encryption enabled they are sealed before they leave your application, and the
-history holds ciphertext. Event types, names, sequence numbers and timestamps stay readable so that the system can route and index work.
+history holds ciphertext. Event types, names, sequence numbers and timestamps stay readable so that the system can route and index work. So does who started a run: when the server (or another host that has
+authenticated its caller) starts a run, it records the caller as `role:subject`, using the identifier your identity provider issued. It is never taken from the request, and
+a run that continues as new keeps it. Runs started by an embedded client, or before this was recorded, have none.
 Keep secrets and personal data out of workflow and activity *names* and out of ids. How payloads are sealed, and what one data key covers, is on [Payload encryption and its limits](payload-encryption.md).
 
 A run's history has a size limit: **50,000 events by default**, configurable per store. A workflow is expected to hand over to a fresh

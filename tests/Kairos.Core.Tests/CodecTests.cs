@@ -10,6 +10,9 @@ public sealed class CodecTests
     public static TheoryData<HistoryEvent> AllEventTypes() =>
     [
         new WorkflowStarted(T, N, R, 1, Ts, "wf-é", "build-1", [1, 2, 3]),
+        new WorkflowStarted(T, N, R, 1, Ts, "wf", "b", [1]) { TraceContext = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" },
+        new WorkflowStarted(T, N, R, 1, Ts, "wf", "b", [1]) { StartedBy = "Operator:user-1" },
+        new WorkflowStarted(T, N, R, 1, Ts, "wf", "b", [1]) { TraceContext = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", StartedBy = "Admin:ü-2" },
         new ActivityScheduled(T, N, R, 2, Ts, 7, "act", [9], RetryPolicy.Default with { NonRetryableErrorTypes = ["A", "B"], BackoffCoefficient = 1.5 }),
         new ActivityCompleted(T, N, R, 3, Ts, 7, [4, 5]),
         new ActivityFailed(T, N, R, 4, Ts, 7, 2, "TimeoutException", "ünï", true),
@@ -43,12 +46,62 @@ public sealed class CodecTests
         byte[] body = HistoryEventCodec.Encode(HashChain.Seal(e, HashChain.GenesisHash));
         byte[] hash = new byte[32];
 
+        HistoryEvent original = HashChain.Seal(e, HashChain.GenesisHash);
         for (int length = 0; length < body.Length; length++)
         {
-            Assert.Throws<FormatException>(() => HistoryEventCodec.Decode(body.AsSpan(0, length), hash, hash));
+            try
+            {
+                HistoryEvent shorter = HistoryEventCodec.Decode(body.AsSpan(0, length), hash, hash);
+
+                // Trailing fields are optional, so a body cut exactly where one begins is the older spelling of a different event. It must decode to that event and to
+                // nothing else: its canonical encoding is the prefix, and its hash is not the original's, so a chain would reject the swap.
+                Assert.IsType<WorkflowStarted>(e);
+                Assert.Equal(body.AsSpan(0, length).ToArray(), HistoryEventCodec.Encode(shorter));
+                Assert.NotEqual(original.Hash, HashChain.ComputeHash(shorter, hash));
+            }
+            catch (FormatException)
+            {
+            }
         }
 
         Assert.Throws<FormatException>(() => HistoryEventCodec.Decode([.. body, 0], hash, hash));
+    }
+
+    [Fact]
+    public void A_run_without_a_starter_keeps_the_encoding_and_hash_it_had_before_the_field_existed()
+    {
+        // The bytes below are what this event encoded to before StartedBy existed: the header, the three strings and the previous run id, nothing after.
+        var plain = new WorkflowStarted(T, N, R, 1, Ts, "wf", "b", [1]);
+        byte[] body = HistoryEventCodec.Encode(HashChain.Seal(plain, HashChain.GenesisHash));
+        var withTrace = plain with { TraceContext = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" };
+        byte[] traced = HistoryEventCodec.Encode(HashChain.Seal(withTrace, HashChain.GenesisHash));
+        var withStarter = plain with { StartedBy = "Operator:u" };
+        byte[] started = HistoryEventCodec.Encode(HashChain.Seal(withStarter, HashChain.GenesisHash));
+
+        Assert.Equal(body.Length + 4 + withTrace.TraceContext.Length, traced.Length);
+        Assert.Equal(body.Length + 4 + 0 + 4 + "Operator:u".Length, started.Length); // an empty trace is written, then the starter
+        Assert.NotEqual(HashChain.Seal(plain, HashChain.GenesisHash).Hash, HashChain.Seal(withStarter, HashChain.GenesisHash).Hash); // the starter is covered by the chain
+    }
+
+    [Fact]
+    public void A_starter_that_is_not_canonical_is_rejected()
+    {
+        var withStarter = new WorkflowStarted(T, N, R, 1, Ts, "wf", "b", [1]) { StartedBy = "Operator:u" };
+        byte[] good = HistoryEventCodec.Encode(HashChain.Seal(withStarter, HashChain.GenesisHash));
+        var noStarter = new WorkflowStarted(T, N, R, 1, Ts, "wf", "b", [1]);
+        byte[] plain = HistoryEventCodec.Encode(HashChain.Seal(noStarter, HashChain.GenesisHash));
+
+        // An empty trace followed by nothing is the same event as one without either: only one spelling is accepted.
+        byte[] emptyTrace = [.. plain, 0, 0, 0, 0];
+        Assert.Throws<FormatException>(() => HistoryEventCodec.Decode(emptyTrace, new byte[32], new byte[32]));
+        // An empty starter after a trace is likewise the spelling of "no starter".
+        byte[] emptyStarter = [.. good[..^("Operator:u".Length + 4)], 0, 0, 0, 0];
+        Assert.Throws<FormatException>(() => HistoryEventCodec.Decode(emptyStarter, new byte[32], new byte[32]));
+        // Longer than the bound.
+        var tooLong = withStarter with { StartedBy = new string('x', WorkflowStarted.MaxStartedByLength + 1) };
+        Assert.Throws<ArgumentException>(() => StoreRules.CheckStartedBy(tooLong.StartedBy));
+        Assert.Throws<ArgumentException>(() => StoreRules.CheckStartedBy("Operator:\nu"));
+        Assert.Equal("", StoreRules.CheckStartedBy(""));
     }
 
     [Fact]

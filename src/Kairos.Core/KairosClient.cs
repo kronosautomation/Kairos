@@ -44,9 +44,25 @@ public sealed class KairosClient
         _newSignalId = newSignalId ?? (() => Guid.CreateVersion7(time.GetUtcNow()).ToString("N"));
     }
 
-    public async ValueTask<StartRunResult> StartAsync(
+    public ValueTask<StartRunResult> StartAsync(
         TenantScope scope, string workflowId, string workflowType, byte[] input, string buildId = DefaultBuildId,
+        CancellationToken cancellationToken = default) =>
+        StartCoreAsync(scope, workflowId, workflowType, input, buildId, "", cancellationToken);
+
+    /// <summary>
+    /// Starts a run on behalf of a caller the host has already authenticated, and records who in the run's history (<see cref="WorkflowStarted.StartedBy"/>).
+    /// Only a host that verified <paramref name="verifiedPrincipal"/> may call this: the name is evidence, so it must never be taken from the request.
+    /// </summary>
+    public ValueTask<StartRunResult> StartAsync(
+        Principal verifiedPrincipal, string workflowId, string workflowType, byte[] input, string buildId = DefaultBuildId,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(verifiedPrincipal);
+        return StartCoreAsync(verifiedPrincipal.Scope, workflowId, workflowType, input, buildId, verifiedPrincipal.AuditName, cancellationToken);
+    }
+
+    private async ValueTask<StartRunResult> StartCoreAsync(
+        TenantScope scope, string workflowId, string workflowType, byte[] input, string buildId, string startedBy, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(workflowId);
         ArgumentNullException.ThrowIfNull(input);
@@ -70,7 +86,7 @@ public sealed class KairosClient
         {
             byte[] sent = _crypto is null ? input : await _crypto.SealAsync(scope, run.RunId, "start", 0, input, cancellationToken).ConfigureAwait(false);
             StartRunResult result = await _store.StartRunAsync(
-                new StartRunRequest(run, workflowId, workflowType, buildId, sent, _time.GetUtcNow(), trace), cancellationToken).ConfigureAwait(false);
+                new StartRunRequest(run, workflowId, workflowType, buildId, sent, _time.GetUtcNow(), trace, StoreRules.CheckStartedBy(startedBy)), cancellationToken).ConfigureAwait(false);
             span?.SetTag(KairosTags.RunId, result.RunId.ToString("D"));
             span?.SetTag("kairos.run.deduplicated", !result.Started);
             if (result.Started)

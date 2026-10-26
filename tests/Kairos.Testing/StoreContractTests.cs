@@ -277,6 +277,28 @@ public abstract partial class StoreContractTests
     }
 
     [Fact]
+    public async Task A_run_records_who_started_it_and_a_continued_run_keeps_it()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        StartRunResult started = await client.StartAsync(new Principal(A, Role.Operator, "user-1", null), "by-1", "wf", [], cancellationToken: Ct);
+        StartRunResult anonymous = await client.StartAsync(A, "by-2", "wf", [], cancellationToken: Ct);
+        var run = new RunKey(A.TenantId, A.NamespaceId, started.RunId);
+
+        IReadOnlyList<HistoryEvent> history = await store.GetHistoryAsync(run, Ct);
+        Assert.Equal("Operator:user-1", ((WorkflowStarted)history[0]).StartedBy);
+        AssertChainIntact(history); // the starter is part of what the chain covers
+        Assert.Equal("", ((WorkflowStarted)(await store.GetHistoryAsync(new RunKey(A.TenantId, A.NamespaceId, anonymous.RunId), Ct))[0]).StartedBy);
+
+        WorkflowTask task = (await store.PollWorkflowTaskAsync(A, ["default"], Time.GetUtcNow(), TimeSpan.FromMinutes(1), Ct))!;
+        Assert.Equal(run.RunId, task.Run.RunId); // the first started is polled first; the continuation below is of this one
+        Guid next = Guid.NewGuid();
+        await store.CompleteWorkflowTaskAsync(task, [new WorkflowContinued(run.TenantId, run.NamespaceId, run.RunId, 0, Time.GetUtcNow(), next, [])], Time.GetUtcNow(), Ct);
+        Assert.Equal("Operator:user-1", ((WorkflowStarted)(await store.GetHistoryAsync(new RunKey(run.TenantId, run.NamespaceId, next), Ct))[0]).StartedBy);
+
+        await Assert.ThrowsAsync<ArgumentException>(async () => await client.StartAsync(new Principal(A, Role.Operator, new string('x', 400), null), "by-3", "wf", [], cancellationToken: Ct));
+    }
+
+    [Fact]
     public async Task Starting_an_existing_workflow_id_is_deduplicated()
     {
         (_, KairosClient client) = await NewAsync();
