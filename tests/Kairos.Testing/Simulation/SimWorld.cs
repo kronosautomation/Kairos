@@ -50,7 +50,7 @@ public sealed class SimWorld
     private readonly SimOptions _options;
     private readonly SimRandom _rng;
     private readonly SimStats _stats = new();
-    private readonly VirtualTimeProvider _time = new();
+    private readonly VirtualTimeProvider _time;
     private readonly IKairosStore _inner;
     private readonly IStoreDiagnostics _diag;
     private readonly FaultInjectingStore _store;
@@ -67,6 +67,7 @@ public sealed class SimWorld
     {
         backend ??= StoreUnderTest.InMemory();
         _patched = options?.StartPatched ?? false;
+        _time = backend.Clock ?? new VirtualTimeProvider();
         _inner = backend.Store;
         _diag = backend.Diagnostics;
         _options = options ?? new SimOptions();

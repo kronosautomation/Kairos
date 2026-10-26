@@ -11,6 +11,12 @@ public interface IStoreDiagnostics
 /// <summary>A store plus its diagnostics; the simulator runs identically against any pair (in-memory, PostgreSQL, ...).</summary>
 public sealed record StoreUnderTest(IKairosStore Store, IStoreDiagnostics Diagnostics)
 {
+    /// <summary>
+    /// The clock the simulator should run on, when the store under test has its own view of time (a server that stamps leases itself must read the same virtual clock the
+    /// simulator advances). Null: the simulator makes its own.
+    /// </summary>
+    public VirtualTimeProvider? Clock { get; init; }
+
     public static StoreUnderTest InMemory()
     {
         var store = new InMemoryKairosStore();

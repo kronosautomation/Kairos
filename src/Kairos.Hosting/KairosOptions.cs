@@ -91,6 +91,18 @@ public sealed class KairosOptions
         return this;
     }
 
+    /// <summary>
+    /// Any store, with a hook the worker loops wait on when there is nothing to do (it should complete when work may be available, or when the given time has passed). A store that
+    /// can be told about new work, such as a remote one, supplies it; <see cref="UseStore(IKairosStore)"/> makes the loops poll on a timer instead.
+    /// </summary>
+    public KairosOptions UseStore(IKairosStore store, Func<TimeSpan, CancellationToken, Task> waitForWork)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(waitForWork);
+        StoreFactory = _ => new StoreHandle(store, waitForWork, null);
+        return this;
+    }
+
     public KairosOptions AddWorkflow(string workflowType, WorkflowFunc workflow, string buildId = KairosClient.DefaultBuildId)
     {
         Workflows.Register(workflowType, buildId, workflow);
