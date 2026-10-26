@@ -29,7 +29,7 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Analyzers | Apache 2.0 | Community | Determinism and secret-handling analyzers |
 | Kairos.Cli | Apache 2.0 | Community | The `kairos` tool: `replay-check` (deploy safety gate), `history export`, `history verify` and `audit verify` (the offline verifier of signed audit evidence; the export that produces it is Business). Token usage recorded in history and `GetUsageAsync` are Core; price tables and budgets are Kairos.Agents.Policies (Pro) |
 | Kairos.Testing, Kairos.Conformance | Apache 2.0 | Community | Simulator test kit and provider conformance suite (customers test their own workflows) |
-| Kairos.Dashboard | Commercial | Pro | Run list, history and replay view, approval inbox |
+| Kairos.Dashboard | Commercial | Pro | Run list, history and replay view, approval inbox, cost by agent and budget meters (priced and enforced by the server) |
 | Kairos.Agents.Policies | Commercial | Pro | Declarative argument-level policy rules (allow, deny, require approval by one or two people, rate limit), versioned and audited policy storage, token/money/step budgets enforced by atomic reservation, price tables with effective dates (the read-only baseline is free). The hooks they plug into are Community: `IRecordedToolPolicy` and recorded decisions, `IModelCallGuard`, `ApprovalRequirement.Count`, `ToolPolicyContext.StartedBy` |
 | Kairos.Mcp.TaskStore | Apache 2.0 | Community | Durable `IMcpTaskStore` for any C# MCP server, backed by Kairos runs (the adoption entry point) |
 | Kairos.Agents.McpClient | Apache 2.0 | Community | Durable, idempotent MCP client steps for agent workflows |
@@ -39,7 +39,7 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Agents.Mcp | Commercial | Pro | The Kairos MCP server: workflows as tools, approvals as input requests with verified approvers, operator tools |
 | Kairos.Cloud.Azure, .Aws, .Gcp | Commercial | Pro | Managed key, identity, blob and event adapters (self-hosted equivalents stay free) |
 | Kairos.Telemetry | Commercial | Pro | Packaged dashboards (Grafana, Azure Monitor workbooks) and alert rules. Raw spans, metrics, the GenAI conventions and the Aspire integration are Community and stay in Core, Hosting and Kairos.Aspire.Hosting |
-| Kairos.Server, Kairos.Admin | Commercial | Business | Standalone multi-tenant data plane and control plane |
+| Kairos.Server, Kairos.Admin | Commercial | Business | Standalone multi-tenant data plane and control plane, including the endpoints to read and (Admin only) change policy, prices and budgets |
 | Kairos.Dashboard.Enterprise | Commercial | Business | SSO, roles, audit export, bulk operator console |
 | Kairos.Agents.AgentFramework | Commercial | Business | Microsoft Agent Framework durability provider |
 | Offline license, escrow, custom terms | Commercial | Enterprise | Terms, not packages |
