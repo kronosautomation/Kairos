@@ -3,10 +3,11 @@ using System.Threading.Channels;
 namespace Kairos.Persistence.Postgres;
 
 /// <summary>
-/// Experimental group commit: concurrent workers hand their workflow-task completions to one writer that
+/// Group commit: concurrent workers hand their workflow-task completions to one writer that
 /// commits up to <c>maxBatch</c> of them in a single round trip (several writers keep batches in flight concurrently) and transaction, waiting at most <c>linger</c> for the batch to
-/// fill. Trades a little latency for far fewer commits under load. Not wired into <c>AddKairos</c> by default; the benchmark
-/// (benchmarks/Kairos.Benchmarks, <c>groupcommit</c>) decides whether and when it should be.
+/// fill. Trades a little latency for far fewer commits under load. Each task keeps its own guards (lease token, last sequence, last hash), so a stale or forged
+/// completion fails alone; a request the store refuses while preparing is retried task by task so it cannot fail its neighbours. Not wired into <c>AddKairos</c> by default; the benchmarks
+/// (<c>benchmarks/Kairos.Benchmarks</c>, <c>groupcommit</c>, and the server benchmark) decide whether and when it should be.
 /// </summary>
 public sealed class WorkflowTaskGroupCommitter : IAsyncDisposable
 {
@@ -85,8 +86,33 @@ public sealed class WorkflowTaskGroupCommitter : IAsyncDisposable
                 foreach (IGrouping<TenantScope, Item> group in batch.GroupBy(i => i.Completion.Task.Run.Scope))
                 {
                     Item[] items = [.. group];
-                    CompletionOutcome[] outcomes = await _store.CompleteWorkflowTasksAsync(
-                        [.. items.Select(i => i.Completion)], items.Max(i => i.Now), CancellationToken.None).ConfigureAwait(false);
+                    CompletionOutcome[] outcomes;
+                    try
+                    {
+                        outcomes = await _store.CompleteWorkflowTasksAsync(
+                            [.. items.Select(i => i.Completion)], items.Max(i => i.Now), CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (ArgumentException) when (items.Length > 1)
+                    {
+                        // The store refused a request while preparing the batch, before writing anything. Complete the tasks one by one so that only the offender gets the error.
+                        foreach (Item single in items)
+                        {
+                            try
+                            {
+                                single.Result.SetResult(await _store.CompleteWorkflowTaskAsync(single.Completion.Task, single.Completion.NewEvents, single.Now, CancellationToken.None).ConfigureAwait(false));
+                            }
+                            catch (Exception ex)
+                            {
+                                single.Result.TrySetException(ex);
+                            }
+
+                            Interlocked.Increment(ref _batches);
+                            Interlocked.Increment(ref _completions);
+                        }
+
+                        continue;
+                    }
+
                     for (int i = 0; i < items.Length; i++)
                     {
                         items[i].Result.SetResult(outcomes[i]);
