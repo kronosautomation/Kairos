@@ -187,6 +187,78 @@ public sealed class AgentAuditTests
         Assert.Equal(records.OrderBy(r => r.At).Select(r => r.At), records.Select(r => r.At));
     }
 
+    // ---- the markers the server lists approvals from -----------------------------------------------------------------
+
+    private static async Task<string[]> WaitingAsync(AgentHarness h, RunKey run) =>
+        [.. RunProjection.Of(await h.Store.GetHistoryAsync(run, default)).Pending.Select(p => p.ApprovalId)]; // from the stored history: no key, nothing opened
+
+    private static AgentHarness TwoApprovals(IPayloadProtector? protector = null, TimeSpan? firstTimeout = null)
+    {
+        AgentHarness h = new(b => b.AddModel("m", AgentHarness.Echo())
+                .ConfigureBaselinePolicy(p => p.RequireApproval("refund", new ApprovalRequirement(Roles: ["finance"], Timeout: firstTimeout)))
+                .AddTool(AgentHarness.WriteTool("refund", _ => "refunded")), protector: protector);
+        h.Workflow("two", async (ctx, _) =>
+        {
+            await ctx.InvokeToolWithOutcomeAsync(new Microsoft.Extensions.AI.FunctionCallContent("c1", "refund", AgentHarness.WireArgs("{}")));
+            await ctx.InvokeToolWithOutcomeAsync(new Microsoft.Extensions.AI.FunctionCallContent("c2", "refund", AgentHarness.WireArgs("{}")));
+            return [];
+        });
+        return h;
+    }
+
+    [Fact]
+    public async Task A_waiting_approval_is_listed_from_readable_markers_and_leaves_the_list_when_it_is_decided_while_the_run_goes_on()
+    {
+        AgentHarness h = TwoApprovals(new ReversingProtector());
+        RunKey run = await h.StartAsync("two");
+        await h.RunAsync(run);
+        string first = Assert.Single(AgentHistory.PendingApprovals(await h.HistoryAsync(run))).ApprovalId;
+        Assert.Equal([first], await WaitingAsync(h, run));
+
+        await h.Agent.ApproveAsync(run, first, Alice);
+        await h.RunAsync(run); // the run now waits for a second approval
+
+        string second = Assert.Single(AgentHistory.PendingApprovals(await h.HistoryAsync(run))).ApprovalId;
+        Assert.NotEqual(first, second);
+        Assert.Equal([second], await WaitingAsync(h, run)); // the first is resolved, the second is waiting, and the run is still open
+
+        await h.Agent.ApproveAsync(run, second, Alice);
+        Assert.Equal(RunState.Completed, await h.RunAsync(run));
+        Assert.Empty(await WaitingAsync(h, run));
+    }
+
+    [Fact]
+    public async Task A_rejected_approval_and_one_that_timed_out_also_leave_the_list()
+    {
+        AgentHarness h = TwoApprovals(firstTimeout: TimeSpan.FromMinutes(5));
+        RunKey run = await h.StartAsync("two");
+        await h.RunAsync(run, jumpClock: false);
+        string first = Assert.Single(await WaitingAsync(h, run));
+
+        h.Time.Advance(TimeSpan.FromMinutes(6));
+        await h.RunAsync(run, jumpClock: false); // the first expired; the run asked for the second
+
+        string second = Assert.Single(await WaitingAsync(h, run));
+        Assert.NotEqual(first, second);
+        await h.Agent.RejectAsync(run, second, Alice, "no");
+        Assert.Equal(RunState.Completed, await h.RunAsync(run, jumpClock: false));
+        Assert.Empty(await WaitingAsync(h, run));
+    }
+
+    [Fact]
+    public async Task A_decision_that_the_verifier_refused_leaves_the_approval_waiting()
+    {
+        AgentHarness h = TwoApprovals();
+        RunKey run = await h.StartAsync("two");
+        await h.RunAsync(run);
+        string id = Assert.Single(await WaitingAsync(h, run));
+
+        await h.Agent.ApproveAsync(run, id, Mallory); // not finance
+        await h.RunAsync(run);
+
+        Assert.Equal([id], await WaitingAsync(h, run));
+    }
+
     private static string Dump(IEnumerable<AgentAuditRecord> records) => string.Join("\n", records.Select(r => r.ToString()));
 
     private sealed class ReversingProtector : IPayloadProtector

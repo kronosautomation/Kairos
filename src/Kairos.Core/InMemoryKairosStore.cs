@@ -412,6 +412,12 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
+    public ValueTask<UsageSummary> GetUsageSummaryAsync(TenantScope scope, DateOnly firstDay, DateOnly lastDay, CancellationToken cancellationToken) =>
+        RunAggregates.ScanUsageAsync(this, scope, firstDay, lastDay, cancellationToken);
+
+    public ValueTask<PendingApprovalPage> GetPendingApprovalsAsync(TenantScope scope, int limit, PendingApprovalCursor? after, CancellationToken cancellationToken) =>
+        RunAggregates.ScanPendingAsync(this, scope, limit, after, cancellationToken);
+
     public ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken)
     {
         lock (_gate)

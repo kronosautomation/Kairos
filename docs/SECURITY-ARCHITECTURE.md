@@ -186,7 +186,7 @@ the carried input of continue-as-new. Each signal also has a client-generated id
 a redelivered id is ignored.
 
 **Not protected, by design (readable metadata):** workflow, activity and signal *names*, error *types*, event types and sequence,
-timer durations, timestamps, run and workflow ids, sizes of payloads, the tenant structure, and who started a run (`WorkflowStarted.StartedBy`: the authenticated
+timer durations, timestamps, run and workflow ids, sizes of payloads, the tenant structure, approval ids with the time each was asked for and whether it has been resolved (readable patch markers, `kairos.approval.requested:` and `kairos.approval.resolved:`, so a server can list what is waiting without opening anything), and who started a run (`WorkflowStarted.StartedBy`: the authenticated
 principal as `role:subject`, set only by the host that verified the caller, never taken from a request, kept across continue-as-new). Do not put secrets or personal data in
 names or ids; put them in payloads.
 

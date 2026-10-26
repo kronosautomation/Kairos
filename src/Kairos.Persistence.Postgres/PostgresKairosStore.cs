@@ -13,7 +13,7 @@ namespace Kairos.Persistence.Postgres;
 /// <summary>One workflow-task completion inside a group commit.</summary>
 public sealed record WorkflowTaskCompletion(WorkflowTask Task, IReadOnlyList<HistoryEvent> NewEvents);
 
-public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresStoreOptions? options = null) : IKairosStore
+public sealed partial class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresStoreOptions? options = null) : IKairosStore
 {
     private readonly PostgresStoreOptions _options = options ?? new PostgresStoreOptions();
 

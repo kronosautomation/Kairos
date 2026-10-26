@@ -178,6 +178,15 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
     public ValueTask<IReadOnlyList<RunSummary>> ListRunsAsync(TenantScope scope, RunFilter filter, int limit, CancellationToken cancellationToken) =>
         Faulty(nameof(ListRunsAsync), () => inner.ListRunsAsync(scope, filter, limit, cancellationToken));
 
+    public ValueTask<UsageSummary> GetUsageSummaryAsync(TenantScope scope, DateOnly firstDay, DateOnly lastDay, CancellationToken cancellationToken) =>
+        Faulty(nameof(GetUsageSummaryAsync), () => inner.GetUsageSummaryAsync(scope, firstDay, lastDay, cancellationToken));
+
+    public ValueTask<PendingApprovalPage> GetPendingApprovalsAsync(TenantScope scope, int limit, PendingApprovalCursor? after, CancellationToken cancellationToken) =>
+        Faulty(nameof(GetPendingApprovalsAsync), () => inner.GetPendingApprovalsAsync(scope, limit, after, cancellationToken));
+
+    public ValueTask<int> ProjectAggregatesAsync(TenantScope scope, int maxRuns, CancellationToken cancellationToken) =>
+        Faulty(nameof(ProjectAggregatesAsync), () => inner.ProjectAggregatesAsync(scope, maxRuns, cancellationToken));
+
     public ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
         Faulty(nameof(GetRunGroupsAsync), () => inner.GetRunGroupsAsync(scope, closedSince, cancellationToken));
 

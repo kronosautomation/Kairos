@@ -45,6 +45,15 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask<IReadOnlyList<RunSummary>> ListRunsAsync(TenantScope scope, RunFilter filter, int limit, CancellationToken cancellationToken) =>
         inner.ListRunsAsync(scope, filter, limit, cancellationToken);
 
+    public virtual ValueTask<UsageSummary> GetUsageSummaryAsync(TenantScope scope, DateOnly firstDay, DateOnly lastDay, CancellationToken cancellationToken) =>
+        inner.GetUsageSummaryAsync(scope, firstDay, lastDay, cancellationToken);
+
+    public virtual ValueTask<PendingApprovalPage> GetPendingApprovalsAsync(TenantScope scope, int limit, PendingApprovalCursor? after, CancellationToken cancellationToken) =>
+        inner.GetPendingApprovalsAsync(scope, limit, after, cancellationToken);
+
+    public virtual ValueTask<int> ProjectAggregatesAsync(TenantScope scope, int maxRuns, CancellationToken cancellationToken) =>
+        inner.ProjectAggregatesAsync(scope, maxRuns, cancellationToken);
+
     public virtual ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
         inner.GetRunGroupsAsync(scope, closedSince, cancellationToken);
 

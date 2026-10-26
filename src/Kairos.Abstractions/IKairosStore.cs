@@ -208,6 +208,29 @@ public interface IKairosStore
     ValueTask<IReadOnlyList<RunSummary>> ListRunsAsync(TenantScope scope, RunFilter filter, int limit, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This store cannot list runs.");
 
+    /// <summary>
+    /// Model usage by workflow type (an "agent"), UTC day and model for the days <paramref name="firstDay"/> to <paramref name="lastDay"/>, both included, summed over the runs of the scope that recorded
+    /// usage on those days. Only readable counts are summed, so it needs no key and works whatever the application seals. A store that keeps the aggregate first reads the runs that have new events
+    /// (within a budget; <see cref="UsageSummary.Behind"/> says how many are left), so the answer is as new as the last event unless it says it is behind.
+    /// Stores that cannot answer throw <see cref="NotSupportedException"/>.
+    /// </summary>
+    ValueTask<UsageSummary> GetUsageSummaryAsync(TenantScope scope, DateOnly firstDay, DateOnly lastDay, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot summarise usage.");
+
+    /// <summary>
+    /// The approvals runs of the scope are waiting for, oldest first, at most <paramref name="limit"/>, after <paramref name="after"/>. Metadata only: what an approval is about is sealed, and a viewer
+    /// that may open it fetches the run. Runs that asked before the agent runtime recorded the readable marker for it (<c>RunProjection.ApprovalRequestedMarker</c>) are not listed.
+    /// Stores that cannot answer throw <see cref="NotSupportedException"/>.
+    /// </summary>
+    ValueTask<PendingApprovalPage> GetPendingApprovalsAsync(TenantScope scope, int limit, PendingApprovalCursor? after, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot list pending approvals.");
+
+    /// <summary>
+    /// Reads the runs that have events the aggregates have not seen (at most <paramref name="maxRuns"/>) and brings the aggregates up to date with them, outside the hot path.
+    /// Returns how many runs were read. Stores that answer by scanning have nothing to do and return zero.
+    /// </summary>
+    ValueTask<int> ProjectAggregatesAsync(TenantScope scope, int maxRuns, CancellationToken cancellationToken) => ValueTask.FromResult(0);
+
     /// <summary>The workflow types and builds with runs in this scope and how many are open or closed. Closed runs are counted from <paramref name="closedSince"/> (null: all).</summary>
     ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This store cannot list runs.");

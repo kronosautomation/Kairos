@@ -12,7 +12,7 @@ public abstract partial class StoreContractTests
 {
     private sealed record Arena(
         IKairosStore Store, KairosClient Client, RunKey Parked, RunKey Finished, RunKey Leased, RunKey Busy,
-        WorkflowTask WorkflowTask, ActivityTask ActivityTask, string[] WorkflowIds);
+        WorkflowTask WorkflowTask, ActivityTask ActivityTask, string[] WorkflowIds, RunKey Agent);
 
     private static readonly TenantScope MixedNamespace = new(A.TenantId, B.NamespaceId);
     private static readonly TenantScope MixedTenant = new(B.TenantId, A.NamespaceId);
@@ -31,6 +31,9 @@ public abstract partial class StoreContractTests
     private async Task<Arena> BuildArenaAsync()
     {
         (IKairosStore store, KairosClient client) = await NewAsync();
+
+        // An agent that spent tokens and is waiting for an approval: what the aggregates would give away if a foreign scope could read them. It waits for a signal, so no task of it is ready.
+        RunKey agent = await StartAgentAsync(store, client, A, "agent", "model-leak", "leak-approval");
 
         // Two runs whose workflow task keeps expiring until the store parks them; one is resumed (an audit entry) and finishes.
         StartRunResult p1 = await client.StartAsync(A, "leak-parked-1", "quick", [], cancellationToken: Ct);
@@ -69,13 +72,13 @@ public abstract partial class StoreContractTests
 
         return new Arena(
             store, client, parked2, parked1, new RunKey(A.TenantId, A.NamespaceId, leased.RunId), new RunKey(A.TenantId, A.NamespaceId, busy.RunId),
-            task, activity, ["leak-parked-1", "leak-parked-2", "leak-busy", "leak-leased"]);
+            task, activity, ["leak-parked-1", "leak-parked-2", "leak-busy", "leak-leased", "agent-leak-approval-agent"], agent);
     }
 
     private async Task<string> SnapshotAsync(Arena a)
     {
         var sb = new System.Text.StringBuilder();
-        foreach (RunKey run in new[] { a.Parked, a.Finished, a.Leased, a.Busy })
+        foreach (RunKey run in new[] { a.Parked, a.Finished, a.Leased, a.Busy, a.Agent })
         {
             IReadOnlyList<HistoryEvent> history = await a.Store.GetHistoryAsync(run, Ct);
             sb.Append(run.RunId).Append(':').Append(await a.Store.GetRunStateAsync(run, Ct)).Append(':').Append(history.Count)
@@ -109,7 +112,7 @@ public abstract partial class StoreContractTests
         foreach (string secret in new[]
         {
             A.TenantId.ToString(), A.NamespaceId.ToString(), a.Parked.RunId.ToString(), a.Finished.RunId.ToString(),
-            a.Leased.RunId.ToString(), a.Busy.RunId.ToString(), "SECRET-CANARY", "leak-busy", "leak-parked",
+            a.Leased.RunId.ToString(), a.Busy.RunId.ToString(), a.Agent.RunId.ToString(), "SECRET-CANARY", "leak-busy", "leak-parked", "leak-approval", "model-leak",
         })
         {
             Assert.DoesNotContain(secret, message, StringComparison.OrdinalIgnoreCase);
@@ -177,6 +180,24 @@ public abstract partial class StoreContractTests
             Assert.Empty(await a.Store.ListRunsAsync(f, new RunFilter(), 1000, Ct)),
         [nameof(IKairosStore.GetRunGroupsAsync)] = async (a, f) =>
             Assert.Empty(await a.Store.GetRunGroupsAsync(f, null, Ct)),
+        [nameof(IKairosStore.GetUsageSummaryAsync)] = async (a, f) =>
+        {
+            DateOnly today = DateOnly.FromDateTime(Time.GetUtcNow().UtcDateTime);
+            UsageSummary foreign = await a.Store.GetUsageSummaryAsync(f, today.AddYears(-1), today.AddYears(1), Ct);
+            Assert.Empty(foreign.Buckets);
+            Assert.Empty(foreign.Runs);
+            Assert.Equal(0, foreign.Behind);
+            Assert.NotEmpty((await a.Store.GetUsageSummaryAsync(A, today.AddYears(-1), today.AddYears(1), Ct)).Buckets); // and the owner still sees its own
+        },
+        [nameof(IKairosStore.GetPendingApprovalsAsync)] = async (a, f) =>
+        {
+            PendingApprovalPage foreign = await a.Store.GetPendingApprovalsAsync(f, 100, null, Ct);
+            Assert.Empty(foreign.Items);
+            Assert.Equal((0, 0), (foreign.Total, foreign.Behind));
+            Assert.Equal("leak-approval", Assert.Single((await a.Store.GetPendingApprovalsAsync(A, 100, null, Ct)).Items).ApprovalId);
+        },
+        [nameof(IKairosStore.ProjectAggregatesAsync)] = async (a, f) =>
+            Assert.Equal(0, await a.Store.ProjectAggregatesAsync(f, 1000, Ct)),
         [nameof(IKairosStore.ExportHistoryAsync)] = async (a, f) =>
         {
             foreach (RunKey run in new[] { a.Busy, a.Finished, a.Parked, a.Leased })

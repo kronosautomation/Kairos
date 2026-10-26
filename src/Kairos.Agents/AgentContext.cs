@@ -258,6 +258,21 @@ internal sealed class AgentContext(AgentsRuntime runtime, IWorkflowContext workf
             RunId = workflow.RunId.ToString("N"),
         };
 
+        // Two readable markers bracket the wait, so that the server can list the approvals runs are waiting for without opening anything (the id is otherwise inside sealed payloads).
+        // Patch markers are replay-neutral: a run recorded before this has none and replays as it did, and a worker that does not know them reads them as the patch markers they are.
+        _ = workflow.IsPatched(RunProjection.ApprovalRequestedMarker + approvalId);
+        try
+        {
+            return await DecideAsync(request, approvalId, wire);
+        }
+        finally
+        {
+            _ = workflow.IsPatched(RunProjection.ApprovalResolvedMarker + approvalId); // decided, timed out, or the run was told to stop
+        }
+    }
+
+    private async Task<ApprovalDecision> DecideAsync(ApprovalRequest request, string approvalId, WireApprovalRequest wire)
+    {
         // This step is the record an approvals inbox reads, and the hook that tells people. A notifier that is down must not
         // fail the run: the request stays open and visible.
         try

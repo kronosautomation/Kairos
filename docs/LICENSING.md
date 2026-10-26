@@ -27,7 +27,7 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Agents | Apache 2.0 | Community | Durable model and tool steps, approvals primitive, sagas/compensation, per-run scoped credentials, baseline tool policy (read-only by default; writes need an allow policy or approval) |
 | Kairos.Cloud.SelfHosted | Apache 2.0 | Community | Vault, mTLS/SPIFFE, file/S3-compatible offload, Kafka/NATS/webhooks |
 | Kairos.Analyzers | Apache 2.0 | Community | Determinism and secret-handling analyzers |
-| Kairos.Cli | Apache 2.0 | Community | The `kairos` tool: `replay-check` (deploy safety gate), `history export` and `history verify`; later `audit verify`. Token usage recorded in history and `GetUsageAsync` are Core; price tables and budgets are Kairos.Agents.Policies (Pro) |
+| Kairos.Cli | Apache 2.0 | Community | The `kairos` tool: `replay-check` (deploy safety gate), `history export`, `history verify` and `audit verify` (the offline verifier of signed audit evidence; the export that produces it is Business). Token usage recorded in history and `GetUsageAsync` are Core; price tables and budgets are Kairos.Agents.Policies (Pro) |
 | Kairos.Testing, Kairos.Conformance | Apache 2.0 | Community | Simulator test kit and provider conformance suite (customers test their own workflows) |
 | Kairos.Dashboard | Commercial | Pro | Run list, history and replay view, approval inbox |
 | Kairos.Agents.Policies | Commercial | Pro | Argument-level policy rules, token/cost/step budgets, policy console (the read-only baseline is free) |
