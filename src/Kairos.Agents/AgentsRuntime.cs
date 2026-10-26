@@ -333,6 +333,26 @@ public sealed class AgentsRuntime
             }
         }
 
+        try
+        {
+            return await ChatAfterReservationAsync(context, request, span, resolve, call, permit, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (call is not null && permit is { Reservation: not null } && IsFinalFailure(context, ex))
+        {
+            // Give back what was held now, so it is not held until a reconciler finds the step failed. A failure that will be retried keeps it: the retry reuses the reservation.
+            await ReleaseAsync(_config.Guard!, call, permit, cancellationToken).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>True when the step will not be tried again: this was its last attempt, or the error is one its retry policy never retries. A cancelled attempt (a lost lease) is not final.</summary>
+    private bool IsFinalFailure(ActivityContext context, Exception ex) =>
+        ex is not OperationCanceledException
+        && (context.Attempt >= _config.ModelRetry.MaximumAttempts || _config.ModelRetry.NonRetryableErrorTypes.Contains(ex.GetType().Name));
+
+    private async Task<byte[]> ChatAfterReservationAsync(
+        ActivityContext context, ChatStepRequest request, Activity? span, Func<RunKey, IChatClient> resolve, ModelCallInfo? call, ModelCallPermit? permit, CancellationToken cancellationToken)
+    {
         IChatClient client = resolve(context.Run);
         AgentTelemetry.Provider(span, client);
         var tools = new List<AITool>(request.Tools.Length);
@@ -392,6 +412,20 @@ public sealed class AgentsRuntime
         };
         return WireCodec.Write(reply, AgentJson.Default.ChatStepResponse);
     }
+
+#pragma warning disable CA1031 // A ledger that cannot release now is reconciled later, and must not hide the failure that is being reported.
+    private static async Task ReleaseAsync(IModelCallGuard guard, ModelCallInfo call, ModelCallPermit permit, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await guard.ReleaseAsync(call, permit, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Debug.WriteLine($"Model call guard could not release: {ex.GetType().Name}");
+        }
+    }
+#pragma warning restore CA1031
 
 #pragma warning disable CA1031 // The call has been made and paid for; a ledger that cannot settle now is reconciled from the recorded usage, and must not make the step run the model again.
     private static async Task SettleAsync(IModelCallGuard guard, ModelCallInfo call, ModelCallPermit permit, UsageRecord? usage, CancellationToken cancellationToken)

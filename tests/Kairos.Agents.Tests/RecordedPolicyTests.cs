@@ -293,7 +293,11 @@ public sealed class RecordedPolicyTests
 
         public Func<ModelCallInfo, ModelCallPermit> Decide { get; set; } = _ => ModelCallPermit.Allow("res");
 
+        public List<ModelCallInfo> Released { get; } = [];
+
         public bool FailToSettle { get; set; }
+
+        public bool FailToRelease { get; set; }
 
         public ValueTask<ModelCallPermit> ReserveAsync(ModelCallInfo request, CancellationToken cancellationToken)
         {
@@ -305,6 +309,12 @@ public sealed class RecordedPolicyTests
         {
             Settled.Add((request, usage));
             return FailToSettle ? throw new InvalidOperationException("the ledger is down") : ValueTask.CompletedTask;
+        }
+
+        public ValueTask ReleaseAsync(ModelCallInfo request, ModelCallPermit permit, CancellationToken cancellationToken)
+        {
+            Released.Add(request);
+            return FailToRelease ? throw new InvalidOperationException("the ledger is down") : ValueTask.CompletedTask;
         }
     }
 
@@ -338,6 +348,70 @@ public sealed class RecordedPolicyTests
         Assert.EndsWith($":{call.ActivityId}", call.IdempotencyKey, StringComparison.Ordinal);
         Assert.Equal(new UsageRecord(10, 5, 0, ""), Assert.Single(guard.Settled).Usage! with { Model = "" });
         Assert.Equal(1, model.CallCount);
+    }
+
+    [Fact]
+    public async Task A_call_that_fails_for_good_releases_what_was_held_on_its_last_attempt_only()
+    {
+        var model = new ScriptedChatClient(_ => throw new InvalidOperationException("the provider is down"));
+        var guard = new ScriptedGuard();
+        AgentHarness h = Chatting(model, guard);
+
+        RunKey run = await h.StartAsync("chat");
+        Assert.Equal(RunState.Failed, await h.RunAsync(run));
+
+        Assert.Equal(3, guard.Reserved.Count); // three attempts reuse one reservation
+        ModelCallInfo released = Assert.Single(guard.Released); // and it is given back once, by the attempt that was the last
+        Assert.Equal(3, released.Attempt);
+        Assert.Equal(guard.Reserved[0].IdempotencyKey, released.IdempotencyKey);
+        Assert.Empty(guard.Settled);
+    }
+
+    [Fact]
+    public async Task An_error_the_step_never_retries_releases_on_the_first_attempt()
+    {
+        var model = new ScriptedChatClient(_ => throw new InvalidOperationException("the request is refused"));
+        var guard = new ScriptedGuard();
+        AgentHarness h = Chatting(model, guard, b => b.WithModelRetry(new RetryPolicy { MaximumAttempts = 5, NonRetryableErrorTypes = [nameof(InvalidOperationException)] }));
+
+        RunKey run = await h.StartAsync("chat");
+        Assert.Equal(RunState.Failed, await h.RunAsync(run));
+
+        Assert.Single(guard.Reserved);
+        Assert.Equal(1, Assert.Single(guard.Released).Attempt);
+    }
+
+    [Fact]
+    public async Task A_call_that_fails_and_then_succeeds_releases_nothing_and_settles_once()
+    {
+        int calls = 0;
+        var model = new ScriptedChatClient(_ => ++calls == 1 ? throw new TimeoutException("slow") : new ChatMessage(ChatRole.Assistant, "hello"));
+        var guard = new ScriptedGuard();
+        AgentHarness h = Chatting(model, guard);
+
+        RunKey run = await h.StartAsync("chat");
+        Assert.Equal(RunState.Completed, await h.RunAsync(run));
+
+        Assert.Empty(guard.Released);
+        Assert.Single(guard.Settled);
+    }
+
+    [Fact]
+    public async Task A_guard_that_cannot_release_does_not_change_how_the_step_failed()
+    {
+        async Task<(string ErrorType, string Message)> FailWith(bool guardBroken)
+        {
+            var model = new ScriptedChatClient(_ => throw new InvalidOperationException("the provider is down"));
+            var guard = new ScriptedGuard { FailToRelease = guardBroken };
+            AgentHarness h = Chatting(model, guard);
+            RunKey run = await h.StartAsync("chat");
+            Assert.Equal(RunState.Failed, await h.RunAsync(run));
+            Assert.Single(guard.Released);
+            WorkflowFailed failed = await h.FailureAsync(run);
+            return (failed.ErrorType, failed.Message);
+        }
+
+        Assert.Equal(await FailWith(guardBroken: false), await FailWith(guardBroken: true));
     }
 
     [Fact]

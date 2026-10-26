@@ -29,7 +29,8 @@ and a call that has not happened yet uses the policy that is current when its de
 
 `UseModelCallGuard` registers an `IModelCallGuard`, asked before every model request. It can reserve what the call may cost, or refuse it: the model is then not called, and the refusal is recorded. A refusal either ends the
 run with a `BudgetExceededException` naming the limit, or asks a person to approve one more call through the ordinary approval flow. A guard that cannot decide stops the call (the step is retried), and a guard that
-cannot record what a finished call cost does not make the step call the model again.
+cannot record what a finished call cost does not make the step call the model again. When a step fails for good (its last attempt, or an error its retry policy never retries) the guard is told to give back what it
+held; a failure that will be retried keeps it, because the retry reuses the reservation.
 
 ## Where the decision is made, and why it is recorded
 

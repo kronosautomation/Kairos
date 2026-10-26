@@ -45,6 +45,12 @@ public interface IModelCallGuard
 
     /// <summary>The call returned; <paramref name="usage"/> is what it reported (recorded with the step). Failure to settle is not an error for the call: whoever reconciles settles from history.</summary>
     ValueTask SettleAsync(ModelCallInfo request, ModelCallPermit permit, UsageRecord? usage, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The call failed for good: this was the last attempt the step may make, or the error is one it never retries. Give back what was held. What earlier attempts that were paid for and failed consumed
+    /// is in history, and whoever reconciles adds it. Not called for a failure that will be retried (the retry reuses the reservation), and failure to release is not an error for the step.
+    /// </summary>
+    ValueTask ReleaseAsync(ModelCallInfo request, ModelCallPermit permit, CancellationToken cancellationToken);
 }
 
 /// <summary>A budget refused a model call and nobody raised it: the run ends.</summary>
