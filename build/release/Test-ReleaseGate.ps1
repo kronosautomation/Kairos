@@ -27,6 +27,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'common.ps1')
 if (-not $Root) { $Root = Get-RepoRoot }
+$PublishedPaths = @($PublishedPaths | ForEach-Object { $_ -split ',' } | Where-Object { $_ }) # "a,b,c" arrives as one string when the script is started with -File
 $problems = New-Object System.Collections.Generic.List[string]
 
 $name = $Tag -replace '^refs/tags/', ''

@@ -186,6 +186,7 @@ try {
     Expect 'a tag with only two version parts fails' { Fails { & $gate 'refs/tags/v1.2' } }
     Set-Content (Join-Path $repo 'README.md') 'Report at https://github.com/REPLACE-ORG/kairos/security/policy'
     Expect 'a place-holder left in published text fails' { Fails { & $gate 'refs/tags/v1.2.3' } }
+    Expect 'the same place-holder is found when the paths arrive as one comma-separated string' { Fails { & (Join-Path $PSScriptRoot 'Test-ReleaseGate.ps1') -Tag 'refs/tags/v1.2.3' -Root $repo -SkipMainCheck -SkipVulnerabilityCheck -PublishedPaths 'SECURITY.md,README.md' *> $null } }
     Set-Content (Join-Path $repo 'README.md') 'A readme.'
     Remove-Item (Join-Path $repo 'SECURITY.md')
     Expect 'a missing SECURITY.md fails' { Fails { & $gate 'refs/tags/v1.2.3' } }
