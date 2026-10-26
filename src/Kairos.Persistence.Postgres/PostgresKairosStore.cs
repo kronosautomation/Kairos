@@ -77,7 +77,7 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             cmd.Parameters.AddWithValue("body", body);
             cmd.Parameters.Add(Ts("now", request.Now));
             batch.BatchCommands.Add(cmd);
-            batch.BatchCommands.Add(Notify(request.Run.Scope));
+            batch.BatchCommands.Add(NotifyIfRunCreated(request.Run.Scope, request.Run.RunId, request.BuildId));
 
             await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
             batch.Connection = conn;
@@ -145,8 +145,11 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
 
         var template = new SignalReceived(run.TenantId, run.NamespaceId, run.RunId, 0, now, signalName, payload) { SignalId = signalId, TraceContext = traceContext };
         await AppendAsync(conn, tx, run, head, [template], cancellationToken).ConfigureAwait(false);
-        await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false);
-        await NotifyAsync(conn, tx, run.Scope, cancellationToken).ConfigureAwait(false);
+        if (await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false) is { } build)
+        {
+            await NotifyAsync(conn, tx, run.Scope, cancellationToken, WorkNotice.Workflow, 1, build).ConfigureAwait(false);
+        }
+
         return true;
     }
 
@@ -270,16 +273,16 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         long[] applied = await Retry(async () =>
         {
             await using NpgsqlBatch batch = Batch(scope);
-            bool notify = false;
+            int scheduled = 0;
             foreach (PreparedCompletion p in group)
             {
                 batch.BatchCommands.Add(p.ToCommand(Clk(CompleteWorkflowSql), scope, now));
-                notify |= p.HasActivities;
+                scheduled += p.ActIds.Length;
             }
 
-            if (notify)
+            if (scheduled > 0)
             {
-                batch.BatchCommands.Add(Notify(scope));
+                batch.BatchCommands.Add(Notify(scope, WorkNotice.Activity, scheduled)); // an upper bound: a stale completion in the group schedules nothing
             }
 
             await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -403,8 +406,11 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
                 await insertEvent.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
 
-            await EnsureWorkflowTaskAsync(conn, tx, next, now, ct).ConfigureAwait(false);
-            await NotifyAsync(conn, tx, run.Scope, ct).ConfigureAwait(false);
+            if (await EnsureWorkflowTaskAsync(conn, tx, next, now, ct).ConfigureAwait(false) is { } nextBuild)
+            {
+                await NotifyAsync(conn, tx, run.Scope, ct, WorkNotice.Workflow, 1, nextBuild).ConfigureAwait(false);
+            }
+
             return true;
         }, ct).ConfigureAwait(false);
 
@@ -615,7 +621,11 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             cmd.Parameters.AddWithValue("delay", Math.Max(0, (retryAt - now).TotalSeconds));
             cmd.Parameters.AddWithValue("inc", countAttempt ? 1 : 0);
             cmd.Parameters.Add(Ts("now", now));
-            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            if (await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0)
+            {
+                await NotifyAsync(conn, tx, task.Run.Scope, cancellationToken).ConfigureAwait(false);
+            }
+
             return true;
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -726,8 +736,10 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             else
             {
                 await DeleteActivityTaskAsync(conn, tx, run, task.ActivityId, cancellationToken).ConfigureAwait(false);
-                await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false);
-                await NotifyAsync(conn, tx, run.Scope, cancellationToken).ConfigureAwait(false);
+                if (await EnsureWorkflowTaskAsync(conn, tx, run, now, cancellationToken).ConfigureAwait(false) is { } build)
+                {
+                    await NotifyAsync(conn, tx, run.Scope, cancellationToken, WorkNotice.Workflow, 1, build).ConfigureAwait(false);
+                }
             }
 
             return CompletionOutcome.Applied;
@@ -775,7 +787,11 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             cmd.Parameters.AddWithValue("token", task.LeaseToken);
             cmd.Parameters.AddWithValue("delay", Math.Max(0, (retryAt - now).TotalSeconds));
             cmd.Parameters.Add(Ts("now", now));
-            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            if (await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0)
+            {
+                await NotifyAsync(conn, tx, task.Run.Scope, cancellationToken).ConfigureAwait(false);
+            }
+
             return true;
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -1067,7 +1083,10 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             cmd.CommandText = """
                 SELECT (SELECT count(*) FROM kairos.workflow_tasks WHERE tenant_id = @t AND namespace_id = @n AND NOT leased AND NOT stuck AND visible_at <= @now),
                        (SELECT count(*) FROM kairos.activity_tasks WHERE tenant_id = @t AND namespace_id = @n AND NOT leased AND visible_at <= @now),
-                       (SELECT count(*) FROM kairos.timers WHERE tenant_id = @t AND namespace_id = @n AND due_at <= @now)
+                       (SELECT count(*) FROM kairos.timers WHERE tenant_id = @t AND namespace_id = @n AND due_at <= @now),
+                       (SELECT coalesce(json_object_agg(build_id, n), '{}'::json)::text FROM (
+                            SELECT build_id, count(*) AS n FROM kairos.workflow_tasks
+                            WHERE tenant_id = @t AND namespace_id = @n AND NOT leased AND NOT stuck AND visible_at <= @now GROUP BY build_id) b)
                 """;
             Scope(cmd, scope);
             cmd.Parameters.Add(Ts("now", now));
@@ -1077,7 +1096,8 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
             await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            return new WorkBacklog((int)reader.GetInt64(0), (int)reader.GetInt64(1), (int)reader.GetInt64(2));
+            Dictionary<string, int> byBuild = System.Text.Json.JsonSerializer.Deserialize(reader.GetString(3), BacklogJson.Default.DictionaryStringInt32) ?? [];
+            return new WorkBacklog((int)reader.GetInt64(0), (int)reader.GetInt64(1), (int)reader.GetInt64(2)) { WorkflowTasksByBuild = byBuild };
         }).ConfigureAwait(false);
     }
 
@@ -1600,7 +1620,8 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         return sealedEvents[^1];
     }
 
-    private async Task EnsureWorkflowTaskAsync(NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, DateTimeOffset now, CancellationToken ct)
+    /// <summary>Makes the run's workflow task ready unless one exists. Returns the run's build when a task was created (a new ready task), otherwise null.</summary>
+    private async Task<string?> EnsureWorkflowTaskAsync(NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, DateTimeOffset now, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             Clk("""
@@ -1608,12 +1629,13 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
             SELECT tenant_id, namespace_id, run_id, build_id, @clock FROM kairos.runs
             WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r
             ON CONFLICT DO NOTHING
+            RETURNING build_id
             """), conn, tx);
         cmd.Parameters.AddWithValue("t", run.TenantId);
         cmd.Parameters.AddWithValue("n", run.NamespaceId);
         cmd.Parameters.AddWithValue("r", run.RunId);
         cmd.Parameters.Add(Ts("now", now));
-        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false) as string;
     }
 
     private static async Task DeleteActivityTaskAsync(NpgsqlConnection conn, NpgsqlTransaction tx, RunKey run, int activityId, CancellationToken ct)
@@ -1627,19 +1649,38 @@ public sealed class PostgresKairosStore(NpgsqlDataSource dataSource, PostgresSto
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    private static async Task NotifyAsync(NpgsqlConnection conn, NpgsqlTransaction tx, TenantScope scope, CancellationToken ct)
+    /// <summary>
+    /// Tells listeners that work appeared: <paramref name="count"/> ready tasks in <paramref name="queue"/> (<see cref="WorkNotice.Workflow"/>, whose build is <paramref name="build"/>;
+    /// <see cref="WorkNotice.Activity"/>), or, for <see cref="WorkNotice.Unknown"/>, that something became ready that the writer did not count (a fired timer, a reaped lease, a resumed
+    /// task). A listener wakes at most that many waiters and, for Unknown, asks the store how much is ready.
+    /// </summary>
+    private static async Task NotifyAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, TenantScope scope, CancellationToken ct, char queue = WorkNotice.Unknown, int count = 0, string? build = null)
     {
         await using var cmd = new NpgsqlCommand("SELECT pg_notify(@ch, @payload)", conn, tx);
         cmd.Parameters.AddWithValue("ch", NotifyChannel);
-        cmd.Parameters.AddWithValue("payload", $"{scope.TenantId:N}:{scope.NamespaceId:N}");
+        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(scope, queue, count, build));
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
-    private static NpgsqlBatchCommand Notify(TenantScope scope)
+    private static NpgsqlBatchCommand Notify(TenantScope scope, char queue = WorkNotice.Unknown, int count = 0, string? build = null)
     {
         var cmd = new NpgsqlBatchCommand("SELECT pg_notify(@ch, @payload)");
         cmd.Parameters.AddWithValue("ch", NotifyChannel);
-        cmd.Parameters.AddWithValue("payload", $"{scope.TenantId:N}:{scope.NamespaceId:N}");
+        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(scope, queue, count, build));
+        return cmd;
+    }
+
+    /// <summary>The notification of a start, sent only if the run with this id exists in the same transaction: a start that was a duplicate of an existing workflow id readies nothing.</summary>
+    private static NpgsqlBatchCommand NotifyIfRunCreated(TenantScope scope, Guid runId, string build)
+    {
+        var cmd = new NpgsqlBatchCommand(
+            "SELECT pg_notify(@ch, @payload) WHERE EXISTS (SELECT 1 FROM kairos.workflow_tasks WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r)");
+        cmd.Parameters.AddWithValue("ch", NotifyChannel);
+        cmd.Parameters.AddWithValue("payload", WorkNotice.Format(scope, WorkNotice.Workflow, 1, build));
+        cmd.Parameters.AddWithValue("t", scope.TenantId);
+        cmd.Parameters.AddWithValue("n", scope.NamespaceId);
+        cmd.Parameters.AddWithValue("r", runId);
         return cmd;
     }
 

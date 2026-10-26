@@ -445,7 +445,11 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             int workflow = data.WorkflowTasks.Values.Count(t => !t.Leased && !t.Stuck && t.VisibleAt <= now);
             int activity = data.ActivityTasks.Values.Count(t => !t.Leased && t.VisibleAt <= now);
             int timers = data.Timers.Values.Count(due => due <= now);
-            return ValueTask.FromResult<WorkBacklog?>(new WorkBacklog(workflow, activity, timers));
+            Dictionary<string, int> byBuild = data.WorkflowTasks.Values
+                .Where(t => !t.Leased && !t.Stuck && t.VisibleAt <= now)
+                .GroupBy(t => data.Runs[t.RunId].BuildId)
+                .ToDictionary(g => g.Key, g => g.Count());
+            return ValueTask.FromResult<WorkBacklog?>(new WorkBacklog(workflow, activity, timers) { WorkflowTasksByBuild = byBuild });
         }
     }
 

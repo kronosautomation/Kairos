@@ -26,6 +26,18 @@ public sealed class PostgresWorkNotifier : IAsyncDisposable
         return new PostgresWorkNotifier(dataSource);
     }
 
+    /// <summary>
+    /// Raised for every notification with what the writer said (scope, queue, how many tasks, which build). Handlers run on the listening connection's thread and must not block.
+    /// A payload that cannot be read is reported as a notice with <see cref="WorkNotice.IsUnparsed"/>.
+    /// </summary>
+    public event Action<WorkNotice>? Notified;
+
+    /// <summary>
+    /// Raised each time the connection starts listening (the first time too) and after a lost connection comes back. Notifications sent while it was down are gone, so a listener that keeps waiters
+    /// should look at the store for everything now.
+    /// </summary>
+    public event Action? Listening;
+
     /// <summary>Completes when work may be available: a notification arrived, or <paramref name="fallback"/> elapsed.</summary>
     public async Task WaitAsync(TimeSpan fallback, CancellationToken cancellationToken)
     {
@@ -83,6 +95,7 @@ public sealed class PostgresWorkNotifier : IAsyncDisposable
                     if (e.Channel == PostgresKairosStore.NotifyChannel)
                     {
                         Wake();
+                        Notified?.Invoke(WorkNotice.TryParse(e.Payload, out WorkNotice notice) ? notice : new WorkNotice(Guid.Empty, Guid.Empty, WorkNotice.Unknown, 0, null));
                     }
                 };
                 await using (var listen = new NpgsqlCommand($"LISTEN {PostgresKairosStore.NotifyChannel}", conn))
@@ -91,6 +104,7 @@ public sealed class PostgresWorkNotifier : IAsyncDisposable
                 }
 
                 Wake(); // anything that happened while we were not listening
+                Listening?.Invoke();
                 while (!_stop.IsCancellationRequested)
                 {
                     await conn.WaitAsync(_stop.Token).ConfigureAwait(false);

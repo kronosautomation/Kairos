@@ -120,7 +120,17 @@ public sealed record RunSummary(RunKey Run, string WorkflowId, string WorkflowTy
 public sealed record RunGroup(string WorkflowType, string BuildId, int Open, int Closed);
 
 /// <summary>Work that is ready to be claimed right now. Growth means workers are not keeping up.</summary>
-public sealed record WorkBacklog(int WorkflowTasks, int ActivityTasks, int DueTimers);
+public sealed record WorkBacklog(int WorkflowTasks, int ActivityTasks, int DueTimers)
+{
+    /// <summary>Ready workflow tasks by the build they are pinned to, when the store can say (empty otherwise). Their sum is <see cref="WorkflowTasks"/>.</summary>
+    public IReadOnlyDictionary<string, int> WorkflowTasksByBuild { get; init; } = new Dictionary<string, int>();
+
+    // Two backlogs are equal when their counts are; the breakdown by build is detail and not every store has it.
+    public bool Equals(WorkBacklog? other) =>
+        other is not null && WorkflowTasks == other.WorkflowTasks && ActivityTasks == other.ActivityTasks && DueTimers == other.DueTimers;
+
+    public override int GetHashCode() => HashCode.Combine(WorkflowTasks, ActivityTasks, DueTimers);
+}
 
 /// <summary>
 /// Persistence contract (reference: PostgreSQL). Events passed in are templates: the store assigns

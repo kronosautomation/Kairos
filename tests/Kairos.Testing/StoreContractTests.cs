@@ -195,6 +195,26 @@ public abstract partial class StoreContractTests
     }
 
     [Fact]
+    public async Task The_backlog_breaks_ready_workflow_tasks_down_by_build()
+    {
+        (IKairosStore store, KairosClient client) = await NewAsync();
+        if (await store.GetBacklogAsync(A, Time.GetUtcNow(), Ct) is null)
+        {
+            return;
+        }
+
+        await client.StartAsync(A, "by-1", "wf", [], buildId: "build-x", cancellationToken: Ct);
+        await client.StartAsync(A, "by-2", "wf", [], buildId: "build-x", cancellationToken: Ct);
+        await client.StartAsync(A, "by-3", "wf", [], buildId: "build-y:with:colons", cancellationToken: Ct);
+
+        WorkBacklog backlog = (await store.GetBacklogAsync(A, Time.GetUtcNow(), Ct))!;
+
+        Assert.Equal(3, backlog.WorkflowTasks);
+        Assert.Equal(new Dictionary<string, int> { ["build-x"] = 2, ["build-y:with:colons"] = 1 }, backlog.WorkflowTasksByBuild.ToDictionary(p => p.Key, p => p.Value));
+        Assert.Empty((await store.GetBacklogAsync(B, Time.GetUtcNow(), Ct))!.WorkflowTasksByBuild);
+    }
+
+    [Fact]
     public async Task The_backlog_counts_ready_work_of_this_scope_only()
     {
         (IKairosStore store, KairosClient client) = await NewAsync();
@@ -209,6 +229,7 @@ public abstract partial class StoreContractTests
         await client.StartAsync(A, "b-2", "wf", [], cancellationToken: Ct);
 
         Assert.Equal(new WorkBacklog(2, 0, 0), await store.GetBacklogAsync(A, Time.GetUtcNow(), Ct));
+        Assert.Equal(2, (await store.GetBacklogAsync(A, Time.GetUtcNow(), Ct))!.WorkflowTasksByBuild.Values.Sum()); // and by build, when the store can say
         Assert.Equal(new WorkBacklog(0, 0, 0), await store.GetBacklogAsync(B, Time.GetUtcNow(), Ct));
 
         WorkflowTask? leased = await store.PollWorkflowTaskAsync(A, ["default"], Time.GetUtcNow(), TimeSpan.FromMinutes(1), Ct);
