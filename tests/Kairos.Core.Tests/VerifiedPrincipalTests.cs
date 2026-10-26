@@ -4,6 +4,15 @@ using Kairos.Testing;
 namespace Kairos.Core.Tests;
 
 /// <summary>The principal-first operations of <see cref="KairosClient"/> (cancel, terminate, fail, resume) and the cancel request under client-side encryption.</summary>
+// One test here installs a listener on the engine's activity source. A listener makes every run record its trace context in history, so while it exists the deterministic simulations
+// running in parallel would see different histories. This collection runs alone.
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class ActivityListenerGroup
+{
+    public const string Name = "activity-listener";
+}
+
+[Collection(ActivityListenerGroup.Name)]
 public sealed class VerifiedPrincipalTests
 {
     private static readonly TenantScope Scope = new(Guid.Parse("77777777-0000-0000-0000-000000000001"), Guid.Parse("77777777-0000-0000-0000-0000000000a1"));
