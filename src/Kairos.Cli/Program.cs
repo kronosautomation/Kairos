@@ -19,6 +19,12 @@ namespace Kairos.Cli
 
               kairos history verify <file>
 
+              kairos audit verify <bundle> --key <public key file> [--kid <key id>] [--history <file>]... [--require-opened]
+
+            audit verify checks a signed audit evidence bundle offline: the signature under the public key you supply (the key of the customer who signed, from their key service), the
+            evidence against the signed manifest, every record's link, and the chain heads. Each --history file (from history export, full or metadata only) is checked against the recorded
+            head of its run. It prints what it checked, never a record's contents. Exit codes: 0 verified, 1 not verified, 2 could not run.
+
             history verify checks a history file (the hash chain, or the digest chain of a metadata-only file) and prints its head hash.
 
             history export copies one run's history to a file (ciphertext as stored) for local replay under a debugger. Operators only, a reason is required, and the
@@ -40,6 +46,28 @@ namespace Kairos.Cli
             {
                 await stdout.WriteLineAsync(typeof(Cli).Assembly.GetName().Version?.ToString() ?? "0").ConfigureAwait(false);
                 return ExitCode.Passed;
+            }
+
+            if (args[0] == "audit")
+            {
+                if (args.Length < 2 || args[1] != "verify")
+                {
+                    await stderr.WriteLineAsync("audit supports: verify <bundle> --key <public key file>").ConfigureAwait(false);
+                    return ExitCode.Usage;
+                }
+
+                AuditVerifyArguments audit;
+                try
+                {
+                    audit = AuditVerifyArguments.Parse(args[2..]);
+                }
+                catch (ArgumentException ex)
+                {
+                    await stderr.WriteLineAsync(ex.Message).ConfigureAwait(false);
+                    return ExitCode.Usage;
+                }
+
+                return await AuditVerifyCommand.RunAsync(audit, stdout, stderr, cancellationToken).ConfigureAwait(false);
             }
 
             if (args[0] == "history")

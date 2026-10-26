@@ -26,6 +26,8 @@
   href: approvals.md
 - name: Payload encryption and its limits
   href: payload-encryption.md
+- name: Verifying audit evidence
+  href: audit-evidence.md
 - name: Sagas and compensation
   href: sagas.md
 - name: Testing agents

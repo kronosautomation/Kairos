@@ -165,6 +165,18 @@ internal sealed record ToolStepResponse
     public string? Reason { get; init; }
 
     public WireApprovalRequirement? Requirement { get; init; }
+
+    /// <summary>What was issued to the tool for this call (never the token), so an audit can say what a tool was allowed to do and until when.</summary>
+    public WireCredentialGrant? Credential { get; init; }
+}
+
+internal sealed record WireCredentialGrant
+{
+    public string[] Scopes { get; init; } = [];
+
+    public DateTimeOffset ExpiresAt { get; init; }
+
+    public string? OnBehalfOf { get; init; }
 }
 
 internal sealed record SagaMark

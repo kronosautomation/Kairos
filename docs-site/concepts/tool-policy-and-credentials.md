@@ -43,6 +43,8 @@ for that call:
 - **Short-lived.** Five minutes by default, and the built-in issuers refuse to mint a token that lives longer than fifteen. Every attempt of a step gets a fresh token with its own id.
 - **Never recorded.** The token reaches the tool code in `call.Credential` and nowhere else. If a tool returns it in its result, it is
   removed before the result is written to the history. Printing a `ToolCredential` shows `token=***`.
+  What is recorded, with the step's result and sealed like it, is the grant: the scopes, when it expires and who the agent acted for. An audit can read that back
+  (`AgentAudit.Read`) and say what each tool call was allowed to do, without the token ever having been stored.
 
 [!code-csharp[](../../samples/AgentSamples/SupportAgent.cs#tools)]
 

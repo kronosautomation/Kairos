@@ -463,7 +463,8 @@ public sealed class AgentsRuntime
             content = redact(content);
         }
 
-        return Reply(new ToolStepResponse { Outcome = ToolOutcomes.Completed, Content = content, IsError = isError });
+        WireCredentialGrant? grant = credential is null ? null : new WireCredentialGrant { Scopes = [.. credential.Scopes], ExpiresAt = credential.ExpiresAt, OnBehalfOf = request.OnBehalfOf };
+        return Reply(new ToolStepResponse { Outcome = ToolOutcomes.Completed, Content = content, IsError = isError, Credential = grant });
     }
 
     private async Task<byte[]> ApprovalRequestStepAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)

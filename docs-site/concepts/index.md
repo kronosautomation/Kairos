@@ -16,6 +16,7 @@ Read these in order the first time; each one builds on the one before.
 | [AI agents](agents.md) | Model calls and tool calls as recorded steps that are never repeated on replay. |
 | [Tool policy and credentials](tool-policy-and-credentials.md) | Read-only by default, approval for changes, and short-lived credentials limited to one run and one tool. |
 | [Approvals](approvals.md) | Waiting durably for a named person, and recording who decided. |
+| [Verifying audit evidence](audit-evidence.md) | Checking a signed bundle of audit evidence offline, and history files against its recorded chain heads. |
 | [Sagas and compensation](sagas.md) | Undoing earlier steps in reverse when a later one fails, surviving crashes mid-rollback. |
 | [Testing agents](testing-agents.md) | Recorded model fixtures, scripted models and what to assert. |
 | [Durable tasks for MCP servers](mcp-tasks.md) | A task store for any C# MCP server whose tasks survive restarts, backed by Kairos runs. |
