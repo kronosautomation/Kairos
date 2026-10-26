@@ -110,6 +110,14 @@ public sealed class SimWorld
         }
     }
 
+    /// <summary>The seeded chaos run on this world, keeping the world so its histories can be read afterwards (what <see cref="RunSeedAsync"/> does, without discarding it).</summary>
+    public async Task<SimResult> RunChaosThenCheckAsync()
+    {
+        await ChaosAsync();
+        await QuiesceAsync();
+        return await CheckInvariantsAsync();
+    }
+
     /// <summary>The seeded chaos run for explicit programs (property tests generate the programs; the seed drives everything else).</summary>
     public static async Task<SimResult> RunChaosAsync(ulong seed, SimOptions options, IReadOnlyList<SimProgram> programs)
     {
