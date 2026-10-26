@@ -1,4 +1,5 @@
 using System.Text;
+using Kairos.Worker;
 
 namespace Kairos.Samples.Concepts;
 
@@ -120,6 +121,22 @@ public static class LongRunningExamples
         }
 
         return BitConverter.GetBytes(next);
+    }
+    #endregion
+}
+
+/// <summary>How much one data key covers is a choice. The payload-encryption page quotes this.</summary>
+public static class EncryptionExamples
+{
+    #region data-key-scope
+    public static (EnvelopePayloadProtector Tightest, EnvelopePayloadProtector Shorter) ProtectorsWithSmallerKeyScope(IKeyProvider keys)
+    {
+        // Tightest: every payload gets a data key of its own. One wrap per payload, one unwrap per value read.
+        var tightest = new EnvelopePayloadProtector(keys, TimeProvider.System, EnvelopeOptions.OneKeyPerValue);
+
+        // In between: replace the data key after 10 minutes or 50 payloads, whichever comes first.
+        var shorter = new EnvelopePayloadProtector(keys, TimeProvider.System, EnvelopeOptions.ShortLived(TimeSpan.FromMinutes(10), maxUses: 50));
+        return (tightest, shorter);
     }
     #endregion
 }

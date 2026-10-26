@@ -12,7 +12,8 @@ public sealed class AgentSamplesTests
 {
     private static readonly TenantScope Scope = new(Guid.Parse("11111111-1111-1111-1111-111111111111"), Guid.Parse("22222222-2222-2222-2222-222222222222"));
     private static readonly byte[] Key = RandomNumberGenerator.GetBytes(32);
-    private static readonly HmacApprovalTokens Approvals = new(RandomNumberGenerator.GetBytes(32));
+    private static readonly LocalApprovalEvidenceSigner ApprovalSigner = LocalApprovalEvidenceSigner.Create("samples-approvals-1");
+    private static readonly EsApproverVerifier Approvals = new(new Dictionary<string, byte[]> { [ApprovalSigner.KeyId] = ApprovalSigner.PublicKey });
 
     private static AgentsRuntime Support(IChatClient model, IRefundApi api) => SupportAgent.Configure(model, api, new HmacToolCredentialIssuer(Key), Approvals);
 
@@ -127,9 +128,9 @@ public sealed class AgentSamplesTests
         // The customer cannot approve their own refund; finance can.
         IReadOnlyList<PendingApproval> pending = await ApprovalExamples.WaitingOnPeopleAsync(rig.Client, run);
         Assert.Equal("issue_refund", Assert.Single(pending).Tool);
-        await ApprovalExamples.ApproveAsync(rig.Client, Approvals, run, pending[0].ApprovalId, new ClaimsSummary("customer:42", "The customer", ["finance"]));
+        await ApprovalExamples.ApproveAsync(rig.Client, ApprovalSigner, rig.Time, run, pending[0].ApprovalId, new ClaimsSummary("customer:42", "The customer", ["finance"]));
         Assert.Equal(RunState.Running, await rig.RunAsync(run, jumpClock: false));
-        await ApprovalExamples.ApproveAsync(rig.Client, Approvals, run, pending[0].ApprovalId, new ClaimsSummary("user:dana", "Dana", ["finance"]));
+        await ApprovalExamples.ApproveAsync(rig.Client, ApprovalSigner, rig.Time, run, pending[0].ApprovalId, new ClaimsSummary("user:dana", "Dana", ["finance"]));
         Assert.Equal(RunState.Completed, await rig.RunAsync(run));
 
         Assert.Single(api.Refunds);
@@ -153,7 +154,7 @@ public sealed class AgentSamplesTests
         await rig.RunAsync(run, jumpClock: false);
         PendingApproval pending = (await ApprovalExamples.WaitingOnPeopleAsync(rig.Client, run))[0];
 
-        await new AgentClient(rig.Client, rig.Time, Approvals).RejectAsync(run, pending.ApprovalId, new ApproverIdentity("user:dana", "Dana", ["finance"]), "outside the policy window");
+        await new AgentClient(rig.Client, rig.Time, ApprovalSigner).RejectAsync(run, pending.ApprovalId, new ApproverIdentity("user:dana", "Dana", ["finance"]), "outside the policy window");
         Assert.Equal(RunState.Completed, await rig.RunAsync(run));
 
         Assert.Empty(api.Refunds);
@@ -169,7 +170,7 @@ public sealed class AgentSamplesTests
         Assert.Equal(RunState.Running, await rig.RunAsync(run, jumpClock: false));
         PendingApproval pending = (await ApprovalExamples.WaitingOnPeopleAsync(rig.Client, run))[0];
 
-        await ApprovalExamples.ApproveAsync(rig.Client, Approvals, run, pending.ApprovalId, new ClaimsSummary("user:eve", "Eve", ["editor"]));
+        await ApprovalExamples.ApproveAsync(rig.Client, ApprovalSigner, rig.Time, run, pending.ApprovalId, new ClaimsSummary("user:eve", "Eve", ["editor"]));
         Assert.Equal(RunState.Completed, await rig.RunAsync(run, jumpClock: false));
         Assert.Equal(["publish"], rig.Ran);
     }

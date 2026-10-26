@@ -33,7 +33,7 @@ public sealed class ApproverVerificationTests
         "{\"approvalId\":\"" + id + "\",\"approved\":true,\"approver\":{\"subject\":\"" + subject + "\",\"roles\":[" + roles + "]}}";
 
     private static string Token(AgentHarness h, RunKey run, string id, bool approved, ApproverIdentity who, TimeSpan? life = null) =>
-        AgentHarness.ApprovalTokens.Issue(run, id, approved, who, h.Time.GetUtcNow(), life);
+        AgentHarness.Issue(run, id, approved, who, h.Time.GetUtcNow(), life);
 
     private static async Task AssertStillWaitingAsync(AgentHarness h, RunKey run)
     {
@@ -130,11 +130,11 @@ public sealed class ApproverVerificationTests
         (AgentHarness h, RunKey run, string id) = await WaitingAsync();
         string expired = Token(h, run, id, true, Alice, TimeSpan.FromSeconds(1));
         h.Time.Advance(TimeSpan.FromMinutes(1));
-        string foreign = new HmacApprovalTokens(RandomNumberGenerator.GetBytes(32)).Issue(run, id, true, Alice, h.Time.GetUtcNow());
+        string foreign = AgentHarness.Issue(run, id, true, Alice, h.Time.GetUtcNow(), signer: LocalApprovalEvidenceSigner.Create(AgentHarness.ApprovalSigner.KeyId)); // the right key id, somebody else's key
 
         await h.Agent.ApproveAsync(run, id, Alice with { Evidence = expired });
         await h.Agent.ApproveAsync(run, id, Alice with { Evidence = foreign });
-        await h.Agent.ApproveAsync(run, id, Alice with { Evidence = "kap_garbage.garbage" });
+        await h.Agent.ApproveAsync(run, id, Alice with { Evidence = "garbage.garbage.garbage" });
 
         await AssertStillWaitingAsync(h, run);
     }
@@ -228,7 +228,7 @@ public sealed class ApproverVerificationTests
     [Fact]
     public async Task Replaying_the_run_never_asks_the_verifier_again()
     {
-        var verifier = new CountingVerifier(AgentHarness.ApprovalTokens);
+        var verifier = new CountingVerifier(AgentHarness.NewVerifier());
         var h = new AgentHarness(b => b.AddModel("m", AgentHarness.Echo()).UseApproverVerifier(verifier), verifyApprovers: false);
         h.Workflow("ask", async (ctx, _) =>
         {

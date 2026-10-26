@@ -6,10 +6,10 @@ namespace Kairos.Agents;
 
 /// <summary>
 /// The caller's side of an agent run: deciding approvals and cancelling. Your application authenticates the person first and passes only an
-/// identity it authenticated. With <paramref name="approvalTokens"/> the client signs each decision for that identity, which is what lets
-/// the worker prove who decided (see <see cref="AgentsBuilder.UseApproverVerifier"/>); give it only to the code that authenticates people.
+/// identity it authenticated. With <paramref name="evidenceSigner"/> the client signs each decision for that identity (ES256, through Key Vault or KMS in production), which is what lets
+/// the worker prove who decided with the public key alone (see <see cref="AgentsBuilder.UseApproverVerifier"/> and <see cref="EsApproverVerifier"/>); give a signer only to the code that authenticates people.
 /// </summary>
-public sealed class AgentClient(KairosClient client, TimeProvider time, HmacApprovalTokens? approvalTokens = null)
+public sealed class AgentClient(KairosClient client, TimeProvider time, IApprovalEvidenceSigner? evidenceSigner = null)
 {
     public const string CancelSignalName = ReservedSignals.Cancel;
 
@@ -25,7 +25,7 @@ public sealed class AgentClient(KairosClient client, TimeProvider time, HmacAppr
     public ValueTask<bool> RequestCancelAsync(RunKey run, string reason, CancellationToken cancellationToken = default) =>
         client.SignalAsync(run, CancelSignalName, Encoding.UTF8.GetBytes(reason ?? ""), signalId: ReservedSignals.CancelSignalId, cancellationToken);
 
-    private ValueTask<bool> DecideAsync(
+    private async ValueTask<bool> DecideAsync(
         RunKey run, string approvalId, bool approved, ApproverIdentity approver, string? comment, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(approvalId);
@@ -40,7 +40,7 @@ public sealed class AgentClient(KairosClient client, TimeProvider time, HmacAppr
                 Subject = approver.Subject,
                 Name = approver.Name,
                 Roles = [.. approver.Roles ?? []],
-                Evidence = approver.Evidence ?? approvalTokens?.Issue(run, approvalId, approved, approver, time.GetUtcNow()),
+                Evidence = approver.Evidence ?? await MintAsync(run, approvalId, approved, approver, cancellationToken).ConfigureAwait(false),
             },
             Comment = comment,
             DecidedAt = time.GetUtcNow(),
@@ -50,7 +50,19 @@ public sealed class AgentClient(KairosClient client, TimeProvider time, HmacAppr
         // A fresh decision carries fresh evidence, hence a fresh delivery; a retry that re-sends the same evidence is the same delivery.
         string evidenceDigest = wire.Approver.Evidence is null ? "" : ":" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(wire.Approver.Evidence)))[..16];
         string signalId = $"approval:{approvalId}:{approver.Subject}:{(approved ? "approve" : "reject")}{evidenceDigest}";
-        return client.DecideApprovalAsync(run, approvalId, WireCodec.Write(wire, AgentJson.Default.WireApprovalDecision), signalId, cancellationToken);
+        return await client.DecideApprovalAsync(run, approvalId, WireCodec.Write(wire, AgentJson.Default.WireApprovalDecision), signalId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<string?> MintAsync(RunKey run, string approvalId, bool approved, ApproverIdentity approver, CancellationToken cancellationToken)
+    {
+        if (evidenceSigner is null)
+        {
+            return null;
+        }
+
+        DateTimeOffset now = time.GetUtcNow();
+        return await ApprovalEvidence.MintAsync(
+            evidenceSigner, new ApprovalEvidenceClaims(run, approvalId, approved, approver.Subject, [.. approver.Roles ?? []], now, now + TimeSpan.FromMinutes(5), ApprovalEvidence.NewEvidenceId()), cancellationToken).ConfigureAwait(false);
     }
 }
 

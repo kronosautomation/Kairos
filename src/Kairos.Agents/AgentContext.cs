@@ -360,7 +360,7 @@ internal static class ApprovalRules
     }
 
     public static async ValueTask<ApprovalVerifyResult> EvaluateAsync(
-        ApprovalVerifyRequest check, RunKey run, IApproverVerifier? verifier, CancellationToken cancellationToken)
+        ApprovalVerifyRequest check, RunKey run, IApproverVerifier? verifier, CancellationToken cancellationToken, string? stepKey = null)
     {
         WireApprovalRequest request = check.Request;
         WireApprovalDecision decision = check.Decision;
@@ -372,7 +372,7 @@ internal static class ApprovalRules
         if (verifier is not null)
         {
             VerifiedApprover? proven = await verifier.VerifyAsync(
-                new ApproverEvidenceContext(run, decision.ApprovalId, decision.Approved, subject, decision.Approver.Evidence, check.ReceivedAt), cancellationToken).ConfigureAwait(false);
+                new ApproverEvidenceContext(run, decision.ApprovalId, decision.Approved, subject, decision.Approver.Evidence, check.ReceivedAt) { StepKey = stepKey }, cancellationToken).ConfigureAwait(false);
             if (proven is null)
             {
                 return Refuse("the approver could not be verified");

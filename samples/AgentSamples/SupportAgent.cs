@@ -126,12 +126,13 @@ public static class ApprovalExamples
     #endregion
 
     #region approval-decide
-    public static async Task ApproveAsync(KairosClient client, HmacApprovalTokens approvalTokens, RunKey run, string approvalId, ClaimsSummary signedInUser)
+    public static async Task ApproveAsync(KairosClient client, IApprovalEvidenceSigner evidenceSigner, TimeProvider time, RunKey run, string approvalId, ClaimsSummary signedInUser)
     {
         // Authenticate the person in your own application first, and pass only an identity you authenticated. The client signs the decision
-        // with the approval key; the workers verify that signature, so a signal sent by anything else cannot approve.
+        // through the evidence signer (a Key Vault or KMS key in production); the workers verify with the public key alone, so a signal sent
+        // by anything else cannot approve, and neither can a compromised worker.
         var approver = new ApproverIdentity(signedInUser.Subject, signedInUser.DisplayName, signedInUser.Roles);
-        await new AgentClient(client, TimeProvider.System, approvalTokens).ApproveAsync(run, approvalId, approver, comment: "Checked against the invoice");
+        await new AgentClient(client, time, evidenceSigner).ApproveAsync(run, approvalId, approver, comment: "Checked against the invoice");
     }
     #endregion
 }

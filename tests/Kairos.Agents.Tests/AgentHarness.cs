@@ -15,8 +15,16 @@ internal sealed class AgentHarness
     private readonly WorkflowRegistry _workflows = new();
     private readonly ActivityRegistry _activities = new();
     private readonly List<RunKey> _runs = [];
-    /// <summary>The key the "host" signs approvals with and the workers verify with.</summary>
-    public static readonly HmacApprovalTokens ApprovalTokens = new(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+    /// <summary>The key the "host" signs approvals with. Workers get only its public half.</summary>
+    public static readonly LocalApprovalEvidenceSigner ApprovalSigner = LocalApprovalEvidenceSigner.Create("approvals-test-1");
+
+    /// <summary>A verifier that holds the public key only (each has its own memory of used evidence).</summary>
+    public static EsApproverVerifier NewVerifier() => new(new Dictionary<string, byte[]> { [ApprovalSigner.KeyId] = ApprovalSigner.PublicKey });
+
+    /// <summary>Evidence for a decision, as the host that authenticated the person would sign it.</summary>
+    public static string Issue(RunKey run, string approvalId, bool approved, ApproverIdentity who, DateTimeOffset now, TimeSpan? life = null, IApprovalEvidenceSigner? signer = null) =>
+        ApprovalEvidence.MintAsync(
+            signer ?? ApprovalSigner, new ApprovalEvidenceClaims(run, approvalId, approved, who.Subject, [.. who.Roles ?? []], now, now + (life ?? TimeSpan.FromMinutes(5)), ApprovalEvidence.NewEvidenceId())).AsTask().GetAwaiter().GetResult();
 
     private readonly IPayloadProtector? _protector;
     private int _counter;
@@ -34,12 +42,12 @@ internal sealed class AgentHarness
         Store = (IKairosStore?)Faults ?? memory;
         _protector = protector;
         Client = new KairosClient(Store, Time, payloadProtector: protector);
-        Agent = new AgentClient(Client, Time, ApprovalTokens);
+        Agent = new AgentClient(Client, Time, ApprovalSigner);
 
         var builder = new AgentsBuilder().UseTimeProvider(Time).UseTimeProvider(Time);
         if (verifyApprovers)
         {
-            builder.UseApproverVerifier(ApprovalTokens);
+            builder.UseApproverVerifier(NewVerifier());
         }
         configure(builder);
         Runtime = builder.Build();

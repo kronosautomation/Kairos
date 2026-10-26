@@ -34,7 +34,7 @@ the live system does not accept such a gap. Keep that in mind when you compare e
 
 Payloads are stored as opaque bytes. With payload encryption enabled they are sealed before they leave your application, and the
 history holds ciphertext. Event types, names, sequence numbers and timestamps stay readable so that the system can route and index work.
-Keep secrets and personal data out of workflow and activity *names* and out of ids.
+Keep secrets and personal data out of workflow and activity *names* and out of ids. How payloads are sealed, and what one data key covers, is on [Payload encryption and its limits](payload-encryption.md).
 
 A run's history has a size limit: **50,000 events by default**, configurable per store. A workflow is expected to hand over to a fresh
 run well before that; `ctx.ShouldContinueAsNew` turns true at 40,000 events. A run that reaches the limit without handing over is ended

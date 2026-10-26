@@ -257,5 +257,4 @@ public sealed class EcdsaToolCredentialVerifier : IToolCredentialVerifier, IDisp
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(ToolClaims))]
-[JsonSerializable(typeof(HmacApprovalTokens.ApprovalClaims))]
 internal sealed partial class CredentialJson : JsonSerializerContext;

@@ -488,7 +488,7 @@ public sealed class AgentsRuntime
     {
         ApprovalVerifyRequest request = WireCodec.Read(input, AgentJson.Default.ApprovalVerifyRequest);
         ApprovalVerifyResult result = await ApprovalRules.EvaluateAsync(
-            request, context.Run, _config.Verifier, cancellationToken).ConfigureAwait(false);
+            request, context.Run, _config.Verifier, cancellationToken, context.IdempotencyKey).ConfigureAwait(false);
         return WireCodec.Write(result, AgentJson.Default.ApprovalVerifyResult);
     }
 

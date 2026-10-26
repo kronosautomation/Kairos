@@ -52,6 +52,11 @@ The data plane cannot create tenants or keys. The control plane cannot read work
 - **Client-side payload encryption (default on).** The worker SDK encrypts inputs, outputs, and signal payloads with
   envelope encryption (AES-256-GCM data keys, wrapped by the customer's KMS / Key Vault key). Kairos stores ciphertext
   only and never holds the customer's key. Search attributes stay plaintext and are opt-in per field.
+- **An unwrapped data key opens everything sealed with it.** Data keys are reused briefly (default one hour or 10,000 payloads, per tenant and
+  namespace). Whoever is given an unwrapped data key (a worker; a key broker serving a browser) can open every value sealed under it in that scope until it is rotated, not only the value
+  they asked about. A "reference" in an unwrap request is therefore a **log of intent, not a limit**, and no component may treat it as an access control. Access to unwrap is access to the
+  period's values; who may unwrap is decided on that basis and every unwrap is logged by the party that performs it. `EnvelopeOptions.OneKeyPerValue` / `ShortLived(...)` shrink the unit for
+  customers who want a tighter scope, at the cost of more provider calls. Unwrapped keys are held non-extractable and briefly in browsers, and for `UnwrappedKeyTtl` in workers.
 - **Server-side at-rest encryption** on storage and backups as a second layer.
 - **TLS 1.3 everywhere**, including server ↔ Postgres.
 - **No secrets in history.** SDK analyzers flag workflow inputs typed as credentials; secrets come from the worker's own vault.
@@ -64,6 +69,9 @@ The data plane cannot create tenants or keys. The control plane cannot read work
 - **Roles per namespace:** `admin`, `operator` (start/signal/cancel/terminate), `worker` (poll/complete only), `reader`.
   Least privilege: a worker credential cannot start or read other workflows.
 - **Control plane** uses workforce SSO (Entra ID / OIDC) with MFA, never API keys.
+- **Approval evidence is asymmetric.** Who decided an approval is proven by ES256 evidence signed through Key Vault / KMS by the application that authenticated the person, and verified by
+  workers with the public key alone (kid-pinned). Bound to tenant, namespace, run, approval, direction and subject; five minutes at most; an id that one verification step may use. No
+  shared secret exists between the signer and the workers, so a compromised worker, or a holder of the public key, cannot forge an approval. HMAC keys are refused at startup.
 
 ## 6. Integrity & audit
 

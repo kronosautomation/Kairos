@@ -147,7 +147,8 @@
       "concepts": {
         "type": "Project",
         "dependencies": {
-          "Kairos.Hosting": "[1.0.0, )"
+          "Kairos.Hosting": "[1.0.0, )",
+          "Kairos.Worker": "[1.0.0, )"
         }
       },
       "kairos.abstractions": {
@@ -190,6 +191,12 @@
           "Kairos.Agents": "[1.0.0, )",
           "Kairos.Core": "[1.0.0, )",
           "xunit": "[2.9.3, )"
+        }
+      },
+      "kairos.worker": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )"
         }
       },
       "Microsoft.Extensions.AI.Abstractions": {

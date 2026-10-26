@@ -24,6 +24,8 @@
   href: tool-policy-and-credentials.md
 - name: Approvals
   href: approvals.md
+- name: Payload encryption and its limits
+  href: payload-encryption.md
 - name: Sagas and compensation
   href: sagas.md
 - name: Testing agents

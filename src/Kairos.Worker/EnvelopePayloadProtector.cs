@@ -5,17 +5,53 @@ using System.Text;
 
 namespace Kairos.Worker;
 
-/// <summary>Limits that decide how long a process may keep using a data key after the key provider stops allowing it.</summary>
+/// <summary>
+/// Limits that decide how long a process may keep using a data key after the key provider stops allowing it, and how much one data key covers.
+/// <para>
+/// <b>What a data key opens.</b> Every payload sealed under one data key is opened by that key: whoever gets the unwrapped data key (a worker, a service that unwraps keys for a person's
+/// browser) can open every value sealed with it, in that tenant and namespace, not only the one they asked about. A request that names a value (a log of intent) says what was wanted,
+/// not what the key allows. So the unit of exposure is the data key, and it is bounded by <see cref="DataKeyLifetime"/> and <see cref="MaxUsesPerDataKey"/>: by default an hour or ten
+/// thousand payloads, whichever comes first. A customer who wants a smaller unit shortens those, at the price of more wrap calls to the key provider
+/// (see <see cref="OneKeyPerValue"/> and <see cref="ShortLived"/>).
+/// </para>
+/// </summary>
 public sealed class EnvelopeOptions
 {
-    /// <summary>Payloads sealed under one data key before a new one is made (random 96-bit GCM nonces stay far below their safe bound).</summary>
+    /// <summary>Payloads sealed under one data key before a new one is made (random 96-bit GCM nonces stay far below their safe bound). At least one.</summary>
     public int MaxUsesPerDataKey { get; init; } = 10_000;
 
     /// <summary>
     /// How long one data key stays in use for sealing, however quiet the worker. After this, the next payload needs a fresh wrap from the
-    /// key provider, so a revoked or rotated master key stops being used for new payloads within this time.
+    /// key provider, so a revoked or rotated master key stops being used for new payloads within this time. Must be positive. Default one hour.
     /// </summary>
     public TimeSpan DataKeyLifetime { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// The tightest scope: every payload is sealed under a data key of its own, so a key that is unwrapped for one value opens that value and nothing else. It costs one wrap call to the
+    /// key provider per payload (and one unwrap per value read), which is the price of the smaller blast radius; measure the provider's latency before choosing it for hot paths.
+    /// </summary>
+    public static EnvelopeOptions OneKeyPerValue { get; } = new() { MaxUsesPerDataKey = 1, DataKeyLifetime = TimeSpan.FromMinutes(1) };
+
+    /// <summary>Data keys that are replaced after <paramref name="lifetime"/> or <paramref name="maxUses"/> payloads, whichever comes first.</summary>
+    public static EnvelopeOptions ShortLived(TimeSpan lifetime, int maxUses = 100) => new() { DataKeyLifetime = lifetime, MaxUsesPerDataKey = maxUses };
+
+    internal void Validate()
+    {
+        if (MaxUsesPerDataKey < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxUsesPerDataKey), "A data key seals at least one payload.");
+        }
+
+        if (DataKeyLifetime <= TimeSpan.Zero || UnwrappedKeyTtl <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(DataKeyLifetime), "Key lifetimes must be positive.");
+        }
+
+        if (MaxCachedKeys < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxCachedKeys), "At least one unwrapped key must be cached.");
+        }
+    }
 
     /// <summary>
     /// How long an unwrapped data key stays cached for opening. After this the provider is asked again, so revoking the customer's key
@@ -57,6 +93,7 @@ public sealed class EnvelopePayloadProtector : IPayloadProtector, IDisposable
         _keys = keys;
         _time = time ?? TimeProvider.System;
         _options = options ?? new EnvelopeOptions();
+        _options.Validate();
     }
 
     public async ValueTask<byte[]> ProtectAsync(TenantScope scope, ReadOnlyMemory<byte> plaintext, ReadOnlyMemory<byte> context, CancellationToken cancellationToken)

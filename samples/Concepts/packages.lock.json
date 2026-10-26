@@ -86,6 +86,12 @@
           "Npgsql": "[10.0.3, )"
         }
       },
+      "kairos.worker": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )"
+        }
+      },
       "Microsoft.Extensions.DependencyInjection.Abstractions": {
         "type": "CentralTransitive",
         "requested": "[10.0.13, )",

@@ -295,7 +295,7 @@ public sealed class ToolAndApprovalTests
     {
         (AgentHarness h, RunKey run, string id) = await WaitingForApprovalAsync();
 
-        ApproverIdentity signedIn = Alice with { Evidence = AgentHarness.ApprovalTokens.Issue(run, id, approved: true, Alice, h.Time.GetUtcNow()) };
+        ApproverIdentity signedIn = Alice with { Evidence = AgentHarness.Issue(run, id, approved: true, Alice, h.Time.GetUtcNow()) };
         Assert.True(await h.Agent.ApproveAsync(run, id, signedIn));
         Assert.True(await h.Agent.ApproveAsync(run, id, signedIn)); // a retried request carrying the same evidence: same delivery
         Assert.Equal(RunState.Completed, await h.RunAsync(run));
