@@ -146,7 +146,7 @@ try {
     @{ bomFormat = 'CycloneDX'; specVersion = '1.6'; metadata = @{ component = @{ name = 'P.D'; version = '3.0.0'; purl = 'pkg:nuget/P.D@3.0.0' } }; components = @(@{ name = 'Dep.One'; version = '1.0.0'; purl = 'pkg:nuget/Dep.One@1.0.0' }) } |
         ConvertTo-Json -Depth 10 | Set-Content (Join-Path $asb 'P.D.3.0.0.cdx.json')
     $predicate = Join-Path $Work 'provenance.json'
-    & (Join-Path $PSScriptRoot 'New-Provenance.ps1') -Version 3.0.0 -Output $predicate | Out-Null
+    & (Join-Path $PSScriptRoot 'New-Provenance.ps1') -Version 3.0.0 -Output $predicate -Byproducts @((Join-Path $asb 'P.D.3.0.0.cdx.json')) | Out-Null
     $cosign = @{ Key = (Join-Path $keys 'good.key'); PublicKey = (Join-Path $keys 'good.pub') }
     & (Join-Path $PSScriptRoot 'Attest-Packages.ps1') -Packages $apk -Sboms $asb -Provenance $predicate -Output $out @cosign | Out-Null
     Expect 'provenance and SBOM attestations are written and verify' { (Test-Path (Join-Path $out 'P.D.3.0.0.nupkg.provenance.sigstore.json')) -and (Test-Path (Join-Path $out 'P.D.3.0.0.nupkg.sbom.sigstore.json')) }
@@ -167,6 +167,7 @@ try {
     # ---- provenance predicate ----
     Write-Host 'Provenance predicate'
     $p = Get-Content $predicate -Raw | ConvertFrom-Json
+    Expect 'one source and one byproduct are lists of objects, not their type names' { ($p.buildDefinition.resolvedDependencies[0].name) -and ($p.runDetails.byproducts[0].digest.sha256 -match '^[0-9a-f]{64}$') }
     Expect 'it names the commit that was built' { $p.buildDefinition.resolvedDependencies[0].digest.gitCommit -match '^[0-9a-f]{40}$' }
     Expect 'it names the toolchain' { $p.buildDefinition.internalParameters.tools.dotnet -match '^\d+\.\d+\.\d+' -and $p.buildDefinition.internalParameters.tools.cosign }
     Expect 'outside a pipeline it says so, so that a verifier can refuse it' { $env:TF_BUILD -or ($p.runDetails.builder.id -eq 'local' -and $p.runDetails.metadata.invocationId -eq 'local') }

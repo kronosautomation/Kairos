@@ -54,11 +54,14 @@ foreach ($tool in $tools.tools.PSObject.Properties) { $toolVersions[$tool.Name] 
 $installer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Install-ReleaseTools.ps1') -Raw
 foreach ($name in 'cosign', 'syft') { if ($installer -match "(?s)$name\s*=\s*@\{\s*Version\s*=\s*'([^']+)'") { $toolVersions[$name] = $Matches[1] } }
 
-$resolved = foreach ($source in $Sources) {
-    [ordered]@{ name = $source.Name; uri = "git+$($source.Uri)@$($source.Ref)"; digest = [ordered]@{ gitCommit = $source.Commit } }
+# Lists, not @(...): PowerShell unrolls a single ordered dictionary inside @(), and the JSON then holds its type name instead of the object.
+$resolved = [System.Collections.Generic.List[object]]::new()
+foreach ($source in $Sources) {
+    $resolved.Add([ordered]@{ name = $source.Name; uri = "git+$($source.Uri)@$($source.Ref)"; digest = [ordered]@{ gitCommit = $source.Commit } })
 }
-$byproducts = foreach ($file in $Byproducts) {
-    if (Test-Path -LiteralPath $file) { [ordered]@{ name = (Split-Path -Leaf $file); digest = [ordered]@{ sha256 = (Get-Sha256 $file) } } }
+$recorded = [System.Collections.Generic.List[object]]::new() # (not $byproducts: PowerShell names are case-insensitive, and that is the typed parameter)
+foreach ($file in $Byproducts) {
+    if (Test-Path -LiteralPath $file) { $recorded.Add([ordered]@{ name = (Split-Path -Leaf $file); digest = [ordered]@{ sha256 = (Get-Sha256 $file) } }) }
 }
 
 $predicate = [ordered]@{
@@ -66,12 +69,12 @@ $predicate = [ordered]@{
         buildType            = 'urn:kronos-automation:kairos:release:azure-pipelines:v1'
         externalParameters   = [ordered]@{ pipeline = $Pipeline; version = $Version; ref = ($Sources[0]).Ref }
         internalParameters   = [ordered]@{ continuousIntegrationBuild = $true; lockedRestore = $true; tools = $toolVersions; agentOs = (Get-Env 'AGENT_OS' ([Runtime.InteropServices.RuntimeInformation]::OSDescription)); agentArchitecture = (Get-Env 'AGENT_OSARCHITECTURE' ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString())) }
-        resolvedDependencies = @($resolved)
+        resolvedDependencies = $resolved
     }
     runDetails      = [ordered]@{
         builder  = [ordered]@{ id = "$collection/$project/_build?definitionId=$definition"; version = $toolVersions }
         metadata = [ordered]@{ invocationId = "$collection/$project/_build/results?buildId=$buildId"; startedOn = (Get-Env 'KAIROS_BUILD_STARTED' ([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))) ; finishedOn = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') }
-        byproducts = @($byproducts)
+        byproducts = $recorded
     }
 }
 if (-not $inPipeline) { $predicate.runDetails.builder.id = 'local'; $predicate.runDetails.metadata.invocationId = 'local' }
