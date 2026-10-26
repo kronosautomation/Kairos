@@ -8,6 +8,7 @@ LOCKED=true; [ "$TFM" != "net10.0" ] && LOCKED=false   # lock files are generate
 echo "== Copying repo (bin/obj excluded) =="
 rsync -a --delete --exclude bin --exclude obj --exclude .ci-local --exclude .git /src/ /work/
 cd /work
+[ "$TFM" != "net10.0" ] && rm -f global.json   # the newer-SDK check is the one job that does not use the pinned SDK, as in azure-pipelines.yml
 
 restore() { dotnet restore Kairos.sln -p:KairosTargetFramework="$TFM" -p:RestoreLockedMode=$LOCKED; }
 build()   { dotnet build Kairos.sln -c Release --no-restore -p:KairosTargetFramework="$TFM"; }
