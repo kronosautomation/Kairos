@@ -1,0 +1,192 @@
+# Kairos release. Runs when a tag v<major>.<minor>.<patch>[-prerelease] is pushed; never on a branch or a pull request.
+# What it does, in order, and what stops it (docs/RELEASE.md has the checklist around it and the one-time setup):
+#
+#   Verify         the release gate (no placeholders left in what is published, a SECURITY.md, the tag is a version), the full per-commit test layers, and the release tooling's own checks
+#   Reproducible   the commit is built twice from two fresh clones in two directories; the packages must contain exactly the same files. The first build is kept for the next stage.
+#   Package        the packages the release ships are built here and must equal that first build file for file; a CycloneDX SBOM is written for each and checked against the package's dependencies
+#   Sign           (approval required: environment kairos-release) every package is author-signed with the certificate in Key Vault and verified against its pinned fingerprint; a SLSA provenance
+#                  statement and the SBOM are attested for each with the cosign key in Key Vault and verified against the public key committed in build/release/cosign.pub
+#   Publish        only when the publish parameter is true: the signed packages go to the feed
+#
+# No secret is used anywhere: Azure is reached through workload identity federation (the service connection below), and the keys never leave Key Vault.
+# Variables (a variable group named kairos-release; ids and names only, nothing secret):
+#   KAIROS_KEYVAULT_URL               https://{vault}.vault.azure.net
+#   KAIROS_NUGET_CERTIFICATE          the code-signing certificate's name in that vault
+#   KAIROS_NUGET_CERTIFICATE_SHA256   its SHA-256 fingerprint (what consumers can pin)
+#   KAIROS_COSIGN_KEY                 azurekms://{vault}.vault.azure.net/{key name}
+#   KAIROS_AZURE_CONNECTION           the Azure service connection (workload identity federation)
+#   KAIROS_NUGET_FEED                 the feed to push to (publish = true only)
+
+trigger:
+  branches:
+    exclude: [ '*' ]
+  tags:
+    include: [ 'v*' ]
+pr: none
+
+parameters:
+- name: publish
+  displayName: Push the signed packages to the feed
+  type: boolean
+  default: false
+
+variables:
+- group: kairos-release
+- name: CI
+  value: 'true'
+- name: DOTNET_CLI_TELEMETRY_OPTOUT
+  value: '1'
+- name: DOTNET_NOLOGO
+  value: '1'
+- name: BuildConfiguration
+  value: Release
+- name: ReleaseVersion
+  value: ${{ replace(variables['Build.SourceBranch'], 'refs/tags/v', '') }}
+
+stages:
+- stage: Verify
+  displayName: Release gate and tests
+  jobs:
+  - job: Gate
+    pool: { vmImage: ubuntu-latest }
+    timeoutInMinutes: 60
+    steps:
+    - checkout: self
+      fetchDepth: 0
+    - task: UseDotNet@2
+      displayName: Install the .NET SDK from global.json
+      inputs: { packageType: sdk, useGlobalJson: true }
+    - pwsh: ./build/release/Test-ReleaseGate.ps1 -Tag '$(Build.SourceBranch)'
+      displayName: Release gate (tag is a version, nothing is left to fill in, SECURITY.md and the signing key are in place)
+    - script: dotnet restore Kairos.sln -p:RestoreLockedMode=true
+      displayName: Locked restore
+    - script: dotnet build Kairos.sln -c $(BuildConfiguration) --no-restore
+      displayName: Build (warnings are errors)
+    - script: dotnet test Kairos.sln -c $(BuildConfiguration) --no-build --filter "Category!=Nightly&Category!=Soak&Category!=CloudSandbox" --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+      displayName: Tests (the per-commit layers)
+      env: { KAIROS_SIM_SEEDS: '1000' }
+    - task: PublishTestResults@2
+      condition: succeededOrFailed()
+      inputs: { testResultsFormat: VSTest, testResultsFiles: '$(Agent.TempDirectory)/TestResults/**/*.trx', testRunTitle: 'Kairos release $(ReleaseVersion)', failTaskOnFailedTests: true }
+    - pwsh: ./build/release/Install-ReleaseTools.ps1
+      displayName: Install cosign and syft (pinned versions, pinned hashes)
+    - pwsh: ./build/release/Test-ReleaseTooling.ps1
+      displayName: The release checks can fail (unsigned, tampered, wrong key, changed package, missing SBOM entry)
+
+- stage: Reproducible
+  displayName: Build twice, compare
+  dependsOn: Verify
+  jobs:
+  - job: Twice
+    pool: { vmImage: ubuntu-latest }
+    timeoutInMinutes: 90
+    steps:
+    - checkout: self
+      fetchDepth: 0
+    - task: UseDotNet@2
+      inputs: { packageType: sdk, useGlobalJson: true }
+    - pwsh: ./build/release/Test-Reproducible.ps1 -Version '$(ReleaseVersion)' -Work '$(Agent.TempDirectory)/repro' -Keep
+      displayName: Two builds of this commit in two directories must contain the same files
+    - publish: $(Agent.TempDirectory)/repro/packages-1
+      artifact: reproducible-build
+      displayName: Keep the first build, for the next stage to compare with
+
+- stage: Package
+  displayName: Packages and SBOMs
+  dependsOn: Reproducible
+  jobs:
+  - job: Pack
+    pool: { vmImage: ubuntu-latest }
+    timeoutInMinutes: 60
+    steps:
+    - checkout: self
+      fetchDepth: 0
+    - task: UseDotNet@2
+      inputs: { packageType: sdk, useGlobalJson: true }
+    - download: current
+      artifact: reproducible-build
+    - pwsh: ./build/release/Build-Packages.ps1 -Version '$(ReleaseVersion)' -Output '$(Build.ArtifactStagingDirectory)/packages'
+      displayName: Build the packages that will be released
+    - pwsh: |
+        . ./build/release/common.ps1
+        $problems = Compare-PackageSets '$(Build.ArtifactStagingDirectory)/packages' '$(Pipeline.Workspace)/reproducible-build'
+        if ($problems.Count -gt 0) { $problems | ForEach-Object { Write-Host "##vso[task.logissue type=error]$_" }; throw 'The release packages are not the packages the reproducibility check built.' }
+        Write-Host 'The packages to release contain exactly the files of the independently built twin.'
+      displayName: The packages equal the independently built ones
+    - pwsh: ./build/release/New-Sbom.ps1 -Packages '$(Build.ArtifactStagingDirectory)/packages' -Output '$(Build.ArtifactStagingDirectory)/sbom'
+      displayName: CycloneDX SBOM for every package, checked against the package's dependencies
+    - publish: $(Build.ArtifactStagingDirectory)
+      artifact: unsigned
+      displayName: Keep the packages and SBOMs
+
+- stage: Sign
+  displayName: Sign and attest
+  dependsOn: Package
+  jobs:
+  - deployment: SignAndAttest
+    environment: kairos-release           # approvals and checks are set on this environment: nothing is signed until a person approves
+    pool: { vmImage: ubuntu-latest }
+    timeoutInMinutes: 60
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+            fetchDepth: 0
+          - task: UseDotNet@2
+            inputs: { packageType: sdk, useGlobalJson: true }
+          - download: current
+            artifact: unsigned
+          - pwsh: ./build/release/Install-ReleaseTools.ps1
+            displayName: Install cosign and syft (pinned versions, pinned hashes)
+          - task: AzureCLI@2
+            displayName: Author-sign the packages (Key Vault certificate) and verify the signatures
+            inputs:
+              azureSubscription: $(KAIROS_AZURE_CONNECTION)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $env:DOTNET_NUGET_SIGNATURE_VERIFICATION = 'true'
+                ./build/release/Sign-Packages.ps1 -Packages '$(Pipeline.Workspace)/unsigned/packages' -KeyVaultUrl '$(KAIROS_KEYVAULT_URL)' `
+                  -Certificate '$(KAIROS_NUGET_CERTIFICATE)' -Fingerprint '$(KAIROS_NUGET_CERTIFICATE_SHA256)' -CredentialType azure-cli
+          - task: AzureCLI@2
+            displayName: Attest provenance and SBOM for every package (cosign, Key Vault key) and verify them against the committed public key
+            inputs:
+              azureSubscription: $(KAIROS_AZURE_CONNECTION)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $root = '$(Pipeline.Workspace)/unsigned'
+                ./build/release/New-Provenance.ps1 -Version '$(ReleaseVersion)' -Output "$root/provenance.predicate.json" -Byproducts (Get-ChildItem "$root/sbom" -File).FullName
+                ./build/release/Attest-Packages.ps1 -Packages "$root/packages" -Sboms "$root/sbom" -Provenance "$root/provenance.predicate.json" `
+                  -Output "$root/attestations" -Key '$(KAIROS_COSIGN_KEY)' -PublicKey ./build/release/cosign.pub
+          - pwsh: |
+              Copy-Item ./build/release/cosign.pub '$(Pipeline.Workspace)/unsigned/cosign.pub'
+              Copy-Item ./docs-site/articles/verify-releases.md '$(Pipeline.Workspace)/unsigned/VERIFY.md' -ErrorAction SilentlyContinue
+            displayName: Add the public key and the verification instructions to the evidence
+          - publish: $(Pipeline.Workspace)/unsigned
+            artifact: release
+            displayName: Keep the signed release (packages, SBOMs, attestations, provenance, public key)
+
+- stage: Publish
+  displayName: Publish to the feed
+  dependsOn: Sign
+  condition: and(succeeded(), eq('${{ parameters.publish }}', 'true'))
+  jobs:
+  - deployment: Push
+    environment: kairos-release
+    pool: { vmImage: ubuntu-latest }
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: release
+          - task: NuGetCommand@2
+            displayName: Push the signed packages
+            inputs:
+              command: push
+              packagesToPush: '$(Pipeline.Workspace)/release/packages/*.nupkg'
+              nuGetFeedType: internal
+              publishVstsFeed: $(KAIROS_NUGET_FEED)
+              allowPackageConflicts: false
