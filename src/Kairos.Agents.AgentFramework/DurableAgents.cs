@@ -82,13 +82,16 @@ public sealed class DurableAgents
             var run = new RunKey(_scope.TenantId, _scope.NamespaceId, started.RunId);
             if (started.Started)
             {
-                return new DurableTurn(workflowId, run, turnId);
+                return new DurableTurn(workflowId, run, turnId); // a run of its own: all of it is the answer's neighbourhood
             }
 
-            // The conversation exists: its current run takes the message as a signal. The id makes a repeated delivery harmless.
+            // The conversation exists: its current run takes the message as a signal. The id makes a repeated delivery harmless. What the conversation did before the message was sent is none of this
+            // message's business, so reading starts where the history stood a moment ago - unless the caller chose the id, in which case this may be a repeat of a message that was answered long ago, and the answer is
+            // read from the start of the run.
+            long from = messageId is null ? (await _client.GetHistoryTailAsync(run, 1, cancellationToken).ConfigureAwait(false)).LastSequence : 0;
             if (await _client.SignalAsync(run, AgentFrameworkNames.MessageSignal, AfCodec.Write(turn, AfJson.Default.AfTurn), turnId, cancellationToken).ConfigureAwait(false))
             {
-                return new DurableTurn(workflowId, run, turnId);
+                return new DurableTurn(workflowId, run, turnId) { Cursor = from };
             }
 
             RunState? state = await _client.GetStateAsync(run, cancellationToken).ConfigureAwait(false);
@@ -105,11 +108,36 @@ public sealed class DurableAgents
         throw new TimeoutException($"The conversation '{session.SessionId}' could not take the message: its run kept changing.");
     }
 
+    /// <summary>How many events one read of the history asks for.</summary>
+    private const int PageSize = 200;
+
+    /// <summary>Reads what the run has written since this message was last looked at, and nothing before: the cost of a look is the cost of what is new, not of the conversation.</summary>
+    private async ValueTask<AgentResponse?> ScanAsync(AgentDefinition agent, DurableTurn turn, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            HistoryPage page = await _client.GetOpenedHistoryAfterAsync(turn.Run, turn.Cursor, PageSize, cancellationToken).ConfigureAwait(false);
+            turn.Reader.Add(page.Events);
+            if (page.Events.Count > 0)
+            {
+                turn.Cursor = page.Events[^1].Sequence;
+            }
+
+            if (page.Events.Count < PageSize)
+            {
+                return turn.Reader.Reply(agent);
+            }
+        }
+    }
+
+    /// <summary>Completes when the conversation's run has something this message has not looked at, or after <see cref="AgentFrameworkOptions.ReplyWait"/>; the engine ends the wait the moment the run is written to.</summary>
+    internal ValueTask<bool> WaitForUpdateAsync(DurableTurn turn, CancellationToken cancellationToken) =>
+        _client.WaitForHistoryAsync(turn.Run, turn.Cursor, _runtime.Options.ReplyWait, cancellationToken);
+
     /// <summary>The answer to a message, or null while the agent has not finished it. Throws when the conversation's run failed.</summary>
     internal async ValueTask<AgentResponse?> TryReadAsync(AgentDefinition agent, DurableTurn turn, CancellationToken cancellationToken)
     {
-        IReadOnlyList<HistoryEvent> history = await _client.GetOpenedHistoryAsync(turn.Run, cancellationToken).ConfigureAwait(false);
-        if (Read(agent, turn, history) is { } reply)
+        if (await ScanAsync(agent, turn, cancellationToken).ConfigureAwait(false) is { } reply)
         {
             return reply;
         }
@@ -121,7 +149,8 @@ public sealed class DurableAgents
             case RunState.ContinuedAsNew:
                 break;
             default:
-                throw Ended(agent, history);
+                // Closed: what it wrote last may have come between the look and the state.
+                return await ScanAsync(agent, turn, cancellationToken).ConfigureAwait(false) is { } late ? late : throw Ended(agent, turn.Reader.Last);
         }
 
         // The conversation moved on to a fresh run, and the message went with it if it was not answered yet. The answer is in the current run or in one of the runs between: asking to start the same
@@ -137,68 +166,31 @@ public sealed class DurableAgents
                 latest = there;
             }
 
-            if (Read(agent, turn, there) is { } answer)
+            var reader = new TurnReader(turn.TurnId);
+            reader.Add(there);
+            if (reader.Reply(agent) is { } answer)
             {
-                turn.Run = run;
+                turn.Follow(run, reader, there);
                 return answer;
             }
 
             at = there.Count > 0 && there[0] is WorkflowStarted { PreviousRunId: var previous } && previous != Guid.Empty ? new RunKey(_scope.TenantId, _scope.NamespaceId, previous) : null;
         }
 
-        return await _client.GetStateAsync(current, cancellationToken).ConfigureAwait(false) is RunState.Running or RunState.ContinuedAsNew or null ? null : throw Ended(agent, latest);
-    }
-
-    private static AgentResponse? Read(AgentDefinition agent, DurableTurn turn, IReadOnlyList<HistoryEvent> history)
-    {
-        var mine = new HashSet<int>();
-        long input = 0, output = 0, total = 0;
-        AfStepResult? last = null;
-        foreach (HistoryEvent e in history)
+        // Not answered yet: from now on watch the run that holds the message, and read it from where this look ended.
+        if (current != turn.Run)
         {
-            if (e is ActivityScheduled s && (s.ActivityType == AgentFrameworkNames.Step || s.ActivityType == AgentFrameworkNames.Turn))
-            {
-                if (AfCodec.Read(s.Input, AfJson.Default.AfStepRequest).TurnId == turn.TurnId)
-                {
-                    mine.Add(s.ActivityId);
-                }
-            }
-            else if (e is ActivityCompleted c && mine.Contains(c.ActivityId))
-            {
-                AfStepResult result = AfCodec.Read(c.Result, AfJson.Default.AfStepResult);
-                if (result.Outcome != AfOutcomes.Done)
-                {
-                    continue;
-                }
-
-                input += result.InputTokens ?? 0;
-                output += result.OutputTokens ?? 0;
-                total += result.TotalTokens ?? 0;
-                if (result.Final)
-                {
-                    last = result;
-                }
-            }
+            var reader = new TurnReader(turn.TurnId);
+            reader.Add(latest);
+            turn.Follow(current, reader, latest);
         }
 
-        if (last?.Messages is not { } messages)
-        {
-            return null;
-        }
-
-        List<ChatMessage> produced = JsonSerializer.Deserialize<List<ChatMessage>>(messages, AIJsonUtilities.DefaultOptions) ?? [];
-        return new AgentResponse(produced)
-        {
-            AgentId = agent.Name,
-            ResponseId = turn.TurnId,
-            Usage = new UsageDetails { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = total },
-            FinishReason = last.FinishReason is { } f ? new ChatFinishReason(f) : null,
-        };
+        return await _client.GetStateAsync(current, cancellationToken).ConfigureAwait(false) is RunState.Running or RunState.ContinuedAsNew or null ? null : throw Ended(agent, latest.Count > 0 ? latest[^1] : null);
     }
 
-    private static Exception Ended(AgentDefinition agent, IReadOnlyList<HistoryEvent> history)
+    private static Exception Ended(AgentDefinition agent, HistoryEvent? last)
     {
-        if (history.Count > 0 && history[^1] is WorkflowFailed failed)
+        if (last is WorkflowFailed failed)
         {
             return failed.ErrorType switch
             {
@@ -243,12 +235,26 @@ public sealed class DurableTurn
         WorkflowId = workflowId;
         Run = run;
         TurnId = turnId;
+        Reader = new TurnReader(turnId);
     }
 
     internal string WorkflowId { get; }
 
     /// <summary>The run that holds the answer now (a conversation moves to a fresh run now and then).</summary>
-    internal RunKey Run { get; set; }
+    internal RunKey Run { get; private set; }
+
+    /// <summary>The sequence number of the last event of <see cref="Run"/> that was looked at: the next look reads what comes after it. Looking at a turn is for one caller at a time.</summary>
+    internal long Cursor { get; set; }
+
+    internal TurnReader Reader { get; private set; }
+
+    /// <summary>The conversation moved on to <paramref name="run"/>, of which <paramref name="seen"/> has been looked at with <paramref name="reader"/>.</summary>
+    internal void Follow(RunKey run, TurnReader reader, IReadOnlyList<HistoryEvent> seen)
+    {
+        Run = run;
+        Reader = reader;
+        Cursor = seen.Count > 0 ? seen[^1].Sequence : 0;
+    }
 
     /// <summary>Identifies the message; sending it again with this id is harmless.</summary>
     public string TurnId { get; }

@@ -53,6 +53,7 @@ public sealed partial class AgentFrameworkRuntime
         }
 
         Unclassified = unclassified;
+        Snapshots = new SnapshotCache(options.SnapshotCacheBytes);
         _activities = new Dictionary<string, ActivityFunc>(agents.Activities, StringComparer.Ordinal)
         {
             [AgentFrameworkNames.Step] = (context, input, ct) => StepAsync(context, input, stepped: true, ct),
@@ -67,6 +68,9 @@ public sealed partial class AgentFrameworkRuntime
     internal AgentsRuntime Agents { get; }
 
     internal AgentFrameworkOptions Options { get; }
+
+    /// <summary>The sessions of the steps this worker ran, so that the next step of a conversation need not be sent its session again.</summary>
+    internal SnapshotCache Snapshots { get; }
 
     internal IReadOnlyDictionary<string, AgentDefinition> Definitions => _definitions;
 

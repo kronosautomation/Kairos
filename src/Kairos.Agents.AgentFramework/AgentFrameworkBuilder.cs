@@ -6,8 +6,9 @@ namespace Kairos.Agents.AgentFramework;
 public sealed class AgentFrameworkOptions
 {
     /// <summary>
-    /// The largest session snapshot a step will take or return (UTF-8 bytes). Every step carries the whole snapshot, so a conversation that grows past this fails the step with a clear error instead of
-    /// moving ever larger payloads through history. Default 512 KiB. Agent Framework's own compaction strategies run inside the step and keep a long conversation under it.
+    /// The largest session snapshot a step will take or return (UTF-8 bytes). A conversation that grows past this fails the step with a clear error instead of moving ever larger sessions around. Default 512 KiB.
+    /// History holds the session once every <see cref="FullSnapshotEvery"/> steps and otherwise only what changed, but a worker still loads the whole session for every model call, so keep it small:
+    /// Agent Framework's compaction strategies (<c>CompactionProvider</c>) run inside the step and are the documented way to do that for conversations.
     /// </summary>
     public int MaxSnapshotBytes { get; set; } = 512 * 1024;
 
@@ -23,11 +24,23 @@ public sealed class AgentFrameworkOptions
     /// </summary>
     public int? ContinueAfterEvents { get; set; }
 
-    /// <summary>How soon <see cref="DurableAIAgent"/> first looks for the answer to a message; the interval then grows to <see cref="MaxReplyPollInterval"/>. Default 25 ms.</summary>
-    public TimeSpan MinReplyPollInterval { get; set; } = TimeSpan.FromMilliseconds(25);
+    /// <summary>
+    /// How long <see cref="DurableAIAgent"/> waits for the engine to say the conversation's run has something new before it looks anyway. A wait ends at once when the run is written to, so this is only the longest silence
+    /// between two looks, not a polling interval. Default 30 seconds.
+    /// </summary>
+    public TimeSpan ReplyWait { get; set; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>The longest wait between two looks for an answer. Default one second.</summary>
-    public TimeSpan MaxReplyPollInterval { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>
+    /// How often history holds the whole session: a step records it whole when this many steps have passed since the last whole record, and otherwise records only what changed (when that is smaller). Reading a session
+    /// applies at most this many changes to a whole one. Default 8; 1 records it whole every time.
+    /// </summary>
+    public int FullSnapshotEvery { get; set; } = 8;
+
+    /// <summary>How much memory a worker may use to remember the sessions of the steps it ran, so that the next step of a conversation need not be sent the session again. Least recently used out first. Default 64 MiB.</summary>
+    public long SnapshotCacheBytes { get; set; } = 64L * 1024 * 1024;
+
+    /// <summary>How often a nested agent's run looks whether its parent run is still open, so that it stops when the parent was terminated. Default one minute; null never looks.</summary>
+    public TimeSpan? ParentWatchInterval { get; set; } = TimeSpan.FromMinutes(1);
 }
 
 /// <summary>
@@ -116,8 +129,17 @@ public sealed class AgentRegistration
 
     /// <summary>
     /// Lets the named tools run without a person's approval, as Agent Framework would run a tool that is not wrapped in an approval requirement. This is a deliberate decision by the application's owner and is
-    /// recorded in the audit trail with every call. It lifts the hold the free policy puts on side-effecting tools; it does not override a denial, or a rule of a policy engine that matches the call.
+    /// recorded in the audit trail with every call.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It lifts the default hold: the free policy's hold on a side-effecting tool, or the default of a policy engine (a decision whose rule name is in parentheses). <b>It never outranks a policy engine rule.</b> A rule that matches the call and
+    /// asks for approval still asks, and a rule or a denial that refuses the call still refuses it, whatever the application's owner marked: the owner's mark must not override what an operator's policy says about this exact call.
+    /// </para>
+    /// <para>
+    /// For example, with <c>AllowWithoutApproval("issue_credit")</c> and a rule "credits over 100 need finance": a credit of 20 runs without asking (the audit names <c>af.allow-without-approval</c>), a credit of 500 waits for finance.
+    /// </para>
+    /// </remarks>
     public AgentRegistration AllowWithoutApproval(params string[] tools)
     {
         Add(AllowedWithoutApproval, tools);

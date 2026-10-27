@@ -118,8 +118,7 @@ public sealed class DurableAIAgent : AIAgent
         };
         DurableTurn turn = await SendAsync(messages, conversation, cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        // There is no channel from the engine back to the caller, and the engine has no wait-for-run operation to ask: look at the history, quickly at first and then less often.
-        TimeSpan wait = _owner.Options.MinReplyPollInterval;
+        // Look at what the run has written since the last look, and when there is no answer yet ask the engine to say when the run is written to again: the wait ends at the next write, not at the next poll.
         while (true)
         {
             AgentResponse? reply = await TryReadAsync(turn, cancellationToken).ConfigureAwait(false);
@@ -128,8 +127,7 @@ public sealed class DurableAIAgent : AIAgent
                 return reply;
             }
 
-            await Task.Delay(wait, _owner.Time, cancellationToken).ConfigureAwait(false);
-            wait = TimeSpan.FromTicks(Math.Min(wait.Ticks * 3 / 2 + 1, _owner.Options.MaxReplyPollInterval.Ticks));
+            await _owner.WaitForUpdateAsync(turn, cancellationToken).ConfigureAwait(false);
         }
     }
 

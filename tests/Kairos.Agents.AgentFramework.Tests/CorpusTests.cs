@@ -6,9 +6,10 @@ using Microsoft.Extensions.AI;
 namespace Kairos.Agents.AgentFramework.Tests;
 
 /// <summary>
-/// Golden histories recorded through the adapter (<c>Corpus/v4</c>) and replayed by every later build: the driver workflow is code in a package, and a run in flight when a new version is deployed replays against it. A change to the
-/// driver that no longer reproduces these histories would break every conversation in flight, so it fails here. Never re-record a file to make a test pass; record new files for new behaviour.
-/// Record once per release: <c>KAIROS_CORPUS_RECORD_AF=&lt;dir&gt; dotnet test --filter Record_the_agent_framework_corpus</c>.
+/// Golden histories recorded through the adapter (<c>Corpus/v4</c>, <c>Corpus/v5</c>) and replayed by every later build: the driver workflow is code in a package, and a run in flight when a new version is deployed replays against it.
+/// A change to the driver that no longer reproduces these histories would break every conversation in flight, so it fails here. Never re-record a file to make a test pass; record new files for new behaviour.
+/// v4 is what the first release wrote (every step carries the whole session); v5 is the session-by-reference shape, and is what a run started now records. Record once per release (into a directory of its own, never over an existing one):
+/// <c>KAIROS_CORPUS_RECORD_AF=&lt;dir&gt; dotnet test --filter Record_the_agent_framework_corpus</c>.
 /// </summary>
 public sealed class CorpusTests
 {
@@ -16,7 +17,10 @@ public sealed class CorpusTests
     private static readonly ApproverIdentity Alice = new("user:alice", "Alice", ["finance"]);
     private static readonly ApproverIdentity Bob = new("user:bob", "Bob", ["ops"]);
 
-    private static string Dir => Path.Combine(AppContext.BaseDirectory, "Corpus", "v4");
+    private static string Dir(string version) => Path.Combine(AppContext.BaseDirectory, "Corpus", version);
+
+    /// <summary>The version recorded by <see cref="Record_the_agent_framework_corpus"/>.</summary>
+    private const string Recorded = "v5";
 
     /// <summary>What each file is, and the registrations to replay it with (the agents of the recording, by name).</summary>
     private static readonly (string File, string Description)[] Files =
@@ -31,6 +35,13 @@ public sealed class CorpusTests
         ("af-nested-child.khist", "a nested durable agent answering one question for its parent and telling it"),
         ("af-definition-change.khist", "a run whose agent definition changed while it waited: a person allowed it, and the override is in history"),
         ("af-turn-level.khist", "an agent recorded a turn at a time (it cannot be run one model call at a time)"),
+    ];
+
+    /// <summary>Shapes only the session-by-reference protocol has.</summary>
+    private static readonly (string File, string Description)[] V5Only =
+    [
+        ("af-need-snapshot.khist", "the second message ran on a worker that did not hold the session: the step said so, the workflow sent the session once, and the step ran"),
+        ("af-snapshot-changes.khist", "seven messages with the session recorded whole every third step and as changes in between"),
     ];
 
     private static AfHarness Plain(out ScriptedChatClient model)
@@ -68,6 +79,10 @@ public sealed class CorpusTests
                 break;
             case "af-turn-level.khist":
                 builder.AddAgent(new OpaqueAgent("remote", (_, _) => "x"), r => r.AllowTurnLevel());
+                break;
+            case "af-need-snapshot.khist":
+            case "af-snapshot-changes.khist":
+                builder.AddAgent(AfHarness.AgentWith(AfHarness.Echo(), "chat"));
                 break;
             default:
                 throw new InvalidOperationException(file);
@@ -182,29 +197,57 @@ public sealed class CorpusTests
         await h.AskAsync("remote", "s", "two");
         recorded["af-turn-level.khist"] = await h.HistoryAsync(await h.RunOfAsync("remote", "s"));
 
-        foreach ((string file, string description) in Files)
+        h = new AfHarness(af => af.AddAgent(AfHarness.AgentWith(AfHarness.Echo("answer"), "chat")));
+        await h.AskAsync("chat", "s", "first");
+        var elsewhere = new AfHarness(af => af.AddAgent(AfHarness.AgentWith(AfHarness.Echo("answer"), "chat")), redeployOf: h); // a worker that has never seen the session
+        await elsewhere.AskAsync("chat", "s", "second");
+        recorded["af-need-snapshot.khist"] = await elsewhere.HistoryAsync(await elsewhere.RunOfAsync("chat", "s"));
+
+        h = new AfHarness(af => af.Configure(o => o.FullSnapshotEvery = 3).AddAgent(AfHarness.AgentWith(AfHarness.Echo("answer"), "chat")));
+        for (int i = 1; i <= 7; i++)
         {
-            await System.IO.File.WriteAllTextAsync(Path.Combine(target, file), HistoryFile.Serialize(recorded[file], "v4", description, ReplayWith));
+            await h.AskAsync("chat", "s", $"message {i}");
+        }
+
+        recorded["af-snapshot-changes.khist"] = await h.HistoryAsync(await h.RunOfAsync("chat", "s"));
+
+        foreach ((string file, string description) in Files.Concat(V5Only))
+        {
+            await System.IO.File.WriteAllTextAsync(Path.Combine(target, file), HistoryFile.Serialize(recorded[file], Recorded, description, ReplayWith));
         }
     }
 
     // ---- replay (every build) ----------------------------------------------------------------------------------------
 
-    public static TheoryData<string> FileNames() => [.. Files.Select(f => f.File)];
-
-    private static List<HistoryEvent> Load(string file, out HistoryFileContents contents)
+    public static TheoryData<string, string> FileNames()
     {
-        string path = Path.Combine(Dir, file);
-        Assert.True(System.IO.File.Exists(path), "the v4 corpus file is missing: " + path);
+        var data = new TheoryData<string, string>();
+        foreach ((string file, _) in Files)
+        {
+            data.Add("v4", file);
+        }
+
+        foreach ((string file, _) in Files.Concat(V5Only))
+        {
+            data.Add("v5", file);
+        }
+
+        return data;
+    }
+
+    private static List<HistoryEvent> Load(string file, out HistoryFileContents contents, string version = "v4")
+    {
+        string path = Path.Combine(Dir(version), file);
+        Assert.True(System.IO.File.Exists(path), $"the {version} corpus file is missing: " + path);
         contents = HistoryFile.ParseVerified(System.IO.File.ReadAllText(path));
         return [.. contents.History];
     }
 
     [Theory]
     [MemberData(nameof(FileNames))]
-    public void The_file_verifies_and_every_event_keeps_its_exact_bytes(string file)
+    public void The_file_verifies_and_every_event_keeps_its_exact_bytes(string version, string file)
     {
-        List<HistoryEvent> history = Load(file, out HistoryFileContents contents);
+        List<HistoryEvent> history = Load(file, out HistoryFileContents contents, version);
 
         Assert.Equal(ReplayWith, contents.ReplayWith);
         Assert.NotEmpty(history);
@@ -216,9 +259,9 @@ public sealed class CorpusTests
 
     [Theory]
     [MemberData(nameof(FileNames))]
-    public void Replay_reproduces_the_recorded_run_and_asks_for_nothing_new(string file)
+    public void Replay_reproduces_the_recorded_run_and_asks_for_nothing_new(string version, string file)
     {
-        List<HistoryEvent> history = Load(file, out _);
+        List<HistoryEvent> history = Load(file, out _, version);
         AgentFrameworkRuntime runtime = ReplayRuntime(file);
 
         ReplayResult replay = WorkflowReplayer.Replay(runtime.Conversation, history);

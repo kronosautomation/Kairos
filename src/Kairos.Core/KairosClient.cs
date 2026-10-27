@@ -280,6 +280,14 @@ public sealed class KairosClient
         return page;
     }
 
+    /// <summary>The last <paramref name="count"/> events of a run as the store holds them (payloads sealed when encryption is on), verified as <see cref="GetHistoryAfterAsync"/> does, with where the history ends.</summary>
+    public async ValueTask<HistoryPage> GetHistoryTailAsync(RunKey run, int count, CancellationToken cancellationToken = default)
+    {
+        HistoryPage page = await _store.GetHistoryTailAsync(run, count, cancellationToken).ConfigureAwait(false);
+        HashChain.VerifyPage(page.Events);
+        return page;
+    }
+
     /// <summary>Like <see cref="GetHistoryAfterAsync"/>, with the payloads opened by this client's protector.</summary>
     public async ValueTask<HistoryPage> GetOpenedHistoryAfterAsync(RunKey run, long afterSequence, int limit, CancellationToken cancellationToken = default) =>
         await OpenAsync(await GetHistoryAfterAsync(run, afterSequence, limit, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);

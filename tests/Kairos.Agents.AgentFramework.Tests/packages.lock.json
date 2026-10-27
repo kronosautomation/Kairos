@@ -459,6 +459,12 @@
           "Microsoft.Agents.AI": "[1.24.0, )"
         }
       },
+      "kairos.cloud.selfhosted": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )"
+        }
+      },
       "kairos.core": {
         "type": "Project",
         "dependencies": {

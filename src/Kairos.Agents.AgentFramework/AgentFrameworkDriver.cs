@@ -20,6 +20,9 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
     {
         public JsonElement? Snapshot { get; set; }
 
+        /// <summary>Set when the run uses <see cref="AfProtocol.Referenced"/>: the session is then followed here and <see cref="Snapshot"/> is not used.</summary>
+        public SessionChain? Chain { get; set; }
+
         public string? Hash { get; set; }
 
         public string LastText { get; set; } = "";
@@ -33,6 +36,15 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
 
         ctx.OnBehalfOf = input.OnBehalfOf;
         var state = new Conversation { Snapshot = input.Snapshot, Hash = input.Hash };
+        if (wf.IsPatched(AfProtocol.Patch)) // runs recorded before this have no marker and keep the first protocol, in which every step carries the whole session
+        {
+            state.Chain = new SessionChain();
+            if (input.Snapshot is { } held)
+            {
+                state.Chain.StartFrom(held);
+            }
+        }
+
         var pending = new Queue<AfTurn>(input.Pending);
         var recent = new List<string>(input.Recent);
         Task<byte[]> close = wf.WaitForSignalAsync(AgentFrameworkNames.CloseSignal);
@@ -77,7 +89,7 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
                         pending.Enqueue(AfCodec.Read(more.Result, AfJson.Default.AfTurn));
                     }
 
-                    throw wf.ContinueAsNew(AfCodec.Write(input with { Snapshot = state.Snapshot, Hash = state.Hash, Pending = [.. pending], Recent = [.. recent] }, AfJson.Default.AfDriverInput));
+                    throw wf.ContinueAsNew(AfCodec.Write(input with { Snapshot = state.Chain is { IsEmpty: false } chain ? chain.Materialize() : state.Snapshot, Hash = state.Hash, Pending = [.. pending], Recent = [.. recent] }, AfJson.Default.AfDriverInput));
                 }
 
                 AfTurn turn = pending.Dequeue();
@@ -127,7 +139,15 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
             }
 
             AfStepResult result = await StepAsync(ctx, definition, state, turn.TurnId, newMessages, results, responses);
-            state.Snapshot = result.Snapshot ?? state.Snapshot;
+            if (state.Chain is { } chain)
+            {
+                chain.Record(result);
+            }
+            else
+            {
+                state.Snapshot = result.Snapshot ?? state.Snapshot;
+            }
+
             state.Hash = result.Hash ?? state.Hash;
             if (result.Final)
             {
@@ -152,14 +172,20 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
         IWorkflowContext wf = ctx.Workflow;
         string? allowance = null;
         int overrides = 0;
+        bool sendWhole = false;
         while (true)
         {
+            SessionChain? chain = state.Chain;
             var request = new AfStepRequest
             {
                 Agent = definition.Name,
                 Hash = state.Hash,
                 TurnId = turnId,
-                Snapshot = state.Snapshot,
+                Protocol = chain is null ? 0 : AfProtocol.Referenced,
+                Snapshot = chain is null ? state.Snapshot : sendWhole && !chain.IsEmpty ? chain.Materialize() : null,
+                SnapshotHash = chain?.Hash,
+                SnapshotFrom = chain?.From,
+                StepsSinceFull = chain?.StepsSinceFull ?? 0,
                 Messages = messages,
                 ToolResults = results,
                 ApprovalResponses = responses,
@@ -171,6 +197,16 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
 
             switch (result.Outcome)
             {
+                case AfOutcomes.NeedSnapshot:
+                    // The worker that took the step does not hold the session (another worker ran the last one, or it was dropped from the worker's cache): send it once and ask again. Nothing was called.
+                    if (sendWhole || chain is null)
+                    {
+                        throw new SnapshotIntegrityException("A worker did not take the session it was sent.");
+                    }
+
+                    sendWhole = true;
+                    continue;
+
                 case AfOutcomes.DefinitionChanged:
                     if (++overrides > 3)
                     {

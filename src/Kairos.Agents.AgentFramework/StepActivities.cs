@@ -50,7 +50,40 @@ public sealed partial class AgentFrameworkRuntime
         }
 
         int limit = Options.MaxSnapshotBytes;
-        if (request.Snapshot is { } incoming && incoming.GetRawText().Length > limit)
+        bool referenced = request.Protocol >= AfProtocol.Referenced;
+        SessionText? before = null;
+        JsonElement? session = request.Snapshot;
+        if (referenced)
+        {
+            if (request.Snapshot is { } sent)
+            {
+                before = SessionText.Of(SnapshotCodec.Canonical(sent));
+                if (request.SnapshotHash is { } expected && !string.Equals(before.Hash, expected, StringComparison.Ordinal))
+                {
+                    throw new SnapshotIntegrityException("The session a step was sent is not the one its hash names.");
+                }
+
+                Snapshots.Put(context.Run.TenantId, context.Run.NamespaceId, before.Hash, before.Text);
+            }
+            else if (request.SnapshotHash is { } hash)
+            {
+                if (!Snapshots.TryGet(context.Run.TenantId, context.Run.NamespaceId, hash, out string held))
+                {
+                    return AfCodec.Write(new AfStepResult { Outcome = AfOutcomes.NeedSnapshot, TurnId = request.TurnId, SnapshotHash = hash }, AfJson.Default.AfStepResult);
+                }
+
+                before = new SessionText(System.Text.Json.Nodes.JsonNode.Parse(held)!, held, hash);
+            }
+
+            if (before is not null && before.Bytes > limit)
+            {
+                throw new SnapshotTooLargeException(
+                    $"The session of agent '{definition.Name}' is larger than the {limit} bytes allowed (MaxSnapshotBytes). Compact its history (Agent Framework's compaction strategies run inside the step) or raise the limit.");
+            }
+
+            session = before is null ? null : SnapshotCodec.Element(before.Text);
+        }
+        else if (request.Snapshot is { } incoming && incoming.GetRawText().Length > limit)
         {
             throw new SnapshotTooLargeException(
                 $"The session of agent '{definition.Name}' is larger than the {limit} bytes allowed (MaxSnapshotBytes). Compact its history (Agent Framework's compaction strategies run inside the step) or raise the limit.");
@@ -59,7 +92,7 @@ public sealed partial class AgentFrameworkRuntime
         List<ChatMessage> messages = Messages(request);
         GuardedCall<AgentRun> guarded = await Agents.GuardedModelCallAsync(
             context, definition.Model ?? definition.Name, definition.MaxOutputTokens, request.BudgetAllowance,
-            token => RunAgentAsync(definition, request, messages, context, stepped, token), run => run.Usage, cancellationToken).ConfigureAwait(false);
+            token => RunAgentAsync(definition, session, messages, context, stepped, token), run => run.Usage, cancellationToken).ConfigureAwait(false);
         if (!guarded.Allowed)
         {
             return AfCodec.Write(
@@ -84,7 +117,13 @@ public sealed partial class AgentFrameworkRuntime
             snapshot = SnapshotRedactor.RedactSnapshot(snapshot, redact, definition.SnapshotState);
         }
 
-        if (snapshot.GetRawText().Length > limit)
+        SessionText? after = null;
+        if (referenced)
+        {
+            after = SessionText.Of(SnapshotCodec.Canonical(snapshot));
+        }
+
+        if ((after?.Bytes ?? snapshot.GetRawText().Length) > limit)
         {
             throw new SnapshotTooLargeException(
                 $"The session of agent '{definition.Name}' grew past the {limit} bytes allowed (MaxSnapshotBytes). Compact its history or raise the limit.");
@@ -96,12 +135,43 @@ public sealed partial class AgentFrameworkRuntime
         UsageDetails? usage = run.Response.Usage;
         string? finish = (run.Response.FinishReason ?? (run.Response.RawRepresentation as ChatResponse)?.FinishReason)?.Value;
         AgentTelemetry.FrameworkResponse(span, definition.Model ?? definition.Name, run.ModelId, finish, usage?.InputTokenCount, usage?.OutputTokenCount, run.Response.Messages.Count);
+        JsonElement? whole = snapshot;
+        JsonElement? change = null;
+        string? baseHash = null;
+        if (after is not null)
+        {
+            // Whole every few steps, so that reading a session never applies many changes; in between only what changed, when that is smaller than the session.
+            bool recordWhole = before is null || request.StepsSinceFull + 1 >= Options.FullSnapshotEvery;
+            if (!recordWhole)
+            {
+                string delta = (SnapshotCodec.Diff(before!.Node, after.Node) ?? new System.Text.Json.Nodes.JsonObject { ["e"] = 1 }).ToJsonString();
+                if (delta.Length < after.Text.Length)
+                {
+                    whole = null;
+                    change = SnapshotCodec.Element(delta);
+                    baseHash = before.Hash;
+                }
+            }
+
+            if (whole is not null)
+            {
+                whole = SnapshotCodec.Element(after.Text);
+            }
+
+            Snapshots.Put(context.Run.TenantId, context.Run.NamespaceId, after.Hash, after.Text);
+        }
+
         return AfCodec.Write(
             new AfStepResult
             {
                 TurnId = request.TurnId,
                 Hash = definition.Hash,
-                Snapshot = snapshot,
+                Snapshot = whole,
+                Delta = change,
+                SnapshotHash = after?.Hash,
+                BaseHash = baseHash,
+                StepId = after is null ? null : context.IdempotencyKey,
+                SessionBytes = after?.Bytes,
                 Messages = responseMessages,
                 ToolCalls = [.. toolCalls],
                 ApprovalRequests = [.. approvals],
@@ -113,6 +183,18 @@ public sealed partial class AgentFrameworkRuntime
                 FinishReason = finish,
             },
             AfJson.Default.AfStepResult);
+    }
+
+    /// <summary>A session in the form it is hashed and compared in.</summary>
+    private sealed record SessionText(System.Text.Json.Nodes.JsonNode Node, string Text, string Hash)
+    {
+        public long Bytes => System.Text.Encoding.UTF8.GetByteCount(Text);
+
+        public static SessionText Of(System.Text.Json.Nodes.JsonNode node)
+        {
+            string text = SnapshotCodec.Text(node);
+            return new SessionText(node, text, SnapshotCodec.Hash(text));
+        }
     }
 
     private static List<ChatMessage> Messages(AfStepRequest request)
@@ -143,11 +225,11 @@ public sealed partial class AgentFrameworkRuntime
     }
 
     private static async Task<AgentRun> RunAgentAsync(
-        AgentDefinition definition, AfStepRequest request, List<ChatMessage> messages, ActivityContext context, bool stepped, CancellationToken cancellationToken)
+        AgentDefinition definition, JsonElement? snapshot, List<ChatMessage> messages, ActivityContext context, bool stepped, CancellationToken cancellationToken)
     {
         AIAgent agent = definition.Agent;
-        AgentSession session = request.Snapshot is { } snapshot
-            ? await agent.DeserializeSessionAsync(snapshot, null, cancellationToken).ConfigureAwait(false)
+        AgentSession session = snapshot is { } held
+            ? await agent.DeserializeSessionAsync(held, null, cancellationToken).ConfigureAwait(false)
             : await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
 
         string key = context.IdempotencyKey;

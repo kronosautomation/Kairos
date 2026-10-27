@@ -24,7 +24,8 @@ internal sealed class AfHarness
     private readonly IPayloadProtector? _protector;
 
     public AfHarness(
-        Action<AgentFrameworkBuilder> configure, bool faultInjection = false, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true, AfHarness? redeployOf = null)
+        Action<AgentFrameworkBuilder> configure, bool faultInjection = false, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true, AfHarness? redeployOf = null,
+        Func<IKairosStore, IKairosStore>? wrapStore = null)
     {
         if (redeployOf is null)
         {
@@ -37,6 +38,11 @@ internal sealed class AfHarness
             }
 
             Store = (IKairosStore?)Faults ?? memory;
+            if (wrapStore is not null)
+            {
+                Store = wrapStore(Store);
+            }
+
             _protector = protector;
             Client = new KairosClient(Store, Time, payloadProtector: protector);
         }

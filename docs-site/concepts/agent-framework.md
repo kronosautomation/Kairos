@@ -40,8 +40,27 @@ Agent Framework asks only whether a *call needs approval*. Kairos also asks whet
 | marked `RequireApproval("name", requirement)` | waits for the people the requirement names |
 | none of these | is treated as changing the outside world: it waits for approval unless a policy allows it |
 
-A denial always stands, and so does a rule of a policy engine that matches the call; `AllowWithoutApproval` only lifts the free policy's default hold. When the host starts, every tool nobody classified is logged by name.
-Classification lives in the registration, not in the agent.
+A denial always stands. When the host starts, every tool nobody classified is logged by name. Classification lives in the registration, not in the agent.
+
+### `AllowWithoutApproval` never outranks a policy rule
+
+`AllowWithoutApproval` is the application owner's statement that a tool may run without asking. It lifts one thing: the **default hold** the free policy puts on a tool that changes the outside world, or the default of a policy engine
+(a decision whose rule has a name in parentheses, such as `(default)`). It does not outrank a **rule** that matched the call: an application owner's mark must not override what an operator's policy says about this exact call. A rule that asks for approval
+still asks; a rule that denies still denies.
+
+Here the owner marks `issue_credit` as allowed, and the operators' policy has a rule for credits over 100:
+
+[!code-csharp[](../../samples/AgentFramework/CreditAgentSample.cs#credit-rule)]
+
+[!code-csharp[](../../samples/AgentFramework/CreditAgentSample.cs#credit-register)]
+
+| The agent calls | What decides | Result |
+|---|---|---|
+| `issue_credit(C-1, 20)` | no rule matched; the policy's default hold applies, and the owner's mark lifts it | runs without asking; the audit names `af.allow-without-approval` |
+| `issue_credit(C-1, 500)` | the rule `credit-limit` matched and asks for finance | waits for finance; the owner's mark changes nothing |
+| a rule that denies the call | the rule | refused; the model is told so |
+
+The sample's tests run both calls.
 
 ## Approvals
 
@@ -74,10 +93,29 @@ af.ConfigureAgents(agents => agents.UseModelCallGuard(budget).UseRedactor(Redact
 One conversation is one run, and each message is a signal to it. A session id is the run's workflow id, so a conversation can be picked up from another process. Messages are answered once: send again with the same message id and the conversation answers it once.
 When the history grows long the run hands over to a fresh one, carrying the session. A conversation ends when it is closed, or after `ConversationIdleTimeout`; a message to an ended conversation is refused with a clear error.
 
-`DurableAIAgent.RunAsync` waits for the answer by looking at the run's history, quickly at first and then less often. If you would rather not wait, `SendAsync` returns at once and `TryReadAsync` asks whether the answer is there.
+`DurableAIAgent.RunAsync` waits for the answer without polling. It reads what the run has written since the message was sent and, when the answer is not there yet, asks the engine to say when the run is written to again: the wait ends at the
+write that has the answer, and `ReplyWait` (30 seconds by default) is only the longest silence before it looks anyway. A look costs what is new, not what the conversation holds. If you would rather not wait, `SendAsync` returns at once and `TryReadAsync`
+asks whether the answer is there; a `DurableTurn` is looked at by one caller at a time.
 
-A session is carried whole by every step, so a long conversation moves more bytes as it grows. `MaxSnapshotBytes` (512 KiB by default) fails a step with a clear error instead of letting it grow without limit; Agent Framework's own compaction strategies
-run inside the step and keep a session small.
+### Keeping long conversations small
+
+A worker loads the whole session for every model call, so a long conversation costs more with every message. What history records is kept far smaller than that: a step names the session an earlier step recorded instead of carrying it again,
+the session is recorded whole every `FullSnapshotEvery` steps (8 by default) and otherwise as the change since the step before, and workers remember the sessions they ran (`SnapshotCacheBytes`). A worker that does not have the session, after a deploy
+or a move to another worker, is sent it once. This keeps what grows with the length of a conversation from growing with the square of it.
+
+It does not make the session itself smaller, and `MaxSnapshotBytes` (512 KiB by default) fails a step with a clear error instead of letting a session grow without limit. **For conversations that go on, keep the session small with Agent Framework's own
+compaction, and use it by default.** Put it in the history the session keeps, so that what is *stored* shrinks, not only what the model is shown:
+
+[!code-csharp[](../../samples/AgentFramework/ConversationSample.cs#compaction)]
+
+[!code-csharp[](../../samples/AgentFramework/ConversationSample.cs#compacted-agent)]
+
+The reducer runs when a message is added, inside the step, so it is recorded like everything else and a step that is run again compacts the same way. Old tool output collapses first (a line per call is kept), and then the oldest turns leave the
+session. Tune the numbers to the model's context window and to how much of the past the agent needs. A conversation that must remember more than a window of turns should summarise instead (`SummarizationCompactionStrategy`), with the caveat Agent Framework
+gives for it: the summary replaces the original messages, so use a model you trust as much as the main one.
+
+Two things to know. Agent Framework's `CompactionProvider` (a context provider) shortens what the model is shown for one call, but it keeps its own bookkeeping in the session, which makes the session larger, not smaller; for a durable conversation put the
+reducer in the history provider as above. And a conversation kept to a window forgets what left it: if something must never be forgotten, keep it in the agent's instructions or in a store a tool reads, not in the conversation.
 
 ## Agents that call agents
 

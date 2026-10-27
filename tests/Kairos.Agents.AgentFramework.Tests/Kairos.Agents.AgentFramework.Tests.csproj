@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Kairos.Agents.AgentFramework\Kairos.Agents.AgentFramework.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Worker\Kairos.Worker.csproj" />
+    <ProjectReference Include="..\..\src\Kairos.Cloud.SelfHosted\Kairos.Cloud.SelfHosted.csproj" />
     <ProjectReference Include="..\Kairos.Testing\Kairos.Testing.csproj" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
@@ -16,6 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\samples\AgentFramework\ConversationSample.cs" Link="Samples\ConversationSample.cs" /> <!-- the documented compaction default is measured as it is written -->
     <None Include="Corpus\**\*.khist" CopyToOutputDirectory="PreserveNewest" LinkBase="Corpus" />
   </ItemGroup>
 
