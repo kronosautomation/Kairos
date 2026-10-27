@@ -231,6 +231,13 @@ public interface IKairosStore
     /// </summary>
     ValueTask<int> ProjectAggregatesAsync(TenantScope scope, int maxRuns, CancellationToken cancellationToken) => ValueTask.FromResult(0);
 
+    /// <summary>
+    /// Hands the events of runs that have new ones (at most <paramref name="maxRuns"/> runs) to <paramref name="sink"/> and remembers how far each run got, so the next call carries on from there.
+    /// At least once: events are remembered as published only after the sink accepted them, and a failing sink leaves them to be offered again. Metadata only (see <see cref="RunEventNotice"/>).
+    /// Returns how many notices the sink accepted. Stores without an event feed return zero.
+    /// </summary>
+    ValueTask<int> PublishEventsAsync(TenantScope scope, IEventSink sink, int maxRuns, CancellationToken cancellationToken) => ValueTask.FromResult(0);
+
     /// <summary>The workflow types and builds with runs in this scope and how many are open or closed. Closed runs are counted from <paramref name="closedSince"/> (null: all).</summary>
     ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This store cannot list runs.");

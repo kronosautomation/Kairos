@@ -45,6 +45,76 @@ public sealed partial class PostgresKairosStore
     }
 
     /// <summary>
+    /// Hands new events to the sink run by run: reads the run's events after <c>published_seq</c>, lets the sink accept them, and only then moves <c>published_seq</c> with a compare-and-set
+    /// (a publisher that lost the race to another node moves nothing, and the consumer de-duplicates the repeat by id). No hash chain is read or checked here: a notice is metadata and says nothing a reader could not get from the history.
+    /// </summary>
+    public async ValueTask<int> PublishEventsAsync(TenantScope scope, IEventSink sink, int maxRuns, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRuns, 1);
+        List<(Guid Run, long Published)> candidates = await InTransaction(scope, async (conn, tx) =>
+        {
+            await using var cmd = new NpgsqlCommand(
+                "SELECT run_id, published_seq FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND last_seq > published_seq ORDER BY created_at, run_id LIMIT @limit", conn, tx);
+            cmd.Parameters.AddWithValue("t", scope.TenantId);
+            cmd.Parameters.AddWithValue("n", scope.NamespaceId);
+            cmd.Parameters.AddWithValue("limit", maxRuns);
+            var found = new List<(Guid, long)>();
+            await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                found.Add((reader.GetGuid(0), reader.GetInt64(1)));
+            }
+
+            return found;
+        }, cancellationToken).ConfigureAwait(false);
+
+        int accepted = 0;
+        foreach ((Guid runId, long was) in candidates)
+        {
+            var run = new RunKey(scope.TenantId, scope.NamespaceId, runId);
+            List<HistoryEvent> events = await InTransaction(scope, async (conn, tx) =>
+            {
+                var read = new List<HistoryEvent>();
+                await using var cmd = new NpgsqlCommand(
+                    "SELECT seq, body, prev_hash, hash FROM kairos.history_events WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r AND seq > @after ORDER BY seq", conn, tx);
+                cmd.Parameters.AddWithValue("t", scope.TenantId);
+                cmd.Parameters.AddWithValue("n", scope.NamespaceId);
+                cmd.Parameters.AddWithValue("r", runId);
+                cmd.Parameters.AddWithValue("after", was);
+                await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    read.Add(DecodeRow(scope, runId, reader.GetInt64(0), reader.GetFieldValue<byte[]>(1), reader.GetFieldValue<byte[]>(2), reader.GetFieldValue<byte[]>(3)));
+                }
+
+                return read;
+            }, cancellationToken).ConfigureAwait(false);
+            if (events.Count == 0)
+            {
+                continue;
+            }
+
+            await sink.PublishAsync(events.Select(e => new RunEventNotice($"{runId:D}:{e.Sequence}", run, e.Type, e.Sequence, e.Timestamp)).ToArray(), cancellationToken).ConfigureAwait(false);
+            long to = events[^1].Sequence;
+            await InTransaction(scope, async (conn, tx) =>
+            {
+                await using var advance = new NpgsqlCommand(
+                    "UPDATE kairos.runs SET published_seq = @new WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r AND published_seq = @old AND last_seq >= @new", conn, tx);
+                advance.Parameters.AddWithValue("t", scope.TenantId);
+                advance.Parameters.AddWithValue("n", scope.NamespaceId);
+                advance.Parameters.AddWithValue("r", runId);
+                advance.Parameters.AddWithValue("old", was);
+                advance.Parameters.AddWithValue("new", to);
+                return await advance.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+            accepted += events.Count;
+        }
+
+        return accepted;
+    }
+
+    /// <summary>
     /// Replaces one run's rows with what its history says now. Skipped (false) when the run was projected since the caller looked (another projector got there first: the move of
     /// <c>projected_seq</c> is a compare-and-set, and the one that loses is rolled back with everything it wrote), and when its hash chain does not verify: such a run stays "behind" and
     /// an operator sees it, rather than the aggregate quietly counting a history that does not hold.

@@ -666,6 +666,46 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
+    public async ValueTask<int> PublishEventsAsync(TenantScope scope, IEventSink sink, int maxRuns, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRuns, 1);
+        var pending = new List<(Run Run, long From, long To, List<RunEventNotice> Notices)>();
+        lock (_gate)
+        {
+            if (Scope(scope, create: false) is not { } data)
+            {
+                return 0;
+            }
+
+            foreach (Run run in data.Runs.Values.Where(r => r.History.Count > 0 && r.History[^1].Sequence > r.PublishedSeq).OrderBy(r => r.History[0].Timestamp).ThenBy(r => r.Key.RunId).Take(maxRuns))
+            {
+                long from = run.PublishedSeq;
+                List<RunEventNotice> notices = run.History.Where(e => e.Sequence > from)
+                    .Select(e => new RunEventNotice($"{run.Key.RunId:D}:{e.Sequence}", run.Key, e.Type, e.Sequence, e.Timestamp)).ToList();
+                pending.Add((run, from, run.History[^1].Sequence, notices));
+            }
+        }
+
+        int accepted = 0;
+        foreach ((Run run, long from, long to, List<RunEventNotice> notices) in pending)
+        {
+            await sink.PublishAsync(notices, cancellationToken).ConfigureAwait(false);
+            lock (_gate)
+            {
+                // Compare and set, as in PostgreSQL: a publisher that lost the race to another one moves nothing.
+                if (run.PublishedSeq == from)
+                {
+                    run.PublishedSeq = to;
+                }
+            }
+
+            accepted += notices.Count;
+        }
+
+        return accepted;
+    }
+
     public ValueTask<IReadOnlyList<HistoryEvent>> GetHistoryAsync(RunKey run, CancellationToken cancellationToken)
     {
         lock (_gate)
@@ -1025,6 +1065,9 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
 
         /// <summary>Per-run, never reset: a stale holder can never match a later claim.</summary>
         public long WorkflowLeaseToken { get; set; }
+
+        /// <summary>How far the run's events have been handed to the event sink.</summary>
+        public long PublishedSeq { get; set; }
     }
 
     private sealed class WorkflowTaskRow(Guid runId, DateTimeOffset visibleAt, long order)

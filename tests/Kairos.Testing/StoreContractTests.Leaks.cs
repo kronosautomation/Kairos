@@ -198,6 +198,12 @@ public abstract partial class StoreContractTests
         },
         [nameof(IKairosStore.ProjectAggregatesAsync)] = async (a, f) =>
             Assert.Equal(0, await a.Store.ProjectAggregatesAsync(f, 1000, Ct)),
+        [nameof(IKairosStore.PublishEventsAsync)] = async (a, f) =>
+        {
+            var sink = new RecordingSink();
+            Assert.Equal(0, await a.Store.PublishEventsAsync(f, sink, 1000, Ct)); // nothing of the tenant's reaches a foreign scope's feed
+            Assert.Empty(sink.Seen);
+        },
         [nameof(IKairosStore.ExportHistoryAsync)] = async (a, f) =>
         {
             foreach (RunKey run in new[] { a.Busy, a.Finished, a.Parked, a.Leased })
