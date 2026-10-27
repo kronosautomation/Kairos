@@ -22,12 +22,12 @@ Please send **no real customer data**, no credentials and no payloads from syste
 
 | When | What you get |
 |---|---|
-| Within 3 working days | An acknowledgement from a person, and the name of who is handling it. |
-| Within 10 working days | Our assessment: whether we can reproduce it, how severe we think it is (CVSS v4 vector), which versions are affected, and how long we expect a fix to take. |
+| Within 3 business days | An acknowledgement from a person, and the name of who is handling it. |
+| Within 10 business days | Our assessment: whether we can reproduce it, how severe we think it is (CVSS v4 vector), which versions are affected, and how long we expect a fix to take. |
 | While it is open | Updates at least every 14 days, and a chance to review the advisory text and the fix before they are public. |
 | Fixed | A release with the fix, a GitHub security advisory (with a CVE where one applies), and credit to you by name or handle if you want it. |
 
-**Targets, not promises:** a fix for a critical issue within 30 days of the report, high within 60, other issues within 90. A fix that needs a change of the on-disk or on-wire
+**Targets, not promises:** a fix within 14 days of the report for a critical issue, within 30 days for high, and within 90 days for medium and low. A fix that needs a change of the on-disk or on-wire
 format can take longer, and then we tell you why and what mitigation to apply meanwhile.
 
 ### Coordinated disclosure

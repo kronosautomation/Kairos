@@ -93,7 +93,7 @@ After:
 
 Policy and promises are in `SECURITY.md`. Internally:
 
-1. **Day 0-3**: someone owns it and acknowledges the reporter (within 3 working days). Open a private GitHub security advisory (the report itself is one, if it came through GitHub). Do not discuss it in
+1. **Day 0-3**: someone owns it and acknowledges the reporter (within 3 business days). Open a private GitHub security advisory (the report itself is one, if it came through GitHub). Do not discuss it in
    issues, pull requests, chat channels with guests, or commit messages.
 2. **By day 10**: reproduce, rate it (CVSS v4), list the affected versions, decide the fix and the mitigation, and tell the reporter. Check the commercial repository for the same flaw (the two share code paths).
 3. **Fix in private**: use the advisory's private fork/branch; a test that fails before and passes after; a cross-tenant test if the flaw touches isolation. Review by a second person.
