@@ -61,7 +61,7 @@ internal sealed class AfHarness
         Runtime = AgentFrameworkRuntime.Create(builder);
         Runtime.Bind(Client);
         Runtime.RegisterInto(_activities, _workflows);
-        Agents = new DurableAgents(Runtime, Client, DefaultScope, Time);
+        Agents = new DurableAgents(Runtime, Client, DefaultScope, TimeProvider.System); // the caller waits in real time; the workers live on the virtual clock
         Worker = NewWorker();
     }
 
@@ -131,21 +131,21 @@ internal sealed class AfHarness
     }
 
     /// <summary>Sends a message to a durable agent's conversation and drives the worker until nothing more can happen; returns the turn to ask about.</summary>
-    public async Task<DurableTurn> SendAsync(string agent, string session, string text, string? onBehalfOf = null)
+    public async Task<DurableTurn> SendAsync(string agent, string session, string text, string? onBehalfOf = null, bool jumpClock = true)
     {
         DurableAIAgent durable = Agents.Get(agent);
         DurableAgentSession s = durable.Session(session);
         s.OnBehalfOf ??= onBehalfOf;
         string messageId = Guid.NewGuid().ToString("N");
         DurableTurn turn = await Retry(async () => await durable.SendAsync([new ChatMessage(ChatRole.User, text)], s, messageId).AsTask());
-        await DriveAsync();
+        await DriveAsync(jumpClock);
         return turn;
     }
 
     /// <summary>Like <see cref="SendAsync"/>, and reads the answer when there is one.</summary>
-    public async Task<(AgentResponse? Reply, DurableTurn Turn)> AskAsync(string agent, string session, string text, string? onBehalfOf = null)
+    public async Task<(AgentResponse? Reply, DurableTurn Turn)> AskAsync(string agent, string session, string text, string? onBehalfOf = null, bool jumpClock = true)
     {
-        DurableTurn turn = await SendAsync(agent, session, text, onBehalfOf);
+        DurableTurn turn = await SendAsync(agent, session, text, onBehalfOf, jumpClock);
         return (await ReadAsync(agent, turn), turn);
     }
 

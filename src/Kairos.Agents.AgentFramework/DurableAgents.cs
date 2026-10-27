@@ -108,32 +108,47 @@ public sealed class DurableAgents
     /// <summary>The answer to a message, or null while the agent has not finished it. Throws when the conversation's run failed.</summary>
     internal async ValueTask<AgentResponse?> TryReadAsync(AgentDefinition agent, DurableTurn turn, CancellationToken cancellationToken)
     {
-        for (int hop = 0; hop < 16; hop++)
+        IReadOnlyList<HistoryEvent> history = await _client.GetOpenedHistoryAsync(turn.Run, cancellationToken).ConfigureAwait(false);
+        if (Read(agent, turn, history) is { } reply)
         {
-            IReadOnlyList<HistoryEvent> history = await _client.GetOpenedHistoryAsync(turn.Run, cancellationToken).ConfigureAwait(false);
-            AgentResponse? reply = Read(agent, turn, history);
-            if (reply is not null)
-            {
-                return reply;
-            }
-
-            RunState state = await _client.GetStateAsync(turn.Run, cancellationToken).ConfigureAwait(false) ?? RunState.Running;
-            switch (state)
-            {
-                case RunState.Running:
-                    return null;
-                case RunState.ContinuedAsNew:
-                    // The conversation moved on to a fresh run (it carries a message that was not answered yet): follow it. Asking to start the same workflow id finds its current run and starts nothing.
-                    StartRunResult current = await _client.StartAsync(
-                        _scope, turn.WorkflowId, AgentFrameworkNames.Conversation, AfCodec.Write(new AfDriverInput { Agent = agent.Name }, AfJson.Default.AfDriverInput), cancellationToken: cancellationToken).ConfigureAwait(false);
-                    turn.Run = new RunKey(_scope.TenantId, _scope.NamespaceId, current.RunId);
-                    continue;
-                default:
-                    throw Ended(agent, history);
-            }
+            return reply;
         }
 
-        return null;
+        switch (await _client.GetStateAsync(turn.Run, cancellationToken).ConfigureAwait(false) ?? RunState.Running)
+        {
+            case RunState.Running:
+                return null;
+            case RunState.ContinuedAsNew:
+                break;
+            default:
+                throw Ended(agent, history);
+        }
+
+        // The conversation moved on to a fresh run, and the message went with it if it was not answered yet. The answer is in the current run or in one of the runs between: asking to start the same
+        // workflow id finds the current run (and starts nothing), and each run names the one before it.
+        StartRunResult found = await _client.StartAsync(
+            _scope, turn.WorkflowId, AgentFrameworkNames.Conversation, AfCodec.Write(new AfDriverInput { Agent = agent.Name }, AfJson.Default.AfDriverInput), cancellationToken: cancellationToken).ConfigureAwait(false);
+        RunKey current = new(_scope.TenantId, _scope.NamespaceId, found.RunId);
+        RunKey? at = current;
+        IReadOnlyList<HistoryEvent> latest = [];
+        for (int hop = 0; hop < 64 && at is { } run && run != turn.Run; hop++)
+        {
+            IReadOnlyList<HistoryEvent> there = await _client.GetOpenedHistoryAsync(run, cancellationToken).ConfigureAwait(false);
+            if (hop == 0)
+            {
+                latest = there;
+            }
+
+            if (Read(agent, turn, there) is { } answer)
+            {
+                turn.Run = run;
+                return answer;
+            }
+
+            at = there.Count > 0 && there[0] is WorkflowStarted { PreviousRunId: var previous } && previous != Guid.Empty ? new RunKey(_scope.TenantId, _scope.NamespaceId, previous) : null;
+        }
+
+        return await _client.GetStateAsync(current, cancellationToken).ConfigureAwait(false) is RunState.Running or RunState.ContinuedAsNew or null ? null : throw Ended(agent, latest);
     }
 
     private static AgentResponse? Read(AgentDefinition agent, DurableTurn turn, IReadOnlyList<HistoryEvent> history)
@@ -143,10 +158,12 @@ public sealed class DurableAgents
         AfStepResult? last = null;
         foreach (HistoryEvent e in history)
         {
-            if (e is ActivityScheduled s && s.ActivityType is AgentFrameworkNames.Step or AgentFrameworkNames.Turn && ((ActivityScheduled)e).Input.Length > 0
-                && AfCodec.Read(s.Input, AfJson.Default.AfStepRequest).TurnId == turn.TurnId)
+            if (e is ActivityScheduled s && (s.ActivityType == AgentFrameworkNames.Step || s.ActivityType == AgentFrameworkNames.Turn))
             {
-                mine.Add(s.ActivityId);
+                if (AfCodec.Read(s.Input, AfJson.Default.AfStepRequest).TurnId == turn.TurnId)
+                {
+                    mine.Add(s.ActivityId);
+                }
             }
             else if (e is ActivityCompleted c && mine.Contains(c.ActivityId))
             {
