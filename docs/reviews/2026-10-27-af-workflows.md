@@ -99,7 +99,7 @@ A waiting workflow holds no worker and no timer (`NextWakeup` is null in the tes
 
 ## Open items
 
-- **Remote workers** (outbound-only, `RemoteWorkerStore`) cannot run executors that call durable agents, nested agents, or the parent watch: they have no client for start, signal, read and wait. This is the first item of the Commercial work that follows (`Kairos.Commercial/docs/WORKER-CONVERSATIONS-DESIGN.md`).
+- **Remote workers** (outbound-only, `RemoteWorkerStore`) could not run executors that call durable agents, nested agents, or the parent watch: they had no client for start, signal, read and wait. **Closed the same day** by the Commercial work (the `AgentWorker` role, the conversation gate and `RemoteConversationStore`; `Kairos.Commercial/docs/reviews/2026-10-27-worker-conversations.md`), with `IKairosStore.GetRunIdentityAsync` and the role added here (commit `ba13bb1`). The one gap left there is a forged nested-agent answer (needs a per-activity capability).
 - **Output streaming** is not offered (decided).
 - Executor state under a redactor is checked at record time, not at startup (finding 4).
 - A change inside a moved value other than an append (an element edited in place) is written out whole.
