@@ -161,6 +161,15 @@ public sealed class WorkflowExecution : IWorkflowContext
             throw new NonDeterminismException($"Event {e.Sequence} ({e.Type}) follows the workflow's closing event.");
         }
 
+        // The batch that a WorkflowTaskCompleted ends runs during Dispatch. The live run executes the same batch before that event exists, so the event must not be counted yet: otherwise
+        // HistoryLength (and ShouldContinueAsNew) would be one more on replay than when the code first ran, and a decision taken exactly at the threshold would diverge.
+        if (e is WorkflowTaskCompleted)
+        {
+            Dispatch(e);
+            _historyLength++;
+            return;
+        }
+
         _historyLength++;
         Dispatch(e);
     }
