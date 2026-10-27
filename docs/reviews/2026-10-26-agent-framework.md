@@ -65,7 +65,7 @@ Total for 20 messages: 14.4 MB recorded (about 720 KB per message on average). I
 
 ## Open items
 
-- **Cancelling or terminating a parent does not stop its child runs.** The child keeps going and its answer finds a closed parent (the notify is ignored). Needs a decision: cancel children when the parent is cancelled (a signal the child's loop honours), or leave them to the operator.
+- **(Closed by `2026-10-26-af-cancel-children.md`.) Cancelling or terminating a parent does not stop its child runs.** The child keeps going and its answer finds a closed parent (the notify is ignored). Needs a decision: cancel children when the parent is cancelled (a signal the child's loop honours), or leave them to the operator.
 - **The driver is package code in a long-lived workflow.** A later change to it must keep replaying runs in flight: the golden corpus (`Corpus/v4`) guards the shapes recorded today, and new behaviour needs patch markers. The workflow is registered under the default build id only.
 - **Tools that a context provider adds at run time** cannot be found by a worker after a restart (unknown tool message to the model). Documented; a registration option to declare them is the fix if it matters.
 - **Streaming is not durable.** `RunStreamingAsync` returns the recorded answer whole.
