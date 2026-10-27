@@ -2,11 +2,12 @@
 
   <PropertyGroup>
     <IsPackable>false</IsPackable>
-    <NoWarn>$(NoWarn);CA1707;CA1515;CA2007;CA1062;CA1859;CA1861;CA1812</NoWarn>
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA2007;CA1062;CA1859;CA1861;CA1812;MEAI001;MAAI001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Kairos.Agents\Kairos.Agents.csproj" />
+    <ProjectReference Include="..\..\src\Kairos.Agents.AgentFramework\Kairos.Agents.AgentFramework.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Hosting\Kairos.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Worker\Kairos.Worker.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Cloud.SelfHosted\Kairos.Cloud.SelfHosted.csproj" />
@@ -23,6 +24,7 @@
     <ProjectReference Include="..\..\src\Kairos.Analyzers\Kairos.Analyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <!-- The agent test harness is shared source, not a package. -->
     <Compile Include="..\Kairos.Agents.Tests\AgentHarness.cs" Link="Shared\AgentHarness.cs" />
+    <Compile Include="..\Kairos.Agents.AgentFramework.Tests\AfHarness.cs" Link="Shared\AfHarness.cs" />
   </ItemGroup>
 
   <ItemGroup>
