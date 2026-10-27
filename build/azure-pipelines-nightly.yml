@@ -70,6 +70,7 @@ stages:
         pg15: { KAIROS_PG_IMAGE: 'postgres:15' }
         pg16: { KAIROS_PG_IMAGE: 'postgres:16' }
         pg17: { KAIROS_PG_IMAGE: 'postgres:17' }
+        pg18: { KAIROS_PG_IMAGE: 'postgres:18' }
         pglatest: { KAIROS_PG_IMAGE: 'postgres:latest' }
     steps:
     - template: steps-setup.yml
