@@ -9,6 +9,7 @@
     <ProjectReference Include="..\..\src\Kairos.Agents.AgentFramework\Kairos.Agents.AgentFramework.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Worker\Kairos.Worker.csproj" />
     <ProjectReference Include="..\Kairos.Testing\Kairos.Testing.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />

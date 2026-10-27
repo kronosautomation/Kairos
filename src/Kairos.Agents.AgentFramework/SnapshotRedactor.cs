@@ -38,7 +38,7 @@ internal static class SnapshotRedactor
 
     private static readonly HashSet<string> RootMembers = new(StringComparer.Ordinal) { "stateBag", "conversationId" };
 
-    private static readonly HashSet<string> MessageMembers = new(StringComparer.Ordinal) { "authorName", "createdAt", "role", "contents", "messageId" };
+    private static readonly HashSet<string> MessageMembers = new(StringComparer.Ordinal) { "authorName", "createdAt", "role", "contents", "messageId", "additionalProperties" };
 
     private static readonly HashSet<string> HistoryMembers = new(StringComparer.Ordinal) { "messages" };
 
@@ -177,6 +177,11 @@ internal static class SnapshotRedactor
                 }
             }
 
+            if (m["additionalProperties"] is { } extra)
+            {
+                CheckAttribution(extra);
+            }
+
             if (m["contents"] is not JsonArray contents)
             {
                 throw new SnapshotShapeException("A message has no contents array.");
@@ -186,6 +191,19 @@ internal static class SnapshotRedactor
             {
                 RedactContent(content, redact);
             }
+        }
+    }
+
+    /// <summary>
+    /// Messages Agent Framework loads back from its history carry a note of where they came from: <c>{"_attribution":{"sourceType":{"value":..},"sourceId":..}}</c>. That is the one extra the redactor knows is free of
+    /// text. Anything else a message carries under <c>additionalProperties</c> could be anything, so it is refused.
+    /// </summary>
+    private static void CheckAttribution(JsonNode extra)
+    {
+        if (extra is not JsonObject bag || bag.Count != 1 || bag["_attribution"] is not JsonObject attribution || attribution.Count != 2
+            || attribution["sourceId"] is not JsonValue || attribution["sourceType"] is not JsonObject { Count: 1 } type || type["value"] is not JsonValue)
+        {
+            throw new SnapshotShapeException("A message carries additionalProperties other than Agent Framework's own attribution, which the redactor does not know.");
         }
     }
 
@@ -216,20 +234,14 @@ internal static class SnapshotRedactor
             switch (how)
             {
                 case 'T':
-                    if (member.Value is JsonValue)
-                    {
-                        c[member.Key] = RedactText(member.Value, redact);
-                    }
-
-                    break;
                 case 'J':
-                    if (member.Value is JsonValue or null)
+                    if (Replacement(member.Value, redact) is { } replaced)
                     {
-                        c[member.Key] = RedactText(member.Value, redact);
+                        c[member.Key] = replaced;
                     }
-                    else
+                    else if (how == 'J')
                     {
-                        RedactAny(member.Value, redact);
+                        RedactInPlace(member.Value, redact);
                     }
 
                     break;
@@ -240,44 +252,43 @@ internal static class SnapshotRedactor
         }
     }
 
-    private static JsonNode? RedactText(JsonNode? node, Func<string, string> redact) =>
-        node is JsonValue v && v.TryGetValue(out string? s) ? JsonValue.Create(redact(s)) : node;
+    /// <summary>The redacted string when <paramref name="node"/> is a string value, else null (nothing to replace).</summary>
+    private static JsonValue? Replacement(JsonNode? node, Func<string, string> redact) =>
+        node is JsonValue v && v.TryGetValue(out string? s) ? JsonValue.Create(redact(s)) : null;
 
-    /// <summary>Redacts every string value inside a JSON value of any shape, in place, and returns the node to store (a new one when the value itself was a string).</summary>
-    private static JsonNode? RedactAny(JsonNode? node, Func<string, string> redact)
+    /// <summary>Redacts every string value inside a JSON value of any shape, in place. (A value that is itself a string is replaced by its parent, with <see cref="Replacement"/>.)</summary>
+    private static void RedactInPlace(JsonNode? node, Func<string, string> redact)
     {
         switch (node)
         {
             case JsonObject o:
                 foreach (KeyValuePair<string, JsonNode?> member in o.ToArray())
                 {
-                    if (member.Value is JsonValue or null)
+                    if (Replacement(member.Value, redact) is { } replaced)
                     {
-                        o[member.Key] = RedactText(member.Value, redact);
+                        o[member.Key] = replaced;
                     }
                     else
                     {
-                        RedactAny(member.Value, redact);
+                        RedactInPlace(member.Value, redact);
                     }
                 }
 
-                return o;
+                break;
             case JsonArray a:
                 for (int i = 0; i < a.Count; i++)
                 {
-                    if (a[i] is JsonValue or null)
+                    if (Replacement(a[i], redact) is { } replaced)
                     {
-                        a[i] = RedactText(a[i], redact);
+                        a[i] = replaced;
                     }
                     else
                     {
-                        RedactAny(a[i], redact);
+                        RedactInPlace(a[i], redact);
                     }
                 }
 
-                return a;
-            default:
-                return RedactText(node, redact);
+                break;
         }
     }
 
