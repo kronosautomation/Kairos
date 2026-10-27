@@ -68,6 +68,7 @@ internal sealed class AfHarness
         Runtime.Bind(Client);
         Runtime.RegisterInto(_activities, _workflows);
         Agents = new DurableAgents(Runtime, Client, DefaultScope, TimeProvider.System); // the caller waits in real time; the workers live on the virtual clock
+        Workflows = new DurableWorkflows(Runtime, Client, DefaultScope, TimeProvider.System);
         Worker = NewWorker();
     }
 
@@ -88,6 +89,8 @@ internal sealed class AfHarness
     public AgentFrameworkRuntime Runtime { get; }
 
     public DurableAgents Agents { get; }
+
+    public DurableWorkflows Workflows { get; }
 
     public WorkerRuntime Worker { get; private set; }
 
@@ -120,6 +123,64 @@ internal sealed class AfHarness
 
             Time.AdvanceTo(wake);
         }
+    }
+
+    /// <summary>
+    /// Drives several workers at once, for work in which one activity waits for another run to make progress (an executor waiting for a durable agent's conversation). Returns when every worker has found nothing to do for a
+    /// while and none is inside an activity.
+    /// </summary>
+    public async Task DriveParallelAsync(int workers = 3, int idlePolls = 60)
+    {
+        while (true)
+        {
+            await DriveParallelOnceAsync(workers, idlePolls);
+
+            // Retries and short waits are lived through, as in DriveAsync.
+            if (MemoryStore.NextWakeup(DefaultScope, Time.GetUtcNow()) is not { } wake || wake - Time.GetUtcNow() > TimeSpan.FromSeconds(90))
+            {
+                return;
+            }
+
+            Time.AdvanceTo(wake);
+        }
+    }
+
+    private async Task DriveParallelOnceAsync(int workers, int idlePolls)
+    {
+        int busy = 0;
+        WorkerRuntime[] pool = [.. Enumerable.Range(0, workers).Select(_ => NewWorker())];
+        await Task.WhenAll(pool.Select(worker => Task.Run(async () =>
+        {
+            for (int idle = 0; idle < idlePolls;)
+            {
+                Interlocked.Increment(ref busy);
+                bool did;
+                try
+                {
+                    did = await worker.ProcessWorkflowTaskAsync(default);
+                    did |= await worker.ProcessActivityTaskAsync(default);
+                    did |= await worker.FireTimersAsync(default) > 0;
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref busy);
+                }
+
+                if (did)
+                {
+                    idle = 0;
+                }
+                else if (Volatile.Read(ref busy) == 0)
+                {
+                    idle++;
+                    await Task.Delay(5);
+                }
+                else
+                {
+                    await Task.Delay(5); // another worker is inside an activity: its work may make some for this one
+                }
+            }
+        })));
     }
 
     /// <summary>Repeats a client call whose outcome a simulated crash hid, as a real caller would.</summary>

@@ -132,8 +132,8 @@ public sealed class DurableAgents
     }
 
     /// <summary>Completes when the conversation's run has something this message has not looked at, or after <see cref="AgentFrameworkOptions.ReplyWait"/>; the engine ends the wait the moment the run is written to.</summary>
-    internal ValueTask<bool> WaitForUpdateAsync(DurableTurn turn, CancellationToken cancellationToken) =>
-        _client.WaitForHistoryAsync(turn.Run, turn.Cursor, _runtime.Options.ReplyWait, cancellationToken);
+    internal ValueTask<bool> WaitForUpdateAsync(DurableTurn turn, TimeSpan? atMost, CancellationToken cancellationToken) =>
+        _client.WaitForHistoryAsync(turn.Run, turn.Cursor, atMost is { } cap && cap < _runtime.Options.ReplyWait ? cap : _runtime.Options.ReplyWait, cancellationToken);
 
     /// <summary>The answer to a message, or null while the agent has not finished it. Throws when the conversation's run failed.</summary>
     internal async ValueTask<AgentResponse?> TryReadAsync(AgentDefinition agent, DurableTurn turn, CancellationToken cancellationToken)

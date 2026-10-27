@@ -36,14 +36,17 @@ internal sealed class SessionChain
 
     /// <summary>Takes the session a step recorded: whole, or as a change against the session before it.</summary>
     /// <exception cref="SnapshotIntegrityException">A whole session is not the one its hash names, or a change is not against the session this chain holds.</exception>
-    public void Record(AfStepResult result)
+    public void Record(AfStepResult result) => Record(result.SnapshotHash, result.Snapshot, result.Delta, result.BaseHash, result.StepId);
+
+    /// <summary>The same for any result that records a JSON document by hash (a workflow's checkpoint is recorded the way a session is).</summary>
+    public void Record(string? snapshotHash, JsonElement? snapshot, JsonElement? delta, string? baseHash, string? stepId)
     {
-        if (result.SnapshotHash is not { } hash)
+        if (snapshotHash is not { } hash)
         {
             return;
         }
 
-        if (result.Snapshot is { } whole)
+        if (snapshot is { } whole)
         {
             string text = SnapshotCodec.Text(SnapshotCodec.Canonical(whole));
             if (!string.Equals(SnapshotCodec.Hash(text), hash, StringComparison.Ordinal))
@@ -55,7 +58,7 @@ internal sealed class SessionChain
             _changes.Clear();
             StepsSinceFull = 0;
         }
-        else if (result.Delta is { } change && _baseText is not null && string.Equals(result.BaseHash, Hash, StringComparison.Ordinal))
+        else if (delta is { } change && _baseText is not null && string.Equals(baseHash, Hash, StringComparison.Ordinal))
         {
             _changes.Add(JsonNode.Parse(change.GetRawText()) ?? throw new SnapshotIntegrityException("A recorded change to the session is empty."));
             StepsSinceFull++;
@@ -66,7 +69,7 @@ internal sealed class SessionChain
         }
 
         Hash = hash;
-        From = result.StepId;
+        From = stepId;
     }
 
     /// <summary>The current session, put together from the last whole one and the changes since, and checked against its hash.</summary>

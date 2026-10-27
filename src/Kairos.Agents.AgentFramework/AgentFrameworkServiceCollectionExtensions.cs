@@ -33,8 +33,14 @@ public static class AgentFrameworkServiceCollectionExtensions
             options.AddWorkflow(AgentFrameworkNames.ConversationType(agent), runtime.Conversation);
         }
 
+        foreach (string workflow in runtime.WorkflowNames)
+        {
+            options.AddWorkflow(AgentFrameworkNames.WorkflowType(workflow), runtime.WorkflowRun);
+        }
+
         services.AddSingleton(runtime);
         services.AddSingleton(sp => new DurableAgents(runtime, sp.GetRequiredService<KairosClient>(), options.Scope, sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new DurableWorkflows(runtime, sp.GetRequiredService<KairosClient>(), options.Scope, sp.GetRequiredService<TimeProvider>()));
         services.TryAddSingleton(sp => new AgentClient(sp.GetRequiredService<KairosClient>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IHostedService, AgentFrameworkLifecycle>();
         foreach (string name in runtime.AgentNames)
@@ -49,11 +55,11 @@ public static class AgentFrameworkServiceCollectionExtensions
 }
 
 /// <summary>Connects the adapter to the host's client before any worker starts, and says at startup which tools nobody classified.</summary>
-internal sealed partial class AgentFrameworkLifecycle(AgentFrameworkRuntime runtime, KairosClient client, ILogger<AgentFrameworkRuntime> logger) : IHostedLifecycleService
+internal sealed partial class AgentFrameworkLifecycle(AgentFrameworkRuntime runtime, KairosClient client, IServiceProvider services, ILogger<AgentFrameworkRuntime> logger) : IHostedLifecycleService
 {
     public Task StartingAsync(CancellationToken cancellationToken)
     {
-        runtime.Bind(client);
+        runtime.Bind(client, services);
         foreach (string tool in runtime.Unclassified)
         {
             LogUnclassified(logger, tool);

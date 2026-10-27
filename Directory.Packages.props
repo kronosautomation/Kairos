@@ -13,6 +13,7 @@
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
     <!-- Microsoft Agent Framework 1.x (stable). 1.24.0 is the newest release older than two weeks on 26 Oct 2026 (docs/AGENT-FRAMEWORK-DESIGN.md section 2). Re-pin deliberately, with the contract tests. -->
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.24.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="1.24.0" />
     <PackageVersion Include="A2A" Version="1.0.0-preview3" />
     <PackageVersion Include="A2A.AspNetCore" Version="1.0.0-preview3" />
     <PackageVersion Include="ModelContextProtocol" Version="2.3.0" />

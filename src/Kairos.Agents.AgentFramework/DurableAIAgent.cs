@@ -8,19 +8,31 @@ namespace Kairos.Agents.AgentFramework;
 /// <summary>A conversation with a durable agent: its id is the Kairos workflow id of the conversation's run, so a session survives the process and can be resumed from its id.</summary>
 public sealed class DurableAgentSession : AgentSession
 {
+    private string? _id;
+
     public DurableAgentSession(string agent, string sessionId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         Agent = agent;
-        SessionId = sessionId;
+        _id = sessionId;
+    }
+
+    /// <summary>A session in an executor of a durable workflow: it gets its id with its first message, from the step and the message, so a step that is run again finds the conversation it started.</summary>
+    internal DurableAgentSession(string agent)
+    {
+        Agent = agent;
     }
 
     /// <summary>The durable agent this conversation is with.</summary>
     public string Agent { get; }
 
     /// <summary>The conversation's id.</summary>
-    public string SessionId { get; }
+    public string SessionId => _id ?? throw new InvalidOperationException("This session has no id yet: inside a workflow executor a session gets its id with its first message.");
+
+    internal bool HasId => _id is not null;
+
+    internal void Assign(string id) => _id ??= id;
 
     /// <summary>
     /// Who the agent acts for in this conversation (the requester of its approvals, whom the approver may not be, and the identity credentials are issued on behalf of). Read when the conversation's run starts: set it before the first message.
@@ -106,7 +118,9 @@ public sealed class DurableAIAgent : AIAgent
     }
 
     protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default) =>
-        new(new DurableAgentSession(_definition.Name, Guid.CreateVersion7(_owner.Time.GetUtcNow()).ToString("N")));
+        WorkflowStepScope.Current is not null
+            ? new(new DurableAgentSession(_definition.Name)) // in an executor of a durable workflow: named by the step and the first message, see RunCoreAsync
+            : new(new DurableAgentSession(_definition.Name, Guid.CreateVersion7(_owner.Time.GetUtcNow()).ToString("N")));
 
     protected override ValueTask<JsonElement> SerializeSessionCoreAsync(AgentSession session, JsonSerializerOptions? jsonSerializerOptions = null, CancellationToken cancellationToken = default)
     {
@@ -114,6 +128,11 @@ public sealed class DurableAIAgent : AIAgent
         if (session is not DurableAgentSession durable)
         {
             throw new InvalidOperationException($"A session of type {session.GetType().Name} does not belong to a durable agent.");
+        }
+
+        if (!durable.HasId && WorkflowStepScope.Current is { } step)
+        {
+            durable.Assign($"{WorkflowStepScope.OwnedPrefix}{step.Name("session", _definition.Name, "", "serialized")}"); // a session saved before its first message: named by the step, in the order it is asked
         }
 
         return new(JsonSerializer.SerializeToElement(new SessionJson(durable.Agent, durable.SessionId, durable.OnBehalfOf), SessionJsonContext.Default.SessionJson));
@@ -137,7 +156,31 @@ public sealed class DurableAIAgent : AIAgent
             DurableAgentSession durable when durable.Agent == _definition.Name => durable,
             _ => throw new InvalidOperationException($"This session does not belong to the durable agent '{_definition.Name}'."),
         };
-        DurableTurn turn = await SendAsync(messages, conversation, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        // Inside an executor of a durable workflow the step may be run again after a crash. The conversation and the message are then named by the step and what is said, so the repeated call finds the turn it already
+        // sent (and its answer) instead of asking the agent again. The wait is bounded: an activity that waits for a conversation holds a worker.
+        WorkflowStepScope? step = WorkflowStepScope.Current;
+        var list = messages.ToList();
+        string? messageId = null;
+        if (step is not null)
+        {
+            string content = JsonSerializer.Serialize(list, AIJsonUtilities.DefaultOptions);
+            string named = step.Name("message", _definition.Name, conversation.HasId ? conversation.SessionId : "", content);
+            if (!conversation.HasId)
+            {
+                conversation.Assign($"{WorkflowStepScope.OwnedPrefix}{named}");
+            }
+
+            messageId = $"wf-{named}";
+            if (conversation.SessionId.StartsWith(WorkflowStepScope.OwnedPrefix, StringComparison.Ordinal))
+            {
+                step.Own(DurableAgents.WorkflowId(_definition.Name, conversation.SessionId));
+            }
+        }
+
+        DurableTurn turn = await SendAsync(list, conversation, messageId, cancellationToken).ConfigureAwait(false);
+        using IDisposable? waiting = step?.StartWaiting();
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
 
         // Look at what the run has written since the last look, and when there is no answer yet ask the engine to say when the run is written to again: the wait ends at the next write, not at the next poll.
         while (true)
@@ -148,7 +191,20 @@ public sealed class DurableAIAgent : AIAgent
                 return reply;
             }
 
-            await _owner.WaitForUpdateAsync(turn, cancellationToken).ConfigureAwait(false);
+            TimeSpan? left = null;
+            if (step is not null)
+            {
+                left = step.MaxWait - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+                if (left <= TimeSpan.Zero)
+                {
+                    throw new WorkflowAgentWaitException(
+                        $"Workflow '{step.Workflow}': an executor waited more than {step.MaxWait} for the answer of the conversation '{DurableAgents.WorkflowId(_definition.Name, conversation.SessionId)}' with agent '{_definition.Name}'. " +
+                        "A worker is held for as long as an executor waits. A conversation that may wait for a person (an approval, a decision) should not be waited for inside an executor: have the executor raise a request through a RequestPort, " +
+                        "answer it through Kairos, and let the workflow wait for it without holding a worker (see AgentFrameworkOptions.WorkflowAgentWait).");
+                }
+            }
+
+            await _owner.WaitForUpdateAsync(turn, left, cancellationToken).ConfigureAwait(false);
         }
     }
 

@@ -10,6 +10,7 @@
     <ProjectReference Include="..\Kairos.Agents\Kairos.Agents.csproj" />
     <ProjectReference Include="..\Kairos.Hosting\Kairos.Hosting.csproj" />
     <PackageReference Include="Microsoft.Agents.AI" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" />
   </ItemGroup>
 
   <ItemGroup>

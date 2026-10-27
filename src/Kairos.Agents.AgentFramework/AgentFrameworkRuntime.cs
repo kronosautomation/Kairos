@@ -28,6 +28,21 @@ public static class AgentFrameworkNames
     internal const string ChildCancel = "kairos.af.child.cancel";
     internal const string ParentWatch = "kairos.af.parent.watch";
 
+    /// <summary>The prefix of the workflow types that run a durable Agent Framework workflow, one type per workflow: <see cref="WorkflowType"/>.</summary>
+    public const string Workflow = "kairos.af.workflow";
+
+    /// <summary>The workflow type that runs the durable workflow registered as <paramref name="workflow"/>. One per workflow, so that a worker that does not have it does not register it.</summary>
+    public static string WorkflowType(string workflow) => $"{Workflow}/{workflow}";
+
+    /// <summary>The activity that runs a superstep (or a few) of a durable workflow.</summary>
+    public const string WorkflowStep = "kairos.af.workflow.step";
+
+    internal const string WorkflowCancel = "kairos.af.workflow.cancel";
+    internal const string WorkflowOverride = "kairos.af.workflow.override";
+
+    /// <summary>The signal that answers the request <paramref name="requestId"/> of a durable workflow (for a request port that is not registered as an approval). Not under the engine's <c>kairos.</c> prefix: callers may send it.</summary>
+    public static string ResponseSignal(string requestId) => $"af.workflow.response/{requestId}";
+
     /// <summary>The signal a conversation waits on for its next message. (Not under the engine's <c>kairos.</c> prefix: callers may send it.)</summary>
     public const string MessageSignal = "af.message";
 
@@ -43,6 +58,7 @@ public sealed partial class AgentFrameworkRuntime
 {
     private readonly Dictionary<string, AgentDefinition> _definitions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ActivityFunc> _activities;
+    private readonly Dictionary<string, WorkflowDefinition> _workflowDefinitions = new(StringComparer.Ordinal);
     private KairosClient? _client;
 
     private AgentFrameworkRuntime(AgentsRuntime agents, AgentFrameworkOptions options, IReadOnlyList<AgentDefinition> definitions, IReadOnlyList<string> unclassified)
@@ -65,11 +81,18 @@ public sealed partial class AgentFrameworkRuntime
             [AgentFrameworkNames.ChildNotify] = ChildNotifyAsync,
             [AgentFrameworkNames.ChildCancel] = ChildCancelAsync,
             [AgentFrameworkNames.ParentWatch] = ParentWatchAsync,
+            [AgentFrameworkNames.WorkflowStep] = WorkflowStepAsync,
+            [AgentFrameworkNames.WorkflowCancel] = WorkflowCancelAsync,
+            [AgentFrameworkNames.WorkflowOverride] = (_, input, _) => Task.FromResult(input),
         };
         Conversation = agents.Workflow(new AgentFrameworkDriver(this).RunAsync);
+        WorkflowRun = agents.Workflow(new WorkflowDriver(this).RunAsync);
     }
 
     internal AgentsRuntime Agents { get; }
+
+    /// <summary>The application's services when the host runs workers, handed to workflow factories; otherwise null.</summary>
+    internal IServiceProvider? Services { get; private set; }
 
     internal AgentFrameworkOptions Options { get; }
 
@@ -84,6 +107,12 @@ public sealed partial class AgentFrameworkRuntime
     /// <summary>The names of the registered agents.</summary>
     public IReadOnlyCollection<string> AgentNames => _definitions.Keys;
 
+    /// <summary>The names of the registered durable workflows.</summary>
+    public IReadOnlyCollection<string> WorkflowNames => _workflowDefinitions.Keys;
+
+    /// <summary>The workflow that runs a durable Agent Framework workflow, registered as <see cref="AgentFrameworkNames.WorkflowType"/>.</summary>
+    public WorkflowFunc WorkflowRun { get; }
+
     /// <summary>The activities to register on a worker: the adapter's and the agent runtime's.</summary>
     public IReadOnlyDictionary<string, ActivityFunc> Activities => _activities;
 
@@ -93,10 +122,11 @@ public sealed partial class AgentFrameworkRuntime
     internal KairosClient Client => _client ?? throw new InvalidOperationException("The adapter is not connected to a Kairos client yet. In a host, AddAgentFramework does this when the host starts; otherwise call Bind.");
 
     /// <summary>Gives the runtime the client nested agents are started and answered with (the worker side of the adapter needs it only for nested agents).</summary>
-    public void Bind(KairosClient client)
+    public void Bind(KairosClient client, IServiceProvider? services = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         _client = client;
+        Services = services;
     }
 
     /// <summary>Puts the activities into a registry (and the workflow into a workflow registry, when given).</summary>
@@ -111,6 +141,11 @@ public sealed partial class AgentFrameworkRuntime
         foreach (string agent in _definitions.Keys)
         {
             workflows?.Register(AgentFrameworkNames.ConversationType(agent), KairosClient.DefaultBuildId, Conversation);
+        }
+
+        foreach (string workflow in _workflowDefinitions.Keys)
+        {
+            workflows?.Register(AgentFrameworkNames.WorkflowType(workflow), KairosClient.DefaultBuildId, WorkflowRun);
         }
     }
 
@@ -195,7 +230,29 @@ public sealed partial class AgentFrameworkRuntime
         Validate(definitions, agents);
         var unclassified = bindings.Values.Where(t => !t.Classified && t.ChildAgent is null).Select(t => t.Name).Order(StringComparer.Ordinal).ToList();
         self = new AgentFrameworkRuntime(agents, builder.Options, definitions, unclassified);
+        self.AddWorkflows(builder.Workflows, agents.Config.Redactor is not null);
         return self;
+    }
+
+    /// <summary>Analyzes the registered workflows: each is built (twice) to see that its structure is stable, and checked against what a redactor would have to cover.</summary>
+    private void AddWorkflows(IReadOnlyList<WorkflowRegistration> registrations, bool redactorConfigured)
+    {
+        if (registrations.Count == 0)
+        {
+            return;
+        }
+
+        // Building a workflow for analysis needs durable agents to hand to the factory; these talk to a store nobody else sees, and are never asked anything.
+        var inert = new DurableAgents(this, new KairosClient(new InMemoryKairosStore(), TimeProvider.System), default, TimeProvider.System);
+        foreach (WorkflowRegistration registration in registrations)
+        {
+            if (_workflowDefinitions.ContainsKey(registration.Name))
+            {
+                throw new InvalidOperationException($"Two workflows are registered as '{registration.Name}'.");
+            }
+
+            _workflowDefinitions.Add(registration.Name, WorkflowDefinition.Analyze(registration, () => new WorkflowBuildContext(inert, null), redactorConfigured));
+        }
     }
 
     private static void Validate(List<AgentDefinition> definitions, AgentsRuntime agents)

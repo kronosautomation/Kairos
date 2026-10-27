@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Agents.AI;
 
 namespace Kairos.Agents.AgentFramework;
@@ -41,6 +42,22 @@ public sealed class AgentFrameworkOptions
 
     /// <summary>How often a nested agent's run looks whether its parent run is still open, so that it stops when the parent was terminated. Default one minute; null never looks.</summary>
     public TimeSpan? ParentWatchInterval { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How many supersteps of a durable workflow one step runs before its checkpoint is recorded. At 1 (the default) every superstep is recorded and a crash costs at most the superstep that was running; a larger
+    /// number records less and makes a crash cost more. Read when a run starts: a run keeps the value it started with.
+    /// </summary>
+    public int SuperstepsPerStep { get; set; } = 1;
+
+    /// <summary>
+    /// The longest an executor of a durable workflow may wait inside its superstep for the answer of a durable agent's conversation. The activity is held for as long as the executor waits, so an agent that may wait for
+    /// a person must not be waited for in an executor: past this time the step fails with an error that names the conversation and says to use a request port. Default 5 minutes. The metric
+    /// <c>kairos.af.workflow.conversation_waits</c> counts the activities waiting on a conversation right now.
+    /// </summary>
+    public TimeSpan WorkflowAgentWait { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>The largest checkpoint of a durable workflow a step will take or return (UTF-8 bytes). Default 2 MiB. History holds a checkpoint whole every <see cref="FullSnapshotEvery"/> steps and otherwise what changed.</summary>
+    public int MaxCheckpointBytes { get; set; } = 2 * 1024 * 1024;
 }
 
 /// <summary>
@@ -50,10 +67,13 @@ public sealed class AgentFrameworkBuilder
 {
     private readonly List<AgentRegistration> _agents = [];
     private readonly List<Action<AgentsBuilder>> _configure = [];
+    private readonly List<WorkflowRegistration> _workflows = [];
 
     internal IReadOnlyList<AgentRegistration> Agents => _agents;
 
     internal IReadOnlyList<Action<AgentsBuilder>> Configurations => _configure;
+
+    internal IReadOnlyList<WorkflowRegistration> Workflows => _workflows;
 
     public AgentFrameworkOptions Options { get; } = new();
 
@@ -78,6 +98,29 @@ public sealed class AgentFrameworkBuilder
     {
         ArgumentNullException.ThrowIfNull(configure);
         _configure.Add(configure);
+        return this;
+    }
+
+    /// <summary>
+    /// Makes an Agent Framework workflow durable: each superstep is recorded as a Kairos step with the workflow's checkpoint, so the workflow survives crashes and redeploys, waits for requests without holding compute, and can be
+    /// cancelled and terminated. <paramref name="factory"/> builds the workflow; it is called once per step (executors are not shared between steps), and must build the same graph every time, with explicit executor ids.
+    /// </summary>
+    /// <typeparam name="TInput">The type of the workflow's input (what its start executor accepts).</typeparam>
+    /// <param name="name">The workflow's stable name, 1 to 64 letters, digits, '.', '_' or '-'.</param>
+    /// <param name="factory">Builds the workflow. Executors that talk to durable agents get them from <see cref="WorkflowBuildContext.Agents"/>.</param>
+    /// <param name="configure">Serialization, which request ports are approvals, what a redactor needs to know.</param>
+    public AgentFrameworkBuilder AddWorkflow<TInput>(string name, Func<WorkflowBuildContext, Microsoft.Agents.AI.Workflows.Workflow> factory, Action<WorkflowRegistration>? configure = null)
+        where TInput : notnull
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(factory);
+        WorkflowRegistration? registration = null;
+        registration = new WorkflowRegistration(
+            name, typeof(TInput), factory,
+            (environment, workflow, input, session, ct) =>
+                environment.RunStreamingAsync(workflow, input.Deserialize<TInput>(registration!.Options) ?? throw new FormatException($"The input of workflow '{name}' is null."), session, ct));
+        configure?.Invoke(registration);
+        _workflows.Add(registration);
         return this;
     }
 
