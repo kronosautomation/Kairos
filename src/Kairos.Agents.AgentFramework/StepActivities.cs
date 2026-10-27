@@ -18,6 +18,25 @@ public sealed partial class AgentFrameworkRuntime
     {
         AfStepRequest request = AfCodec.Read(input, AfJson.Default.AfStepRequest);
         AgentDefinition definition = Definition(request.Agent);
+        string alias = definition.Model ?? definition.Name;
+        using System.Diagnostics.Activity? span = AgentTelemetry.StartFrameworkStep(context, alias, definition.Name, stepped);
+        long started = AgentTelemetry.Now();
+        try
+        {
+            byte[] reply = await StepCoreAsync(context, request, definition, stepped, span, cancellationToken).ConfigureAwait(false);
+            AgentTelemetry.Finish("chat", alias, span, started, error: null);
+            return reply;
+        }
+        catch (Exception ex)
+        {
+            AgentTelemetry.Finish("chat", alias, span, started, ex);
+            throw;
+        }
+    }
+
+    private async Task<byte[]> StepCoreAsync(
+        ActivityContext context, AfStepRequest request, AgentDefinition definition, bool stepped, System.Diagnostics.Activity? span, CancellationToken cancellationToken)
+    {
         if (definition.Stepped != stepped)
         {
             throw new InvalidOperationException($"Agent '{definition.Name}' is registered as {(definition.Stepped ? "stepped" : "turn level")} and was asked to run the other way. Was it re-registered while a run was in flight?");
@@ -75,6 +94,8 @@ public sealed partial class AgentFrameworkRuntime
         var approvals = new List<AfApprovalRequest>();
         Pending(responseMessages, stepped, toolCalls, approvals);
         UsageDetails? usage = run.Response.Usage;
+        string? finish = (run.Response.FinishReason ?? (run.Response.RawRepresentation as ChatResponse)?.FinishReason)?.Value;
+        AgentTelemetry.FrameworkResponse(span, definition.Model ?? definition.Name, run.ModelId, finish, usage?.InputTokenCount, usage?.OutputTokenCount, run.Response.Messages.Count);
         return AfCodec.Write(
             new AfStepResult
             {
@@ -89,7 +110,7 @@ public sealed partial class AgentFrameworkRuntime
                 OutputTokens = usage?.OutputTokenCount,
                 TotalTokens = usage?.TotalTokenCount,
                 ModelId = run.ModelId,
-                FinishReason = (run.Response.FinishReason ?? (run.Response.RawRepresentation as ChatResponse)?.FinishReason)?.Value,
+                FinishReason = finish,
             },
             AfJson.Default.AfStepResult);
     }

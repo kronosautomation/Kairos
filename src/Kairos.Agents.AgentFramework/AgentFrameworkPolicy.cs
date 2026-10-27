@@ -21,17 +21,15 @@ internal class AgentFrameworkPolicy(IToolPolicy inner, IReadOnlyDictionary<strin
         }
 
         bool approved = context.Approval is { IsApproved: true };
-        if (decision.Verdict == ToolVerdict.Auto && !approved)
+        if (!approved && tool.RequiredApproval is { } required && (decision.Verdict == ToolVerdict.Auto || !MatchedARule(decision)))
         {
-            if (tool.RequiredApproval is { } required)
-            {
-                return Hold(decision, "the application requires approval for this tool", required, RegistrationRule);
-            }
+            // Who may approve is the application's to say: it replaces the free policy's default requirement, but not a rule of a policy engine that matched the call.
+            return Hold(decision, "the application requires approval for this tool", required, RegistrationRule);
+        }
 
-            if (tool.AuthorRequiresApproval)
-            {
-                return Hold(decision, "the agent's author requires approval for this tool", new ApprovalRequirement(), AuthorRule);
-            }
+        if (!approved && decision.Verdict == ToolVerdict.Auto && tool.AuthorRequiresApproval)
+        {
+            return Hold(decision, "the agent's author requires approval for this tool", new ApprovalRequirement(), AuthorRule);
         }
 
         if (decision.Verdict == ToolVerdict.RequireApproval && tool.AllowWithoutApproval && !MatchedARule(decision))

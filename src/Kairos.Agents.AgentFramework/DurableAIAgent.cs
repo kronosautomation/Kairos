@@ -52,12 +52,15 @@ public sealed class DurableAIAgent : AIAgent
     /// <summary>A session for the conversation with this id (starting a new conversation, or resuming one that exists).</summary>
     public DurableAgentSession Session(string sessionId) => new(_definition.Name, sessionId);
 
-    /// <summary>Sends the messages to the conversation and returns at once; ask <see cref="TryReadAsync"/> for the answer.</summary>
-    public ValueTask<DurableTurn> SendAsync(IEnumerable<ChatMessage> messages, DurableAgentSession session, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Sends the messages to the conversation and returns at once; ask <see cref="TryReadAsync"/> for the answer. A caller that does not know whether a send arrived (the call threw after the message may have been stored)
+    /// sends again with the same <paramref name="messageId"/>: the conversation answers a message id once.
+    /// </summary>
+    public ValueTask<DurableTurn> SendAsync(IEnumerable<ChatMessage> messages, DurableAgentSession session, string? messageId = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(session);
-        return _owner.SendAsync(_definition, session, messages, cancellationToken);
+        return _owner.SendAsync(_definition, session, messages, messageId, cancellationToken);
     }
 
     /// <summary>The answer to a message sent with <see cref="SendAsync"/>, or null while the agent is still working on it.</summary>
@@ -106,7 +109,7 @@ public sealed class DurableAIAgent : AIAgent
             DurableAgentSession durable when durable.Agent == _definition.Name => durable,
             _ => throw new InvalidOperationException($"This session does not belong to the durable agent '{_definition.Name}'."),
         };
-        DurableTurn turn = await SendAsync(messages, conversation, cancellationToken).ConfigureAwait(false);
+        DurableTurn turn = await SendAsync(messages, conversation, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // There is no channel from the engine back to the caller, and the engine has no wait-for-run operation to ask: look at the history, quickly at first and then less often.
         TimeSpan wait = _owner.Options.MinReplyPollInterval;

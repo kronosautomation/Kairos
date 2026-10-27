@@ -23,19 +23,29 @@ internal sealed class AfHarness
     private readonly ActivityRegistry _activities = new();
     private readonly IPayloadProtector? _protector;
 
-    public AfHarness(Action<AgentFrameworkBuilder> configure, bool faultInjection = false, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true)
+    public AfHarness(
+        Action<AgentFrameworkBuilder> configure, bool faultInjection = false, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true, AfHarness? redeployOf = null)
     {
-        Time = new VirtualTimeProvider();
-        var memory = new InMemoryKairosStore();
-        MemoryStore = memory;
-        if (faultInjection)
+        if (redeployOf is null)
         {
-            Faults = new FaultInjectingStore(memory, new SimRandom(seed).Fork(1), new SimFaultOptions(), Stats);
+            Time = new VirtualTimeProvider();
+            var memory = new InMemoryKairosStore();
+            MemoryStore = memory;
+            if (faultInjection)
+            {
+                Faults = new FaultInjectingStore(memory, new SimRandom(seed).Fork(1), new SimFaultOptions(), Stats);
+            }
+
+            Store = (IKairosStore?)Faults ?? memory;
+            _protector = protector;
+            Client = new KairosClient(Store, Time, payloadProtector: protector);
+        }
+        else
+        {
+            // A new build of the application over the same store, clock and clients: what a redeploy is.
+            (Time, MemoryStore, Faults, Store, Stats, _protector, Client) = (redeployOf.Time, redeployOf.MemoryStore, redeployOf.Faults, redeployOf.Store, redeployOf.Stats, redeployOf._protector, redeployOf.Client);
         }
 
-        Store = (IKairosStore?)Faults ?? memory;
-        _protector = protector;
-        Client = new KairosClient(Store, Time, payloadProtector: protector);
         Approvals = new AgentClient(Client, Time, ApprovalSigner);
 
         var builder = new AgentFrameworkBuilder();
@@ -120,16 +130,23 @@ internal sealed class AfHarness
         }
     }
 
-    /// <summary>Sends a message to a durable agent's conversation and drives the worker until nothing more can happen; returns the answer when there is one.</summary>
-    public async Task<(AgentResponse? Reply, DurableTurn Turn)> AskAsync(string agent, string session, string text, string? onBehalfOf = null)
+    /// <summary>Sends a message to a durable agent's conversation and drives the worker until nothing more can happen; returns the turn to ask about.</summary>
+    public async Task<DurableTurn> SendAsync(string agent, string session, string text, string? onBehalfOf = null)
     {
         DurableAIAgent durable = Agents.Get(agent);
         DurableAgentSession s = durable.Session(session);
         s.OnBehalfOf ??= onBehalfOf;
-        DurableTurn turn = await Retry(async () => await durable.SendAsync([new ChatMessage(ChatRole.User, text)], s).AsTask());
+        string messageId = Guid.NewGuid().ToString("N");
+        DurableTurn turn = await Retry(async () => await durable.SendAsync([new ChatMessage(ChatRole.User, text)], s, messageId).AsTask());
         await DriveAsync();
-        AgentResponse? reply = await ReadAsync(agent, turn);
-        return (reply, turn);
+        return turn;
+    }
+
+    /// <summary>Like <see cref="SendAsync"/>, and reads the answer when there is one.</summary>
+    public async Task<(AgentResponse? Reply, DurableTurn Turn)> AskAsync(string agent, string session, string text, string? onBehalfOf = null)
+    {
+        DurableTurn turn = await SendAsync(agent, session, text, onBehalfOf);
+        return (await ReadAsync(agent, turn), turn);
     }
 
     public async Task<AgentResponse?> ReadAsync(string agent, DurableTurn turn) => await Retry(async () => await Agents.Get(agent).TryReadAsync(turn).AsTask());
@@ -148,7 +165,8 @@ internal sealed class AfHarness
     public static byte[] Bytes(string text) => Encoding.UTF8.GetBytes(text);
 
     /// <summary>The usual support agent: looks an order up (read-only), refunds it (the author wrapped the tool in an approval requirement).</summary>
-    public static ChatClientAgent SupportAgent(IChatClient model, Func<string, string>? lookup = null, Func<string, string>? refund = null, string name = "support")
+    public static ChatClientAgent SupportAgent(
+        IChatClient model, Func<string, string>? lookup = null, Func<string, string>? refund = null, string name = "support", string instructions = "You help customers with their orders.")
     {
         AIFunction lookupTool = AIFunctionFactory.Create((string orderId) => lookup?.Invoke(orderId) ?? "shipped", "lookup_order", "Finds an order and says where it is.");
         AIFunction refundTool = AIFunctionFactory.Create((string orderId) => refund?.Invoke(orderId) ?? "refunded", "issue_refund", "Refunds an order.");
@@ -156,7 +174,7 @@ internal sealed class AfHarness
         {
             Name = name,
             Description = "Customer support",
-            ChatOptions = new ChatOptions { Instructions = "You help customers with their orders.", Tools = [lookupTool, new ApprovalRequiredAIFunction(refundTool)] },
+            ChatOptions = new ChatOptions { Instructions = instructions, Tools = [lookupTool, new ApprovalRequiredAIFunction(refundTool)] },
         });
     }
 
@@ -172,6 +190,22 @@ internal sealed class AfHarness
             _ => new ChatMessage(ChatRole.Assistant, answer),
         };
     });
+
+    /// <summary>The first time it is asked it calls <paramref name="tool"/>; once a tool result is in the conversation it answers.</summary>
+    public static ScriptedChatClient CallsToolThenAnswers(string tool, string argumentsJson = "{}", string answer = "all done", Action<IReadOnlyList<ChatMessage>>? observe = null) => new(messages =>
+    {
+        observe?.Invoke(messages);
+        return messages.Any(m => m.Contents.OfType<FunctionResultContent>().Any())
+            ? new ChatMessage(ChatRole.Assistant, answer)
+            : new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("call-1", tool, Args(argumentsJson))]);
+    });
+
+    /// <summary>An agent with the given tools and no instructions to speak of.</summary>
+    public static ChatClientAgent AgentWith(IChatClient model, string name, params AITool[] tools) =>
+        new(model, new ChatClientAgentOptions { Name = name, Description = name + " agent", ChatOptions = new ChatOptions { Instructions = "Be brief.", Tools = [.. tools] } });
+
+    /// <summary>A model that answers a fixed text.</summary>
+    public static ScriptedChatClient Echo(string answer = "done") => new(_ => new ChatMessage(ChatRole.Assistant, answer));
 
     public static IDictionary<string, object?> Args(string json)
     {

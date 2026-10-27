@@ -51,6 +51,9 @@ internal sealed record AfDriverInput
 
     /// <summary>Hands over to a fresh run when the history is this long (test knob; the engine's own limit applies regardless).</summary>
     public int? ContinueAfterEvents { get; init; }
+
+    /// <summary>The ids of the most recent messages taken, so a message sent twice (a caller that retried after an answer was lost) is answered once.</summary>
+    public string[] Recent { get; init; } = [];
 }
 
 internal sealed record AfToolResult

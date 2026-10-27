@@ -53,7 +53,8 @@ public sealed class DurableAgents
 
     internal TimeProvider Time => _time;
 
-    internal async ValueTask<DurableTurn> SendAsync(AgentDefinition agent, DurableAgentSession session, IEnumerable<ChatMessage> messages, CancellationToken cancellationToken)
+    internal async ValueTask<DurableTurn> SendAsync(
+        AgentDefinition agent, DurableAgentSession session, IEnumerable<ChatMessage> messages, string? messageId, CancellationToken cancellationToken)
     {
         var list = messages.ToList();
         JsonElement json = JsonSerializer.SerializeToElement(list, AIJsonUtilities.DefaultOptions);
@@ -62,7 +63,7 @@ public sealed class DurableAgents
             json = SnapshotRedactor.RedactMessages(json, redact); // the client side of the same promise the driver keeps: the redactor sees the text before it is recorded
         }
 
-        string turnId = Guid.CreateVersion7(_time.GetUtcNow()).ToString("N");
+        string turnId = messageId ?? Guid.CreateVersion7(_time.GetUtcNow()).ToString("N");
         var turn = new AfTurn { TurnId = turnId, Messages = json };
         string workflowId = WorkflowId(agent.Name, session.SessionId);
         var input = new AfDriverInput
@@ -186,7 +187,7 @@ public sealed class DurableAgents
         {
             return failed.ErrorType switch
             {
-                nameof(BudgetExceededException) => new BudgetExceededException(failed.Message),
+                nameof(BudgetExceededException) => new BudgetExceededException(failed.Message) { Limit = QuotedName(failed.Message) },
                 nameof(DefinitionChangedException) => new DefinitionChangedException(failed.Message),
                 nameof(AgentStepLimitException) => new AgentStepLimitException(failed.Message),
                 _ => new ConversationEndedException($"The conversation with agent '{agent.Name}' failed ({failed.ErrorType}): {failed.Message}"),
@@ -194,6 +195,14 @@ public sealed class DurableAgents
         }
 
         return new ConversationEndedException($"The conversation with agent '{agent.Name}' has ended.");
+    }
+
+    /// <summary>The name between single quotes in a message such as "The budget 'daily-tokens' was reached.", or null.</summary>
+    private static string? QuotedName(string message)
+    {
+        int open = message.IndexOf('\'', StringComparison.Ordinal);
+        int close = open < 0 ? -1 : message.IndexOf('\'', open + 1);
+        return close > open ? message[(open + 1)..close] : null;
     }
 
     internal static string WorkflowId(string agent, string session) => $"af/{agent}/{session}";

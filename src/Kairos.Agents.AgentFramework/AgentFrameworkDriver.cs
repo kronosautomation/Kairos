@@ -12,6 +12,9 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
 {
     private const string ChildMarker = "kairos.af.child/";
 
+    /// <summary>How many message ids a conversation remembers to recognise a message that arrives twice.</summary>
+    private const int RecentTurns = 64;
+
     /// <summary>Where a conversation stands while the driver works on it.</summary>
     private sealed class Conversation
     {
@@ -30,6 +33,7 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
         ctx.OnBehalfOf = input.OnBehalfOf;
         var state = new Conversation { Snapshot = input.Snapshot, Hash = input.Hash };
         var pending = new Queue<AfTurn>(input.Pending);
+        var recent = new List<string>(input.Recent);
         Task<byte[]> close = wf.WaitForSignalAsync(AgentFrameworkNames.CloseSignal);
 
         try
@@ -45,6 +49,12 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
                     }
 
                     pending.Enqueue(next);
+                }
+
+                if (recent.Contains(pending.Peek().TurnId, StringComparer.Ordinal))
+                {
+                    pending.Dequeue(); // already answered, or being answered: the same message arrived twice
+                    continue;
                 }
 
                 if (wf.ShouldContinueAsNew || (input.ContinueAfterEvents is { } limit && wf.HistoryLength >= limit))
@@ -66,10 +76,17 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
                         pending.Enqueue(AfCodec.Read(more.Result, AfJson.Default.AfTurn));
                     }
 
-                    throw wf.ContinueAsNew(AfCodec.Write(input with { Snapshot = state.Snapshot, Hash = state.Hash, Pending = [.. pending] }, AfJson.Default.AfDriverInput));
+                    throw wf.ContinueAsNew(AfCodec.Write(input with { Snapshot = state.Snapshot, Hash = state.Hash, Pending = [.. pending], Recent = [.. recent] }, AfJson.Default.AfDriverInput));
                 }
 
-                await TurnAsync(ctx, definition, state, pending.Dequeue());
+                AfTurn turn = pending.Dequeue();
+                recent.Add(turn.TurnId);
+                if (recent.Count > RecentTurns)
+                {
+                    recent.RemoveAt(0);
+                }
+
+                await TurnAsync(ctx, definition, state, turn);
                 if (input.Parent is { } parent)
                 {
                     await NotifyAsync(wf, parent, new AfChildAnswer { Ok = true, Text = state.LastText });

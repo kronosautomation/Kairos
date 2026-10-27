@@ -46,6 +46,43 @@ internal static class AgentTelemetry
         return span;
     }
 
+    /// <summary>The span of one model call of an Agent Framework agent (Kairos.Agents.AgentFramework). The same conventions, and the same promise: no content.</summary>
+    public static Activity? StartFrameworkStep(ActivityContext context, string alias, string agent, bool stepped)
+    {
+        Activity? span = KairosTelemetry.Source.StartActivity($"chat {alias}", ActivityKind.Client);
+        if (span is not null)
+        {
+            span.SetTag("gen_ai.operation.name", "chat");
+            span.SetTag("gen_ai.request.model", alias);
+            span.SetTag("gen_ai.agent.name", agent); // configuration, not content
+            span.SetTag("gen_ai.conversation.id", context.Run.RunId.ToString("D"));
+            span.SetTag(KairosTags.RunId, context.Run.RunId.ToString("D"));
+            span.SetTag("kairos.agent.framework", "agent-framework");
+            span.SetTag("kairos.agent.stepped", stepped);
+        }
+
+        return span;
+    }
+
+    public static void FrameworkResponse(Activity? span, string alias, string? modelId, string? finish, long? inputTokens, long? outputTokens, int messages)
+    {
+        if (span is not null)
+        {
+            span.SetTag("gen_ai.response.model", modelId);
+            if (finish is not null)
+            {
+                span.SetTag("gen_ai.response.finish_reasons", new[] { finish });
+            }
+
+            span.SetTag("gen_ai.usage.input_tokens", inputTokens);
+            span.SetTag("gen_ai.usage.output_tokens", outputTokens);
+            span.SetTag("kairos.agent.reply_messages", messages);
+        }
+
+        Record(alias, "input", inputTokens);
+        Record(alias, "output", outputTokens);
+    }
+
     public static void Provider(Activity? span, IChatClient client)
     {
         if (span is not null && client.GetService<ChatClientMetadata>()?.ProviderName is { Length: > 0 } provider)
