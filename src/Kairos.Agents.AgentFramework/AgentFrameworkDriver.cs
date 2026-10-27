@@ -29,7 +29,8 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
     {
         AfDriverInput input = AfCodec.Read(inputBytes, AfJson.Default.AfDriverInput);
         IWorkflowContext wf = ctx.Workflow;
-        AgentDefinition definition = runtime.Definition(input.Agent);
+        AgentDefinition definition = runtime.Definition(input.Agent); // a worker without the agent does not register this agent's workflow type, so the engine leaves the run for one that has it
+
         ctx.OnBehalfOf = input.OnBehalfOf;
         var state = new Conversation { Snapshot = input.Snapshot, Hash = input.Hash };
         var pending = new Queue<AfTurn>(input.Pending);

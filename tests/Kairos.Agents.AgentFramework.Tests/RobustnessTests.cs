@@ -89,19 +89,22 @@ public sealed class RobustnessTests
     public async Task A_conversation_closed_while_it_was_about_to_hand_over_ends_instead()
     {
         ScriptedChatClient model = new(_ => new ChatMessage(ChatRole.Assistant, "answer"));
-        var h = new AfHarness(af => af.Configure(o => o.ContinueAfterEvents = 8).AddAgent(AfHarness.AgentWith(model, "chat")));
+        var h = new AfHarness(af => af.Configure(o => o.ContinueAfterEvents = 12).AddAgent(AfHarness.AgentWith(model, "chat")));
         DurableAIAgent chat = h.Agents.Get("chat");
         DurableAgentSession session = chat.Session("s");
-        for (int i = 1; i <= 3; i++)
+        for (int i = 1; i <= 2; i++)
         {
-            await h.AskAsync("chat", "s", $"m{i}");
+            await h.AskAsync("chat", "s", $"m{i}"); // the run is now just short of the hand-over point
         }
+
+        RunKey before = await h.RunOfAsync("chat", "s");
 
         await chat.SendAsync([new ChatMessage(ChatRole.User, "last")], session, "m-last");
         await chat.CloseAsync(session); // a message and a close arrive together, with the history past the hand-over point
         await h.DriveAsync();
 
         RunKey current = await h.RunOfAsync("chat", "s");
+        Assert.Equal(before, current); // it did not hand over: it ended
         Assert.Equal(RunState.Completed, await h.Client.GetStateAsync(current));
     }
 

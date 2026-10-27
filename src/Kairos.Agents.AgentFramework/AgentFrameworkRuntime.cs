@@ -7,8 +7,14 @@ namespace Kairos.Agents.AgentFramework;
 /// <summary>The activity and workflow types the adapter registers. Register <see cref="AgentFrameworkRuntime"/>'s activities on every worker that can run durable agents.</summary>
 public static class AgentFrameworkNames
 {
-    /// <summary>The workflow that runs a conversation.</summary>
+    /// <summary>The prefix of the workflow types that run a conversation, one type per agent: <see cref="ConversationType"/>.</summary>
     public const string Conversation = "kairos.af.agent";
+
+    /// <summary>
+    /// The workflow type that runs conversations with the agent called <paramref name="agent"/>. There is one per agent so that a worker that does not have the agent does not register it: the engine then leaves the
+    /// run for a worker that does, which is what a rolling deployment of a new agent needs. It also shows which agent a run belongs to in a list of runs.
+    /// </summary>
+    public static string ConversationType(string agent) => $"{Conversation}/{agent}";
 
     /// <summary>One model call of an agent (the agent runs one step; Kairos runs the loop).</summary>
     public const string Step = AgentActivityNames.FrameworkStep;
@@ -73,7 +79,7 @@ public sealed partial class AgentFrameworkRuntime
     /// <summary>The activities to register on a worker: the adapter's and the agent runtime's.</summary>
     public IReadOnlyDictionary<string, ActivityFunc> Activities => _activities;
 
-    /// <summary>The workflow that runs a conversation, registered as <see cref="AgentFrameworkNames.Conversation"/>.</summary>
+    /// <summary>The workflow that runs a conversation, registered as <see cref="AgentFrameworkNames.ConversationType"/>.</summary>
     public WorkflowFunc Conversation { get; }
 
     internal KairosClient Client => _client ?? throw new InvalidOperationException("The adapter is not connected to a Kairos client yet. In a host, AddAgentFramework does this when the host starts; otherwise call Bind.");
@@ -94,7 +100,10 @@ public sealed partial class AgentFrameworkRuntime
             activities.Register(name, activity);
         }
 
-        workflows?.Register(AgentFrameworkNames.Conversation, KairosClient.DefaultBuildId, Conversation);
+        foreach (string agent in _definitions.Keys)
+        {
+            workflows?.Register(AgentFrameworkNames.ConversationType(agent), KairosClient.DefaultBuildId, Conversation);
+        }
     }
 
     internal AgentDefinition Definition(string name) =>
@@ -141,7 +150,7 @@ public sealed partial class AgentFrameworkRuntime
             NonRetryableErrorTypes =
             [
                 .. agentsBuilder.ModelRetry.NonRetryableErrorTypes,
-                nameof(UnknownAgentException), nameof(SnapshotTooLargeException), nameof(SnapshotShapeException),
+                nameof(SnapshotTooLargeException), nameof(SnapshotShapeException),
             ],
         });
 

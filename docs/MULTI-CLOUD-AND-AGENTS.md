@@ -31,7 +31,7 @@ infra/
 ```
 
 Licensing (docs/LICENSING.md, placement in docs/REPO-LAYOUT.md): Kairos.Mcp.TaskStore and Kairos.Agents.McpClient are Apache
-(this repository); Kairos.Agents.Mcp (the MCP server), Kairos.Agents.AgentFramework, Kairos.Cloud.Aws/Azure/Gcp,
+(this repository, as are Kairos.Agents.A2aClient and Kairos.Agents.AgentFramework); Kairos.Agents.Mcp (the MCP server), Kairos.Cloud.Aws/Azure/Gcp,
 Kairos.Server and Kairos.Admin are commercial and are built in the private Kairos.Commercial repository against the
 public Apache packages. Everything else above stays in this repository.
 
@@ -94,8 +94,9 @@ MCP (Kairos.Agents.Mcp):
 - Server tools: `start_workflow`, `get_run`, `list_runs`, `signal_run`, `approve`, `reject`, `cancel_run`; scoped tokens per namespace + role; never exposes payload plaintext unless the caller holds the key.
 - Client: `ctx.CallMcpToolAsync(server, tool, args)` as a durable, idempotent step with timeout/retry.
 
-Agent Framework (Kairos.Agents.AgentFramework):
-- Durability/checkpoint provider backed by Kairos on Postgres; no Azure dependency.
+Agent Framework (Kairos.Agents.AgentFramework, Apache 2.0, built; design `docs/AGENT-FRAMEWORK-DESIGN.md`):
+- Makes Agent Framework agents durable on Kairos and Postgres; no Azure dependency. The agent runs one model call per step inside an activity and a Kairos workflow runs the loop.
+- A Kairos-backed checkpoint store for Agent Framework workflows is a separate, later step (its contract is per superstep).
 
 ## 4. Order of work (replaces earlier milestones 2–5 in CLAUDE.md)
 

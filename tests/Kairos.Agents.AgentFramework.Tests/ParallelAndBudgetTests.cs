@@ -36,6 +36,7 @@ public sealed class ParallelAndBudgetTests
         Assert.DoesNotContain(history.Skip(tools[0]).Take(tools[1] - tools[0]), e => e is ActivityCompleted); // both were scheduled before either finished: parallel stays parallel
 
         FunctionResultContent[] results = [.. seen.SelectMany(m => m.Contents).OfType<FunctionResultContent>()];
+        Assert.All(seen.Where(m => m.Contents.OfType<FunctionResultContent>().Any()), m => Assert.Equal(ChatRole.Tool, m.Role)); // providers want tool results in the tool role
         Assert.Equal(["c-a", "c-b"], results.Select(r => r.CallId));
         Assert.Equal(["result-a", "result-b"], results.Select(r => r.Result?.ToString()));
         Assert.Equal(2, model.CallCount);
@@ -118,15 +119,16 @@ public sealed class ParallelAndBudgetTests
     [Fact]
     public async Task A_budget_nobody_raises_ends_the_run()
     {
-        (AfHarness h, ScriptedChatClient model, _) = Guarded(info => ModelCallPermit.Refuse("daily-tokens", "pause"));
+        (AfHarness h, ScriptedChatClient model, _) = Guarded(info => info.AllowanceApprovalId is null ? ModelCallPermit.Refuse("daily-tokens", "pause") : ModelCallPermit.Allow("r")); // a guard that lets a raised call through
 
         (_, DurableTurn turn) = await h.AskAsync("support", "s", "refund A-1042");
         RunKey run = await h.RunOfAsync("support", "s");
         await h.Approvals.RejectAsync(run, AgentHistory.PendingApprovals(await h.HistoryAsync(run)).Single().ApprovalId, Alice);
         await h.DriveAsync();
 
-        Assert.Equal(0, model.CallCount);
-        await Assert.ThrowsAsync<BudgetExceededException>(async () => await h.Agents.Get("support").TryReadAsync(turn));
+        Assert.Equal(0, model.CallCount); // a rejected raise lets nothing through
+        BudgetExceededException e = await Assert.ThrowsAsync<BudgetExceededException>(async () => await h.Agents.Get("support").TryReadAsync(turn));
+        Assert.Contains("nobody raised it", e.Message, StringComparison.Ordinal);
     }
 
     [Fact]

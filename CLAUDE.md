@@ -15,8 +15,8 @@ does not cover a case, ask instead of guessing.
 
 ## Licensing
 This repository is Apache-2.0 (LICENSE, NOTICE). The open-core boundary is in `docs/LICENSING.md`. Never add
-commercial-tier code here (dashboard, policies, MCP server, managed-cloud adapters, Server/Admin, Agent Framework
-provider); those live in the private Kairos.Commercial repository. Correctness, safety and security features always
+commercial-tier code here (dashboard, policies, MCP server, managed-cloud adapters, Server/Admin); those live in the
+private Kairos.Commercial repository. The Agent Framework adapter (`Kairos.Agents.AgentFramework`) is Apache and lives here. Correctness, safety and security features always
 stay in this repository.
 
 ## Non-negotiable rules

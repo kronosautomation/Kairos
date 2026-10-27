@@ -15,6 +15,7 @@
             "src/Kairos.Agents.McpClient/Kairos.Agents.McpClient.csproj",
             "src/Kairos.A2A/Kairos.A2A.csproj",
             "src/Kairos.Agents.A2aClient/Kairos.Agents.A2aClient.csproj",
+            "src/Kairos.Agents.AgentFramework/Kairos.Agents.AgentFramework.csproj",
             "src/Kairos.Worker/Kairos.Worker.csproj",
             "src/Kairos.Cloud.SelfHosted/Kairos.Cloud.SelfHosted.csproj",
             "tests/Kairos.Testing/Kairos.Testing.csproj",

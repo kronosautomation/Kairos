@@ -28,7 +28,10 @@ public static class AgentFrameworkServiceCollectionExtensions
         configure(builder);
         AgentFrameworkRuntime runtime = AgentFrameworkRuntime.Create(builder);
         options.AddActivities(runtime.Activities);
-        options.AddWorkflow(AgentFrameworkNames.Conversation, runtime.Conversation);
+        foreach (string agent in runtime.AgentNames)
+        {
+            options.AddWorkflow(AgentFrameworkNames.ConversationType(agent), runtime.Conversation);
+        }
 
         services.AddSingleton(runtime);
         services.AddSingleton(sp => new DurableAgents(runtime, sp.GetRequiredService<KairosClient>(), options.Scope, sp.GetRequiredService<TimeProvider>()));

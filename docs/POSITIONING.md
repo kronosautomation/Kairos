@@ -16,8 +16,9 @@ no vendor control plane in your data path.** "Temporal semantics without the clu
 - .NET-native depth competitors can't match quickly: async/await determinism, Roslyn analyzers, Native AOT, Aspire integration.
 
 ### Secondary: durable AI agents without Azure
-A Kairos durability provider + MCP tool-call/approval steps for **Microsoft Agent Framework** (whose durable option today
-targets Durable Task Scheduler). "Durable agents on Postgres." Adoption hook, not core revenue.
+A Kairos durability adapter + MCP tool-call/approval steps for **Microsoft Agent Framework** (whose durable option today
+targets Durable Task Scheduler). "Durable agents on Postgres." Adoption hook, not core revenue: the adapter (`Kairos.Agents.AgentFramework`) is Apache 2.0
+and free, because it is the way in. What is paid stays what it was: the policy engine and budgets, the Policy service for remote workers, the dashboard's approval inbox and cost views.
 
 ## Competitive gap (as researched)
 - Temporal .NET SDK: mature, strong adoption, but self-hosting = a multi-service cluster.
@@ -28,7 +29,7 @@ targets Durable Task Scheduler). "Durable agents on Postgres." Adoption hook, no
 
 ## Packaging & pricing direction
 - **Free core** (permissive license), usable in production at small scale.
-- **Pro** per organization per year (Hangfire-style $500–$1,500 range): dashboard, multi-tenant isolation, key management, Agent Framework package.
+- **Pro** per organization per year (Hangfire-style $500–$1,500 range): dashboard, multi-tenant isolation, key management. (The Agent Framework package is free.)
 - **Enterprise / Sovereign**: custom quote. Air-gapped license, source escrow, SLA (Duende-style $5k–$25k+/yr reference).
 - **Hosted** later: a dashboard/control plane that never touches payloads. Avoid per-action metered pricing at launch.
 - AWS Marketplace + bring-your-own-cloud modules as distribution, not as the product.

@@ -22,4 +22,5 @@ Read these in order the first time; each one builds on the one before.
 | [Durable tasks for MCP servers](mcp-tasks.md) | A task store for any C# MCP server whose tasks survive restarts, backed by Kairos runs. |
 | [Calling MCP tools from an agent](mcp-client.md) | MCP tool calls as recorded, idempotent steps; long calls polled across restarts. |
 | [Calling other agents with A2A](a2a.md) | Durable A2A calls, signed Agent Cards, and a Kairos run reported as an A2A task. |
+| [Agent Framework agents, made durable](agent-framework.md) | Your Microsoft Agent Framework agent with recorded steps, approvals that wait, and the same policy and budgets as native agents. |
 | [Verifying a release](verify-releases.md) | Signatures, SBOMs, build provenance and how to rebuild a release. |

@@ -90,3 +90,5 @@ What the model sees when something goes wrong:
   own activities such as undo steps, are not payloads and stay readable; do not put secrets in them.
 - **Workflow rules still apply.** The agent loop is workflow code: no clock, no random numbers, no I/O (see [Determinism](determinism.md)). The build-time analyzers check agent workflows too.
 - **History grows with the conversation.** Each model call and tool call adds events; long agents should continue as new.
+
+Already have an agent written with Microsoft Agent Framework? See [Agent Framework agents, made durable](agent-framework.md): the same steps, approvals, policy and budgets, without rewriting the agent.

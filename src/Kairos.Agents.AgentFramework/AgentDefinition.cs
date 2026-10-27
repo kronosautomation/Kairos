@@ -128,7 +128,7 @@ internal sealed partial class AgentDefinition
             Model = model,
             MaxOutputTokens = registration.MaxOutputTokensValue ?? chat?.MaxOutputTokens,
         };
-        definition.Hash = definition.ComputeHash(inner?.Instructions ?? "", chat?.Instructions ?? "");
+        definition.Hash = definition.ComputeHash(chat?.Instructions ?? inner?.Instructions ?? "");
         return definition;
     }
 
@@ -189,7 +189,7 @@ internal sealed partial class AgentDefinition
         && type.Assembly == typeof(ChatClientAgent).Assembly
         && (type.FullName?.StartsWith("Microsoft.Agents.AI.AIAgentExtensions", StringComparison.Ordinal) ?? false);
 
-    private string ComputeHash(string instructions, string optionInstructions)
+    private string ComputeHash(string instructions)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -198,7 +198,6 @@ internal sealed partial class AgentDefinition
             writer.WriteString("name", Name);
             writer.WriteBoolean("stepped", Stepped);
             writer.WriteString("instructions", instructions);
-            writer.WriteString("optionInstructions", optionInstructions);
             writer.WriteString("model", Model ?? "");
             writer.WriteStartArray("tools");
             foreach (ToolBinding t in Tools.OrderBy(t => t.Name, StringComparer.Ordinal))

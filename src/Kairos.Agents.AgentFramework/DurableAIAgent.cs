@@ -70,6 +70,13 @@ public sealed class DurableAIAgent : AIAgent
         return _owner.TryReadAsync(_definition, turn, cancellationToken);
     }
 
+    /// <summary>The Kairos run that holds the conversation now (its approvals are in that run's history), or null when nothing has been said yet.</summary>
+    public ValueTask<RunKey?> FindRunAsync(DurableAgentSession session, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return _owner.FindRunAsync(_definition, session, cancellationToken);
+    }
+
     /// <summary>Ends the conversation. Its history stays; further messages need a new session.</summary>
     public ValueTask CloseAsync(DurableAgentSession session, CancellationToken cancellationToken = default)
     {

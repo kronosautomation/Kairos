@@ -30,6 +30,7 @@ spans both (a new core API plus its commercial user) is two commits, core first.
 | **Kairos.Agents.McpClient** | **Kairos** | Durable, idempotent MCP client steps for agent workflows (`ctx.CallMcpToolAsync`). Agent durability is free. |
 | **Kairos.A2A** | **Kairos** | The A2A protocol layer: Agent Card signing and verification (JWS over RFC 8785 canonical JSON, ES256), and the projection of a Kairos run as an A2A task. Security-relevant, so free. Built on the official `A2A` SDK (pinned preview). |
 | **Kairos.Agents.A2aClient** | **Kairos** | Durable, idempotent outbound A2A calls for agent workflows (`ctx.CallA2aAgentAsync`), with Agent Card verification. Agent durability is free. |
+| **Kairos.Agents.AgentFramework** | **Kairos** | Makes Microsoft Agent Framework agents durable (`services.AddKairos(...).AddAgentFramework(...)`): the agent runs one model call per recorded step inside an activity, a Kairos workflow runs the loop, tools are ordinary Kairos tool steps. Free on purpose: it is the adoption hook and its whole job is exactly-once-recorded steps and approvals, which are correctness and safety. Needs only Apache hooks; the Pro policy engine and budgets plug into the same `AgentsBuilder`. Pinned to Microsoft.Agents.AI 1.24.0. |
 | **Kairos.Agents.A2a** | **Kairos.Commercial** (Pro) | Hosted A2A server: workflows published as A2A agents, signed Agent Cards served, server-stamped caller identity. Mirrors Kairos.Agents.Mcp. |
 | **Kairos.Agents.Mcp** | **Kairos.Commercial** (Pro) | The Kairos MCP server: workflows exposed as tools, approvals as input requests with server-stamped, verified approver identity, operator tools. Uses Kairos.Mcp.TaskStore. |
 | **Kairos.Cloud.Azure** | **Kairos.Commercial** (Pro) | Blob payload offload, Key Vault key wrapping, Service Bus event sink and source, Entra worker authentication, behind the Apache provider interfaces; passes the Apache conformance suites. |
@@ -37,7 +38,7 @@ spans both (a new core API plus its commercial user) is two commits, core first.
 | **infra/** (Pulumi C# cell stacks), **build/** (cloud sandbox pipeline) | **Kairos.Commercial** | One Azure Container Apps cell and one ECS Fargate cell, each with its own PostgreSQL, private networking only, least-privilege identities, no secrets in stack configuration; and the nightly `CloudSandbox` pipeline that deploys a throwaway cell, runs the Apache conformance suites against the real services, and destroys it. |
 | Kairos.Agents.Policies, Telemetry, Dashboard, Cloud.Gcp | Kairos.Commercial (Pro) | Future |
 | **Kairos.Server**, **Kairos.Server.Host**, **Kairos.Server.Contracts**, **Kairos.Server.Client** | **Kairos.Commercial** (Business) | The multi-tenant data plane: run operations over HTTP and gRPC, the worker protocol over gRPC (Client = `RemoteWorkerStore`, Contracts = the shared protobuf), Entra / IAM / OIDC / ES256 token authentication, per-tenant limits, health. Host = the executable that composes it from configuration. |
-| Kairos.Admin, Dashboard.Enterprise, Agents.AgentFramework | Kairos.Commercial (Business) | Future |
+| Kairos.Admin, Dashboard.Enterprise | Kairos.Commercial (Business) | Future |
 | Marketing site | Kairos.Website | From the design canvas |
 | Product docs | Kairos/docs-site | Customer-facing rewrites only |
 

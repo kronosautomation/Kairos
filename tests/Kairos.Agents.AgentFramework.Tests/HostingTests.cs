@@ -98,7 +98,7 @@ public sealed class HostingTests
         DateTime deadline = DateTime.UtcNow.AddSeconds(20);
         while (true)
         {
-            StartRunResult found = await client.StartAsync(KairosOptions.DefaultScope, id, AgentFrameworkNames.Conversation, AfCodec.Write(new AfDriverInput { Agent = "support" }, AfJson.Default.AfDriverInput));
+            StartRunResult found = await client.StartAsync(KairosOptions.DefaultScope, id, AgentFrameworkNames.ConversationType("support"), AfCodec.Write(new AfDriverInput { Agent = "support" }, AfJson.Default.AfDriverInput));
             if (!found.Started)
             {
                 return new RunKey(KairosOptions.DefaultScope.TenantId, KairosOptions.DefaultScope.NamespaceId, found.RunId);

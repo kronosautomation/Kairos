@@ -157,8 +157,8 @@ internal sealed class AfHarness
     /// <summary>The run that holds a conversation now.</summary>
     public async Task<RunKey> RunOfAsync(string agent, string session)
     {
-        StartRunResult current = await Retry(async () => await Client.StartAsync(DefaultScope, $"af/{agent}/{session}", AgentFrameworkNames.Conversation, Bytes("{\"agent\":\"" + agent + "\"}")).AsTask());
-        return new RunKey(DefaultScope.TenantId, DefaultScope.NamespaceId, current.RunId);
+        RunKey? run = await Retry(async () => await Client.GetCurrentRunAsync(DefaultScope, $"af/{agent}/{session}").AsTask());
+        return run ?? throw new InvalidOperationException("the conversation has no run yet");
     }
 
     public static string Text(AgentResponse? response) => response?.Text ?? "<no answer>";

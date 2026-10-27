@@ -36,13 +36,13 @@ visibility, consoles, governance, multi-tenant operation, compliance and support
 | Kairos.Agents.McpClient | Apache 2.0 | Community | Durable, idempotent MCP client steps for agent workflows |
 | Kairos.A2A | Apache 2.0 | Community | Agent Card signing and verification; a Kairos run projected as an A2A task |
 | Kairos.Agents.A2aClient | Apache 2.0 | Community | Durable, idempotent outbound A2A calls with Agent Card verification |
+| Kairos.Agents.AgentFramework | Apache 2.0 | Community | Makes Microsoft Agent Framework agents durable: each model call and tool call a recorded step, sessions that survive restarts, approvals that wait without holding compute, and the same tool policy, budgets and redaction as native agents. It needs only the Community hooks (`IToolPolicy`, `IRecordedToolPolicy`, `IModelCallGuard`, approvals); the policy engine, price tables, the Policy service and the dashboard's approval inbox are Pro and apply to these agents without any change to them |
 | Kairos.Agents.A2a | Commercial | Pro | The hosted A2A server: workflows published as agents, signed cards served, server-stamped identity |
 | Kairos.Agents.Mcp | Commercial | Pro | The Kairos MCP server: workflows as tools, approvals as input requests with verified approvers, operator tools |
 | Kairos.Cloud.Azure, .Aws, .Gcp | Commercial | Pro | Managed key, identity, blob and event adapters (self-hosted equivalents stay free) |
 | Kairos.Telemetry | Commercial | Pro | Packaged dashboards (Grafana, Azure Monitor workbooks) and alert rules. Raw spans, metrics, the GenAI conventions and the Aspire integration are Community and stay in Core, Hosting and Kairos.Aspire.Hosting |
 | Kairos.Server, Kairos.Admin | Commercial | Business | Standalone multi-tenant data plane and control plane, including the endpoints to read and (Admin only) change policy, prices and budgets |
 | Kairos.Dashboard.Enterprise | Commercial | Business | SSO, roles, audit export, bulk operator console |
-| Kairos.Agents.AgentFramework | Commercial | Business | Microsoft Agent Framework durability provider |
 | Offline license, escrow, custom terms | Commercial | Enterprise | Terms, not packages |
 | Redistribution rights | Commercial | OEM | Ship Kairos inside a product installed in customer environments |
 

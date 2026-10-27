@@ -262,6 +262,13 @@ public sealed class KairosClient
         }
     }
 
+    /// <summary>The current run of a workflow id (the latest of a continue-as-new chain), or null when there is none. Starts nothing.</summary>
+    public ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(workflowId);
+        return _store.GetCurrentRunAsync(scope, workflowId, cancellationToken);
+    }
+
     public ValueTask<RunState?> GetStateAsync(RunKey run, CancellationToken cancellationToken = default) =>
         _store.GetRunStateAsync(run, cancellationToken);
 

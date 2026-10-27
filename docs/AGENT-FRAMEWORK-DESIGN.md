@@ -237,3 +237,33 @@ Applying this means editing `LICENSING.md`, `REPO-LAYOUT.md`, both `CLAUDE.md`s 
 - **Snapshot compatibility across versions:** a run in flight during an Agent Framework upgrade resumes with a snapshot the new version must read. The framework's own `Deserialize` is the contract; tests include a snapshot recorded with 1.24.0 in the golden corpus.
 - **The definition-hash check** will trip on harmless changes (a reworded instruction); it fails the step with a clear message and an override.
 - **The driver workflow is code in a package**: changing it can break in-flight runs. The golden corpus and patch markers are the guard, as for `Kairos.Agents`.
+
+## 12. Decisions taken (26 Oct 2026, after review of this design) and what building changed
+
+The owner's answers to section 10, and what the build did with them. Section 10 above is left as it was written.
+
+| # | Decision | Where it landed |
+|---|---|---|
+| 1 | **Apache, in `Kairos`.** `LICENSING.md`, `REPO-LAYOUT.md`, both `CLAUDE.md`s, `POSITIONING.md` and `MULTI-CLOUD-AND-AGENTS.md` changed in the same commit as the package. | done |
+| 2 | **The framework runs a step, Kairos runs the loop.** When one answer holds several tool calls, the tool steps run concurrently (`Task.WhenAll` of recorded steps). | `AgentFrameworkDriver.TurnAsync`; test: both tool steps are scheduled before either completes, results return in call order |
+| 3 | **The whitepaper's rule is kept: a tool with no approval wrapper is side-effecting unless marked.** `ReadOnly("tool")`, `AllowWithoutApproval("tool")` (recorded in the audit trail as policy rule `af.allow-without-approval`), `RequireApproval("tool", requirement)`; every unclassified tool is logged by name at startup. Classification lives in the registration. | `AgentRegistration`, `AgentFrameworkPolicy`, `AgentFrameworkLifecycle` |
+| 4 | Full snapshots plus a size guard; measured with realistic tool output in the review. | `MaxSnapshotBytes`; review note |
+| 5 | The workflow checkpoint store is a separate, later step with the superstep contract of section 5.6. | not built |
+| 6 | One run per conversation, a signal per message. The handle uses the existing long poll if one can serve run updates, otherwise polls with backoff. | There is no such long poll: the server's long poll serves worker task polls only. `DurableAIAgent` polls the run's history with a growing interval (25 ms to 1 s). Said in the review. |
+| 7 | **Turn-level recording only by explicit opt-in, `AllowTurnLevel()`.** Without it, registering such an agent fails and names the option. | `AgentDefinition.Analyze` |
+| 8 | The `Microsoft.Agents.AI` dependency is accepted. | measured closure: `Microsoft.Agents.AI`, `.Abstractions`, `Microsoft.Extensions.AI` and `.Abstractions`, `.Evaluation`, `Microsoft.Extensions.Compliance.Abstractions`, `Microsoft.Extensions.VectorData.Abstractions`, `Microsoft.ML.Tokenizers`; none is a model vendor's SDK (architecture test) |
+| 9 | **The JSON walker that refuses unknown shapes**, with the snapshot shape as a contract test. | `SnapshotRedactor`; `ContractTests` pin the shape of a session, of a session with a pending approval, and the set of content types |
+| 10 | **Not the recommendation: nested agents run as durable child runs by default; opaque nesting only by explicit opt-in** (`AllowOpaqueNesting`), documented as outside policy. | An `AsAIFunction()` agent is refused at registration. `DurableAgentFunction.For(name)` (or `durableAgents.Get(name).AsAIFunction()`) runs the nested agent as a child run. |
+| + | The definition-hash override is recorded in the audit log with the verified principal who applied it. | The override is an approval (so the principal is the one the approver verifier established) plus an `kairos.af.override` mark; `AgentFrameworkAudit.Read` returns a `DefinitionOverrideAuditRecord` |
+
+Things the build found that change this document:
+
+- **Section 4 said the step hands the agent its tools "as declaration-only".** `function.AsDeclarationOnly()` is not enough: it keeps a link to the original function, and the function-invoking client finds the author's approval requirement through the link
+  and asks for approval itself. The step builds plain declarations (`AIFunctionFactory.CreateDeclaration`). A contract test shows both behaviours.
+- **The step is shaped from outside the agent, per run.** `ChatClientAgentRunOptions.ChatClientFactory` wraps the client the agent calls, outside its function-invoking client, so an existing agent (including one wrapped in middleware) is used as it is. No twin of the agent is built and nothing is mutated.
+- **Registration needs `Name`, not `Id`.** `AIAgent.Id` is random per instance; the name is the key.
+- **Hosted tools** (web search, hosted MCP) run at the provider, outside the tool policy. There is no `AllowHostedTools`: such an agent is turn level, which `AllowTurnLevel()` allows, and the cost is the same one.
+- **Approvals the framework asks for** are real only for turn-level agents (`ToolApprovalAgent`, approval-required tools run by the agent itself). A provider that returns an approval request for a tool the agent does not know leads the function-invoking client to run it as "not found"; that case is not supported.
+- **`HistoryLength` was not deterministic across replay** (the engine counted the batch-ending event on replay but not when the code first ran). Fixed in the engine with a regression test; the adapter's hand-over test found it.
+- **Definition hash** covers name, mode, instructions, model and the tools' names, descriptions and schemas. How tools are classified is policy and is not part of it, so changing a classification never disturbs a run in flight.
+- **Sessions are fetched by the handle by following the chain of runs** (each run names the one before it), so an answer is found after any number of hand-overs.

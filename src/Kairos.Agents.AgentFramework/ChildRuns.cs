@@ -24,7 +24,7 @@ public sealed partial class AgentFrameworkRuntime
             ContinueAfterEvents = Options.ContinueAfterEvents,
         };
         StartRunResult started = await Client.StartAsync(
-            new TenantScope(invocation.Run.TenantId, invocation.Run.NamespaceId), $"af/{child}/{key}", AgentFrameworkNames.Conversation,
+            new TenantScope(invocation.Run.TenantId, invocation.Run.NamespaceId), $"af/{child}/{key}", AgentFrameworkNames.ConversationType(child),
             AfCodec.Write(input, AfJson.Default.AfDriverInput), cancellationToken: cancellationToken).ConfigureAwait(false);
         return $"kairos.af.child/{signal}/{started.RunId:N}";
     }
@@ -46,6 +46,11 @@ public sealed partial class AgentFrameworkRuntime
     private async Task<byte[]> ChildNotifyAsync(ActivityContext context, byte[] input, CancellationToken cancellationToken)
     {
         AfNotify notify = AfCodec.Read(input, AfJson.Default.AfNotify);
+        if (notify.Parent.TenantId != context.Run.TenantId || notify.Parent.NamespaceId != context.Run.NamespaceId)
+        {
+            throw new InvalidOperationException("A nested agent answers a run of its own tenant and namespace only."); // defence in depth: the store would refuse it too
+        }
+
         var run = new RunKey(notify.Parent.TenantId, notify.Parent.NamespaceId, notify.Parent.RunId);
 
         // One answer per nested run: the signal id is fixed, so a retried step signals once.

@@ -78,7 +78,7 @@ public sealed class DurableAgents
         byte[] start = AfCodec.Write(input, AfJson.Default.AfDriverInput);
         for (int attempt = 0; attempt < 8; attempt++)
         {
-            StartRunResult started = await _client.StartAsync(_scope, workflowId, AgentFrameworkNames.Conversation, start, cancellationToken: cancellationToken).ConfigureAwait(false);
+            StartRunResult started = await _client.StartAsync(_scope, workflowId, AgentFrameworkNames.ConversationType(agent.Name), start, cancellationToken: cancellationToken).ConfigureAwait(false);
             var run = new RunKey(_scope.TenantId, _scope.NamespaceId, started.RunId);
             if (started.Started)
             {
@@ -126,9 +126,7 @@ public sealed class DurableAgents
 
         // The conversation moved on to a fresh run, and the message went with it if it was not answered yet. The answer is in the current run or in one of the runs between: asking to start the same
         // workflow id finds the current run (and starts nothing), and each run names the one before it.
-        StartRunResult found = await _client.StartAsync(
-            _scope, turn.WorkflowId, AgentFrameworkNames.Conversation, AfCodec.Write(new AfDriverInput { Agent = agent.Name }, AfJson.Default.AfDriverInput), cancellationToken: cancellationToken).ConfigureAwait(false);
-        RunKey current = new(_scope.TenantId, _scope.NamespaceId, found.RunId);
+        RunKey current = await _client.GetCurrentRunAsync(_scope, turn.WorkflowId, cancellationToken).ConfigureAwait(false) ?? turn.Run;
         RunKey? at = current;
         IReadOnlyList<HistoryEvent> latest = [];
         for (int hop = 0; hop < 64 && at is { } run && run != turn.Run; hop++)
@@ -226,17 +224,15 @@ public sealed class DurableAgents
 
     internal async ValueTask CloseAsync(AgentDefinition agent, DurableAgentSession session, CancellationToken cancellationToken)
     {
-        StartRunResult current = await _client.StartAsync(
-            _scope, WorkflowId(agent.Name, session.SessionId), AgentFrameworkNames.Conversation, AfCodec.Write(new AfDriverInput { Agent = agent.Name }, AfJson.Default.AfDriverInput), cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (current.Started)
+        // A conversation that never started has nothing to close.
+        if (await _client.GetCurrentRunAsync(_scope, WorkflowId(agent.Name, session.SessionId), cancellationToken).ConfigureAwait(false) is { } run)
         {
-            // Nothing had been said: the run just created has nothing to wait for. End it.
-            await _client.SignalAsync(new RunKey(_scope.TenantId, _scope.NamespaceId, current.RunId), AgentFrameworkNames.CloseSignal, [], "close", cancellationToken).ConfigureAwait(false);
-            return;
+            await _client.SignalAsync(run, AgentFrameworkNames.CloseSignal, [], "close", cancellationToken).ConfigureAwait(false);
         }
-
-        await _client.SignalAsync(new RunKey(_scope.TenantId, _scope.NamespaceId, current.RunId), AgentFrameworkNames.CloseSignal, [], "close", cancellationToken).ConfigureAwait(false);
     }
+
+    internal ValueTask<RunKey?> FindRunAsync(AgentDefinition agent, DurableAgentSession session, CancellationToken cancellationToken) =>
+        _client.GetCurrentRunAsync(_scope, WorkflowId(agent.Name, session.SessionId), cancellationToken);
 }
 
 /// <summary>A message that was sent to a conversation, to be asked about until it is answered.</summary>
