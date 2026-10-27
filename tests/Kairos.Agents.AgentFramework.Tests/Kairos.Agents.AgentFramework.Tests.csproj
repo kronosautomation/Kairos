@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA2007;CA1062;CA1859;CA1861;MEAI001;MAAI001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Kairos.Agents.AgentFramework\Kairos.Agents.AgentFramework.csproj" />
+    <ProjectReference Include="..\..\src\Kairos.Worker\Kairos.Worker.csproj" />
+    <ProjectReference Include="..\Kairos.Testing\Kairos.Testing.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Corpus\**\*.khist" CopyToOutputDirectory="PreserveNewest" LinkBase="Corpus" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

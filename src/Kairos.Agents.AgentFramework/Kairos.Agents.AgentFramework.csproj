@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Makes Microsoft Agent Framework agents durable on Kairos: each model call and each tool call is a recorded step, sessions survive crashes and redeploys, approvals wait without holding compute, and the tool policy, budgets and redaction apply as they do to native Kairos agents.</Description>
+    <VersionSuffix>preview</VersionSuffix>
+    <!-- Microsoft.Agents.AI is not trim- or AOT-annotated, so this package is not either. (The engine and Kairos.Agents are.) -->
+    <NoWarn>$(NoWarn);MEAI001;MAAI001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Kairos.Agents\Kairos.Agents.csproj" />
+    <ProjectReference Include="..\Kairos.Hosting\Kairos.Hosting.csproj" />
+    <PackageReference Include="Microsoft.Agents.AI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Kairos.Agents.AgentFramework.Tests" />
+  </ItemGroup>
+
+</Project>

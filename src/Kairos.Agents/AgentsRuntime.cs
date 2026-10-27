@@ -13,6 +13,12 @@ public static class AgentActivityNames
     public const string ApprovalRequest = "kairos.agent.approval.request";
     public const string ApprovalVerify = "kairos.agent.approval.verify";
     public const string SagaMark = "kairos.saga.mark";
+
+    /// <summary>One model call of a Microsoft Agent Framework agent (Kairos.Agents.AgentFramework). Counted in <see cref="AgentHistory.TotalUsage"/> like <see cref="Chat"/>.</summary>
+    public const string FrameworkStep = "kairos.af.step";
+
+    /// <summary>One whole turn of an Agent Framework agent that cannot be run a call at a time.</summary>
+    public const string FrameworkTurn = "kairos.af.turn";
 }
 
 /// <summary>Shows a person or a UI the text of a reply while the model is still writing it. Only the final reply is recorded.</summary>
@@ -95,6 +101,14 @@ public sealed class AgentsBuilder
     {
         ArgumentNullException.ThrowIfNull(policy);
         Policy = policy;
+        return this;
+    }
+
+    /// <summary>Wraps whichever policy is configured when the runtime is built, for an adapter that adds rules of its own (they run first and can only tighten, or allow what the wrapped policy would hold for approval).</summary>
+    internal AgentsBuilder DecoratePolicy(Func<IToolPolicy, IToolPolicy> decorate)
+    {
+        ArgumentNullException.ThrowIfNull(decorate);
+        Policy = decorate(Policy);
         return this;
     }
 
@@ -193,6 +207,9 @@ public sealed class AgentsBuilder
 
     public AgentsRuntime Build() => new(this);
 }
+
+/// <summary>What <see cref="AgentsRuntime"/> made of a guarded model call: its result, or the budget that refused it.</summary>
+internal sealed record GuardedCall<T>(bool Allowed, T? Value, string? Limit, string OnExceed, ApprovalRequirement? Approval);
 
 /// <summary>A model alias that no client was registered for.</summary>
 public sealed class UnknownModelException : Exception
@@ -341,6 +358,60 @@ public sealed class AgentsRuntime
         {
             // Give back what was held now, so it is not held until a reconciler finds the step failed. A failure that will be retried keeps it: the retry reuses the reservation.
             await ReleaseAsync(_config.Guard!, call, permit, cancellationToken).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Runs one model call of an adapter (Kairos.Agents.AgentFramework) with the same guard, timeout, usage recording and settlement as a native model step: reserves what the call may cost
+    /// before <paramref name="call"/>, reports the usage <paramref name="usageOf"/> finds in its result, settles, and releases the reservation when the step fails for good.
+    /// A refusal is returned, not thrown, so the caller can record it and pause for approval.
+    /// </summary>
+    internal async Task<GuardedCall<T>> GuardedModelCallAsync<T>(
+        ActivityContext context, string model, int? maxOutputTokens, string? allowanceApprovalId, Func<CancellationToken, Task<T>> call, Func<T, UsageRecord?> usageOf,
+        CancellationToken cancellationToken)
+    {
+        ModelCallInfo? info = null;
+        ModelCallPermit? permit = null;
+        if (_config.Guard is { } guard)
+        {
+            info = new ModelCallInfo(context.Run, context.ActivityId, context.Attempt, context.IdempotencyKey, model, maxOutputTokens, allowanceApprovalId);
+            permit = await guard.ReserveAsync(info, cancellationToken).ConfigureAwait(false); // throws when it cannot decide: the step is retried, and the model is not called unguarded
+            if (!permit.Allowed)
+            {
+                return new GuardedCall<T>(false, default, permit.Limit, permit.OnExceed, permit.OnExceed == "pause" ? permit.Approval ?? new ApprovalRequirement() : null);
+            }
+        }
+
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(_config.ModelTimeout);
+            T value;
+            try
+            {
+                value = await call(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException($"The model '{model}' did not answer within {_config.ModelTimeout.TotalSeconds:0} seconds.");
+            }
+
+            if (usageOf(value) is { } used)
+            {
+                context.ReportUsage(used);
+            }
+
+            if (_config.Guard is { } settling && info is not null && permit is not null)
+            {
+                await SettleAsync(settling, info, permit, context.Usage, cancellationToken).ConfigureAwait(false);
+            }
+
+            return new GuardedCall<T>(true, value, null, "fail", null);
+        }
+        catch (Exception ex) when (info is not null && permit is { Reservation: not null } && IsFinalFailure(context, ex))
+        {
+            await ReleaseAsync(_config.Guard!, info, permit, cancellationToken).ConfigureAwait(false);
             throw;
         }
     }

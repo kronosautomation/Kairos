@@ -6,6 +6,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kairos.Agents.AgentFramework" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Kairos.Core\Kairos.Core.csproj" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
   </ItemGroup>

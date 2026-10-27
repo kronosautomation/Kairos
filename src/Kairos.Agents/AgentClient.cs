@@ -155,6 +155,16 @@ public static class AgentHistory
             total += response.Usage?.Total ?? 0;
         }
 
+        // An Agent Framework step reports its tokens in the readable usage record of its completion (the same record the cost reports read), so no payload needs opening.
+        var frameworkIds = new HashSet<int>(
+            history.OfType<ActivityScheduled>().Where(a => a.ActivityType is AgentActivityNames.FrameworkStep or AgentActivityNames.FrameworkTurn).Select(a => a.ActivityId));
+        foreach (ActivityCompleted done in history.OfType<ActivityCompleted>().Where(a => frameworkIds.Contains(a.ActivityId) && a.Usage is not null))
+        {
+            input += done.Usage!.InputTokens;
+            output += done.Usage.OutputTokens;
+            total += done.Usage.TotalTokens;
+        }
+
         return new AgentUsage(input, output, total);
     }
 }
