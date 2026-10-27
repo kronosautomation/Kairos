@@ -11,6 +11,7 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
     private readonly StoreLimits _limits = limits ?? new StoreLimits();
 
     private readonly object _gate = new();
+    private readonly UpdateGate _updates = new();
     private readonly Dictionary<TenantScope, ScopeData> _scopes = [];
     private long _order;
 
@@ -673,6 +674,58 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
+    public ValueTask<HistoryPage> GetHistoryAfterAsync(RunKey run, long afterSequence, int limit, CancellationToken cancellationToken)
+    {
+        HistoryPage.Check(afterSequence, limit);
+        lock (_gate)
+        {
+            return ValueTask.FromResult(FindRun(run) is { } r ? Slice(r.History, afterSequence, limit) : new HistoryPage([], 0));
+        }
+    }
+
+    public ValueTask<HistoryPage> GetHistoryTailAsync(RunKey run, int count, CancellationToken cancellationToken)
+    {
+        HistoryPage.Check(0, count);
+        lock (_gate)
+        {
+            return ValueTask.FromResult(FindRun(run) is { } r ? Slice(r.History, Math.Max(0, r.History.Count - count), count) : new HistoryPage([], 0));
+        }
+    }
+
+    public async ValueTask<bool> WaitForHistoryAsync(RunKey run, long afterSequence, TimeSpan wait, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(afterSequence);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(wait);
+        while (true)
+        {
+            Task changed = _updates.Next; // taken before looking, so an append between the look and the wait is not missed
+            lock (_gate)
+            {
+                if (FindRun(run) is { } r && r.History.Count > afterSequence)
+                {
+                    return true;
+                }
+            }
+
+            try
+            {
+                await changed.WaitAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+        }
+    }
+
+    private static HistoryPage Slice(List<HistoryEvent> history, long afterSequence, int limit)
+    {
+        int skip = (int)Math.Min(afterSequence, history.Count);
+        int take = Math.Min(limit, history.Count - skip);
+        return new HistoryPage(history.GetRange(skip, take), history.Count);
+    }
+
     public ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken)
     {
         lock (_gate)
@@ -898,12 +951,13 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
     private Run? FindRun(RunKey key) =>
         _scopes.TryGetValue(key.Scope, out ScopeData? s) && s.Runs.TryGetValue(key.RunId, out Run? r) ? r : null;
 
-    private static HistoryEvent Append(Run run, HistoryEvent template)
+    private HistoryEvent Append(Run run, HistoryEvent template)
     {
         StoreRules.RequireSameRun(run.Key, template);
         ReadOnlySpan<byte> prev = run.History.Count == 0 ? HashChain.GenesisHash : run.History[^1].Hash;
         HistoryEvent sealedEvent = StoreRules.Seal(template, run.History.Count + 1, prev);
         run.History.Add(sealedEvent);
+        _updates.Pulse();
         return sealedEvent;
     }
 

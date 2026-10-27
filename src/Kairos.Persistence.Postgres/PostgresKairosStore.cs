@@ -1423,6 +1423,108 @@ public sealed partial class PostgresKairosStore(NpgsqlDataSource dataSource, Pos
         }).ConfigureAwait(false);
     }
 
+    public async ValueTask<HistoryPage> GetHistoryAfterAsync(RunKey run, long afterSequence, int limit, CancellationToken cancellationToken)
+    {
+        HistoryPage.Check(afterSequence, limit);
+        return await ReadPageAsync(
+            run, "seq > @after ORDER BY seq LIMIT @limit", cmd =>
+            {
+                cmd.Parameters.AddWithValue("after", afterSequence);
+                cmd.Parameters.AddWithValue("limit", limit);
+            }, reverse: false, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<HistoryPage> GetHistoryTailAsync(RunKey run, int count, CancellationToken cancellationToken)
+    {
+        HistoryPage.Check(0, count);
+        return await ReadPageAsync(run, "TRUE ORDER BY seq DESC LIMIT @limit", cmd => cmd.Parameters.AddWithValue("limit", count), reverse: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HistoryPage> ReadPageAsync(RunKey run, string tail, Action<NpgsqlBatchCommand> bind, bool reverse, CancellationToken cancellationToken)
+    {
+        return await Retry(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(run.Scope);
+            NpgsqlBatchCommand events = batch.CreateBatchCommand();
+            events.CommandText = "SELECT seq, body, prev_hash, hash FROM kairos.history_events WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r AND " + tail;
+            Scope(events, run.Scope);
+            events.Parameters.AddWithValue("r", run.RunId);
+            bind(events);
+            batch.BatchCommands.Add(events);
+            NpgsqlBatchCommand last = batch.CreateBatchCommand();
+            last.CommandText = "SELECT COALESCE(MAX(seq), 0) FROM kairos.history_events WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r";
+            Scope(last, run.Scope);
+            last.Parameters.AddWithValue("r", run.RunId);
+            batch.BatchCommands.Add(last);
+
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            var page = new List<HistoryEvent>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                page.Add(DecodeRow(run.Scope, run.RunId, reader.GetInt64(0), reader.GetFieldValue<byte[]>(1), reader.GetFieldValue<byte[]>(2), reader.GetFieldValue<byte[]>(3)));
+            }
+
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            long lastSequence = reader.GetInt64(0);
+            if (reverse)
+            {
+                page.Reverse();
+            }
+
+            return new HistoryPage(page, lastSequence);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>Told by <see cref="AttachNotifier"/>; pulsed when the database says work (and so history) appeared, and when the listening connection comes back.</summary>
+    private readonly UpdateGate _runUpdates = new();
+
+    /// <summary>
+    /// Lets <see cref="WaitForHistoryAsync"/> wake when the database says something was written, instead of looking on a timer. The notifier is only listened to (its <see cref="PostgresWorkNotifier.Notified"/> event), never
+    /// waited on, so workers' wake-ups are untouched. Without it the wait still works, looking once a second.
+    /// </summary>
+    public void AttachNotifier(PostgresWorkNotifier notifier)
+    {
+        ArgumentNullException.ThrowIfNull(notifier);
+        notifier.Notified += _ => _runUpdates.Pulse();
+        notifier.Listening += _runUpdates.Pulse;
+    }
+
+    /// <summary>How long a wait goes without looking, whatever it has been told: notifications are a hint and can be lost.</summary>
+    public static readonly TimeSpan WaitFallback = TimeSpan.FromSeconds(1);
+
+    public async ValueTask<bool> WaitForHistoryAsync(RunKey run, long afterSequence, TimeSpan wait, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(afterSequence);
+        DateTime deadline = DateTime.UtcNow + wait;
+        while (true)
+        {
+            Task changed = _runUpdates.Next; // taken before looking: a write between the look and the wait completes it
+            if ((await GetHistoryTailAsync(run, 1, cancellationToken).ConfigureAwait(false)).LastSequence > afterSequence)
+            {
+                return true;
+            }
+
+            TimeSpan left = deadline - DateTime.UtcNow;
+            if (left <= TimeSpan.Zero)
+            {
+                return false;
+            }
+
+            try
+            {
+                await changed.WaitAsync(left < WaitFallback ? left : WaitFallback, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // look again
+            }
+        }
+    }
+
     public async ValueTask<IReadOnlyList<HistoryEvent>?> ExportHistoryAsync(
         RunKey run, string claimedActor, string? verifiedPrincipal, string reason, bool metadataOnly, DateTimeOffset now, CancellationToken cancellationToken)
     {

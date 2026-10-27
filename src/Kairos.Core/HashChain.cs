@@ -81,6 +81,48 @@ public static class HashChain
     }
 
     /// <summary>
+    /// Verifies a slice of a history (events n..m, not necessarily from the first): the events are in order without a gap, belong to one run, each names the hash of its predecessor within the slice, and every
+    /// recomputed hash matches. It cannot say that the slice is the run's: the first event's predecessor is taken as given, so a slice proves its own consistency, not that nothing before or after it was
+    /// changed. <see cref="Verify"/> over the whole history does.
+    /// </summary>
+    /// <exception cref="HistoryIntegrityException">The slice was tampered with, reordered, or has a gap.</exception>
+    public static void VerifyPage(IReadOnlyList<HistoryEvent> page)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        if (page.Count == 0)
+        {
+            return;
+        }
+
+        HistoryEvent first = page[0];
+        Span<byte> computed = stackalloc byte[HashSize];
+        for (int i = 0; i < page.Count; i++)
+        {
+            HistoryEvent e = page[i];
+            if (e.Sequence != first.Sequence + i)
+            {
+                throw new HistoryIntegrityException($"Expected sequence {first.Sequence + i} but found {e.Sequence}.", e.Sequence);
+            }
+
+            if (e.TenantId != first.TenantId || e.NamespaceId != first.NamespaceId || e.RunId != first.RunId)
+            {
+                throw new HistoryIntegrityException($"Event {e.Sequence} belongs to a different tenant, namespace, or run.", e.Sequence);
+            }
+
+            if (e.PrevHash.Length != HashSize || e.Hash.Length != HashSize || (i > 0 && !e.PrevHash.AsSpan().SequenceEqual(page[i - 1].Hash)))
+            {
+                throw new HistoryIntegrityException($"Event {e.Sequence} is not linked to its predecessor.", e.Sequence);
+            }
+
+            ComputeHash(e, e.PrevHash, computed);
+            if (!computed.SequenceEqual(e.Hash))
+            {
+                throw new HistoryIntegrityException($"Event {e.Sequence} content does not match its hash.", e.Sequence);
+            }
+        }
+    }
+
+    /// <summary>
     /// Verifies sequence continuity, run identity and linkage (each event names the hash of its predecessor, the first the genesis hash), without recomputing content hashes.
     /// For histories whose payloads were removed (metadata-only exports), where recomputing is impossible.
     /// </summary>

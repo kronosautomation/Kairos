@@ -304,6 +304,49 @@ public interface IKairosStore
 
     ValueTask<IReadOnlyList<HistoryEvent>> GetHistoryAsync(RunKey run, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The events of a run after sequence number <paramref name="afterSequence"/> (0 for from the start), at most <paramref name="limit"/> (1 to <see cref="HistoryPage.MaxLimit"/>), with where the history ends. The cost is that of
+    /// the slice, not of the history. A run that does not exist in <paramref name="run"/>'s scope reads as empty. The default reads the whole history; stores that can do better override it.
+    /// </summary>
+    async ValueTask<HistoryPage> GetHistoryAfterAsync(RunKey run, long afterSequence, int limit, CancellationToken cancellationToken)
+    {
+        HistoryPage.Check(afterSequence, limit);
+        return HistoryPage.After(await GetHistoryAsync(run, cancellationToken).ConfigureAwait(false), afterSequence, limit);
+    }
+
+    /// <summary>The last <paramref name="count"/> events of a run (1 to <see cref="HistoryPage.MaxLimit"/>), with where the history ends. The cost is that of the slice, not of the history.</summary>
+    async ValueTask<HistoryPage> GetHistoryTailAsync(RunKey run, int count, CancellationToken cancellationToken)
+    {
+        HistoryPage.Check(0, count);
+        return HistoryPage.Tail(await GetHistoryAsync(run, cancellationToken).ConfigureAwait(false), count);
+    }
+
+    /// <summary>
+    /// Completes with true as soon as the run has an event after sequence number <paramref name="afterSequence"/>, or with false when <paramref name="wait"/> has passed without one (a run that does not exist never has).
+    /// This is the wait for run updates, separate from the workers' wait for work: waiting for it never takes a wake-up a worker is waiting for. The default looks every 100 milliseconds; stores that are told
+    /// of appends override it.
+    /// </summary>
+    async ValueTask<bool> WaitForHistoryAsync(RunKey run, long afterSequence, TimeSpan wait, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(afterSequence);
+        DateTime deadline = DateTime.UtcNow + wait;
+        while (true)
+        {
+            if ((await GetHistoryTailAsync(run, 1, cancellationToken).ConfigureAwait(false)).LastSequence > afterSequence)
+            {
+                return true;
+            }
+
+            TimeSpan left = deadline - DateTime.UtcNow;
+            if (left <= TimeSpan.Zero)
+            {
+                return false;
+            }
+
+            await Task.Delay(left < TimeSpan.FromMilliseconds(100) ? left : TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>The latest run in the continue-as-new chain of <paramref name="workflowId"/>, or null.</summary>
     ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken);
 

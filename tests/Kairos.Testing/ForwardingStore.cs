@@ -91,6 +91,15 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask<IReadOnlyList<HistoryEvent>> GetHistoryAsync(RunKey run, CancellationToken cancellationToken) =>
         inner.GetHistoryAsync(run, cancellationToken);
 
+    public virtual ValueTask<HistoryPage> GetHistoryAfterAsync(RunKey run, long afterSequence, int limit, CancellationToken cancellationToken) =>
+        inner.GetHistoryAfterAsync(run, afterSequence, limit, cancellationToken);
+
+    public virtual ValueTask<HistoryPage> GetHistoryTailAsync(RunKey run, int count, CancellationToken cancellationToken) =>
+        inner.GetHistoryTailAsync(run, count, cancellationToken);
+
+    public virtual ValueTask<bool> WaitForHistoryAsync(RunKey run, long afterSequence, TimeSpan wait, CancellationToken cancellationToken) =>
+        inner.WaitForHistoryAsync(run, afterSequence, wait, cancellationToken);
+
     public virtual ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken) =>
         inner.GetCurrentRunAsync(scope, workflowId, cancellationToken);
 

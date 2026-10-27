@@ -269,6 +269,36 @@ public sealed class KairosClient
         return _store.GetCurrentRunAsync(scope, workflowId, cancellationToken);
     }
 
+    /// <summary>
+    /// The events of a run after sequence number <paramref name="afterSequence"/>, at most <paramref name="limit"/>, as the store holds them (payloads sealed when encryption is on), with where the history ends. The cost is the
+    /// slice's. Each event's hash and the links inside the slice are verified; see <see cref="HashChain.VerifyPage"/> for what that does and does not prove.
+    /// </summary>
+    public async ValueTask<HistoryPage> GetHistoryAfterAsync(RunKey run, long afterSequence, int limit, CancellationToken cancellationToken = default)
+    {
+        HistoryPage page = await _store.GetHistoryAfterAsync(run, afterSequence, limit, cancellationToken).ConfigureAwait(false);
+        HashChain.VerifyPage(page.Events);
+        return page;
+    }
+
+    /// <summary>Like <see cref="GetHistoryAfterAsync"/>, with the payloads opened by this client's protector.</summary>
+    public async ValueTask<HistoryPage> GetOpenedHistoryAfterAsync(RunKey run, long afterSequence, int limit, CancellationToken cancellationToken = default) =>
+        await OpenAsync(await GetHistoryAfterAsync(run, afterSequence, limit, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
+
+    /// <summary>The last <paramref name="count"/> events of a run, verified as <see cref="GetHistoryAfterAsync"/> does, with the payloads opened by this client's protector.</summary>
+    public async ValueTask<HistoryPage> GetOpenedHistoryTailAsync(RunKey run, int count, CancellationToken cancellationToken = default)
+    {
+        HistoryPage page = await _store.GetHistoryTailAsync(run, count, cancellationToken).ConfigureAwait(false);
+        HashChain.VerifyPage(page.Events);
+        return await OpenAsync(page, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Completes with true when the run has an event after <paramref name="afterSequence"/>, with false when <paramref name="wait"/> passed without one. See <see cref="IKairosStore.WaitForHistoryAsync"/>.</summary>
+    public ValueTask<bool> WaitForHistoryAsync(RunKey run, long afterSequence, TimeSpan wait, CancellationToken cancellationToken = default) =>
+        _store.WaitForHistoryAsync(run, afterSequence, wait, cancellationToken);
+
+    private async ValueTask<HistoryPage> OpenAsync(HistoryPage page, CancellationToken cancellationToken) =>
+        _crypto is null ? page : page with { Events = await _crypto.OpenHistoryAsync(page.Events, cancellationToken).ConfigureAwait(false) };
+
     public ValueTask<RunState?> GetStateAsync(RunKey run, CancellationToken cancellationToken = default) =>
         _store.GetRunStateAsync(run, cancellationToken);
 

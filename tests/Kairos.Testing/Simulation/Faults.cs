@@ -224,6 +224,15 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
     public ValueTask<IReadOnlyList<HistoryEvent>> GetHistoryAsync(RunKey run, CancellationToken cancellationToken) =>
         inner.GetHistoryAsync(run, cancellationToken);
 
+    public ValueTask<HistoryPage> GetHistoryAfterAsync(RunKey run, long afterSequence, int limit, CancellationToken cancellationToken) =>
+        inner.GetHistoryAfterAsync(run, afterSequence, limit, cancellationToken);
+
+    public ValueTask<HistoryPage> GetHistoryTailAsync(RunKey run, int count, CancellationToken cancellationToken) =>
+        inner.GetHistoryTailAsync(run, count, cancellationToken);
+
+    public ValueTask<bool> WaitForHistoryAsync(RunKey run, long afterSequence, TimeSpan wait, CancellationToken cancellationToken) =>
+        inner.WaitForHistoryAsync(run, afterSequence, wait, cancellationToken);
+
     public ValueTask<RunKey?> GetCurrentRunAsync(TenantScope scope, string workflowId, CancellationToken cancellationToken) =>
         inner.GetCurrentRunAsync(scope, workflowId, cancellationToken);
 

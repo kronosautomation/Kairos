@@ -244,6 +244,31 @@ public abstract partial class StoreContractTests
                 Assert.Empty(await a.Store.GetHistoryAsync(In(f, run), Ct));
             }
         },
+        [nameof(IKairosStore.GetHistoryAfterAsync)] = async (a, f) =>
+        {
+            foreach (RunKey run in new[] { a.Busy, a.Finished, a.Parked, a.Leased })
+            {
+                HistoryPage page = await a.Store.GetHistoryAfterAsync(In(f, run), 0, 100, Ct);
+                Assert.Empty(page.Events);
+                Assert.Equal(0, page.LastSequence); // not even how long the history is
+            }
+        },
+        [nameof(IKairosStore.GetHistoryTailAsync)] = async (a, f) =>
+        {
+            foreach (RunKey run in new[] { a.Busy, a.Finished, a.Parked, a.Leased })
+            {
+                HistoryPage page = await a.Store.GetHistoryTailAsync(In(f, run), 10, Ct);
+                Assert.Empty(page.Events);
+                Assert.Equal(0, page.LastSequence);
+            }
+        },
+        [nameof(IKairosStore.WaitForHistoryAsync)] = async (a, f) =>
+        {
+            foreach (RunKey run in new[] { a.Busy, a.Finished, a.Parked, a.Leased })
+            {
+                Assert.False(await a.Store.WaitForHistoryAsync(In(f, run), 0, TimeSpan.FromMilliseconds(30), Ct)); // a run of another scope never has an event, however busy it is
+            }
+        },
         [nameof(IKairosStore.GetRunStateAsync)] = async (a, f) =>
         {
             foreach (RunKey run in new[] { a.Busy, a.Finished, a.Parked, a.Leased })

@@ -63,7 +63,9 @@ public sealed class KairosOptions
         {
             NpgsqlDataSource ds = NpgsqlDataSource.Create(connectionString);
             PostgresWorkNotifier notifier = PostgresWorkNotifier.Start(ds);
-            return new StoreHandle(new PostgresKairosStore(ds), notifier.WaitAsync, async () =>
+            var store = new PostgresKairosStore(ds);
+            store.AttachNotifier(notifier);
+            return new StoreHandle(store, notifier.WaitAsync, async () =>
             {
                 await notifier.DisposeAsync().ConfigureAwait(false);
                 await ds.DisposeAsync().ConfigureAwait(false);
