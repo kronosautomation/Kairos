@@ -352,4 +352,10 @@ public interface IKairosStore
 
     /// <summary>Null when the run does not exist in this scope.</summary>
     ValueTask<RunState?> GetRunStateAsync(RunKey run, CancellationToken cancellationToken);
-}
+
+    /// <summary>
+    /// The workflow id and workflow type of a run, or null when there is no such run in <paramref name="run"/>'s scope (another tenant's run is absent too). Both are fixed when the run starts, so deciding by them and then acting on the run is
+    /// not a race. A store that cannot say throws <see cref="NotSupportedException"/>.
+    /// </summary>
+    ValueTask<RunIdentity?> GetRunIdentityAsync(RunKey run, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This store cannot say what kind of run a run is.");}

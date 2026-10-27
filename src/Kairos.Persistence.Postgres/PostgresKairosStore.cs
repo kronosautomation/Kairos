@@ -1595,6 +1595,25 @@ public sealed partial class PostgresKairosStore(NpgsqlDataSource dataSource, Pos
         }).ConfigureAwait(false);
     }
 
+    public async ValueTask<RunIdentity?> GetRunIdentityAsync(RunKey run, CancellationToken cancellationToken)
+    {
+        return await Retry<RunIdentity?>(async () =>
+        {
+            await using NpgsqlBatch batch = Batch(run.Scope);
+            NpgsqlBatchCommand cmd = batch.CreateBatchCommand();
+            cmd.CommandText = "SELECT workflow_id, workflow_type FROM kairos.runs WHERE tenant_id = @t AND namespace_id = @n AND run_id = @r";
+            Scope(cmd, run.Scope);
+            cmd.Parameters.AddWithValue("r", run.RunId);
+            batch.BatchCommands.Add(cmd);
+
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            batch.Connection = conn;
+            await using NpgsqlDataReader reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? new RunIdentity(reader.GetString(0), reader.GetString(1)) : null;
+        }).ConfigureAwait(false);
+    }
+
     // ---- diagnostics (used by simulators, tests and dashboards; scoped like everything else) -----------------
 
     public async Task<StoreStats> GetStatsAsync(TenantScope scope, CancellationToken cancellationToken = default)

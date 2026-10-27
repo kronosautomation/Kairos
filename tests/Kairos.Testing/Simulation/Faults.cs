@@ -239,6 +239,9 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
     public ValueTask<RunState?> GetRunStateAsync(RunKey run, CancellationToken cancellationToken) =>
         inner.GetRunStateAsync(run, cancellationToken);
 
+    public ValueTask<RunIdentity?> GetRunIdentityAsync(RunKey run, CancellationToken cancellationToken) =>
+        inner.GetRunIdentityAsync(run, cancellationToken);
+
     /// <summary>Delivers one random delayed message (possibly long after its lease expired).</summary>
     public async ValueTask<bool> DeliverOneDelayedAsync()
     {

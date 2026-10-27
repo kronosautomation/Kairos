@@ -745,6 +745,14 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
+    public ValueTask<RunIdentity?> GetRunIdentityAsync(RunKey run, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            return ValueTask.FromResult(FindRun(run) is { } found ? new RunIdentity(found.WorkflowId, found.WorkflowType) : null);
+        }
+    }
+
     /// <summary>
     /// Restores a run from persisted history (a process restart): verifies the hash chain, then rebuilds the derived state
     /// (open activity tasks, timers, runnable workflow task) from the events alone.

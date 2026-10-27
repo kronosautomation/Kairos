@@ -33,6 +33,21 @@ public enum Operation
     /// count a tool call). Workers only: it reads and writes counters on behalf of runs, and cannot read or change a policy document.
     /// </summary>
     EvaluatePolicy,
+
+    /// <summary>
+    /// Start the conversation of a durable agent (a run whose workflow type is <c>kairos.af.agent/{agent}</c> and whose workflow id is <c>af/{agent}/...</c>) on behalf of a running activity. Held by <see cref="Role.AgentWorker"/> only, and
+    /// only for such runs: the data plane's conversation gate decides which runs those are.
+    /// </summary>
+    StartConversation,
+
+    /// <summary>Send a conversation a message, a nested agent's answer, or the request to close. Not the reserved cancel signal (<see cref="CancelConversation"/>) and not an approval.</summary>
+    SignalConversation,
+
+    /// <summary>Ask a conversation to stop: the reserved cancel signal with its fixed id. Not <see cref="CancelRun"/>, which an operator uses and which is audited with a reason.</summary>
+    CancelConversation,
+
+    /// <summary>Read a conversation: its state, its current run, a part of its history, and wait for it to grow.</summary>
+    ReadConversation,
 }
 
 /// <summary>
@@ -46,6 +61,11 @@ public static class AccessPolicy
         [Role.Reader] = [Operation.ReadRun],
         [Role.Approver] = [Operation.ReadRun, Operation.DecideApproval],
         [Role.Worker] = [Operation.PollWorkflowTask, Operation.PollActivityTask, Operation.CompleteTask, Operation.HeartbeatTask, Operation.EvaluatePolicy],
+        [Role.AgentWorker] =
+        [
+            Operation.PollWorkflowTask, Operation.PollActivityTask, Operation.CompleteTask, Operation.HeartbeatTask, Operation.EvaluatePolicy,
+            Operation.StartConversation, Operation.SignalConversation, Operation.CancelConversation, Operation.ReadConversation,
+        ],
         [Role.Operator] = [Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun, Operation.ExportHistory, Operation.ReadPolicy],
         [Role.Admin] =
         [

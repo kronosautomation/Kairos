@@ -276,6 +276,13 @@ public abstract partial class StoreContractTests
                 Assert.Null(await a.Store.GetRunStateAsync(In(f, run), Ct));
             }
         },
+        [nameof(IKairosStore.GetRunIdentityAsync)] = async (a, f) =>
+        {
+            foreach (RunKey run in new[] { a.Busy, a.Finished, a.Parked, a.Leased })
+            {
+                Assert.Null(await a.Store.GetRunIdentityAsync(In(f, run), Ct)); // neither the workflow id nor the type of a run of another scope
+            }
+        },
         [nameof(IKairosStore.GetCurrentRunAsync)] = async (a, f) =>
         {
             foreach (string id in a.WorkflowIds)

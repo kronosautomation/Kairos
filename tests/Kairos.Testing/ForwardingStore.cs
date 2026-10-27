@@ -105,4 +105,7 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
 
     public virtual ValueTask<RunState?> GetRunStateAsync(RunKey run, CancellationToken cancellationToken) =>
         inner.GetRunStateAsync(run, cancellationToken);
+
+    public virtual ValueTask<RunIdentity?> GetRunIdentityAsync(RunKey run, CancellationToken cancellationToken) =>
+        inner.GetRunIdentityAsync(run, cancellationToken);
 }

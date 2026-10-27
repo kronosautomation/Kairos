@@ -8,27 +8,31 @@ public sealed class AccessPolicyTests
     /// <summary>The expected matrix, written out independently of the implementation. 'x' = allowed.</summary>
     private static readonly Dictionary<Operation, string> Expected = new()
     {
-        //                                reader worker operator admin approver
-        [Operation.StartRun] = "  xx ",
-        [Operation.SignalRun] = "  xx ",
-        [Operation.CancelRun] = "  xx ",
-        [Operation.TerminateRun] = "  xx ",
-        [Operation.ReadRun] = "x xxx",
-        [Operation.ReadAuditLog] = "   x ",
-        [Operation.PollWorkflowTask] = " x   ",
-        [Operation.PollActivityTask] = " x   ",
-        [Operation.CompleteTask] = " x   ",
-        [Operation.HeartbeatTask] = " x   ",
-        [Operation.ResumeStuckTask] = "   x ",
-        [Operation.FailRun] = "   x ",
-        [Operation.DecideApproval] = "    x",
-        [Operation.ExportHistory] = "  xx ",
-        [Operation.ManagePolicy] = "   x ",
-        [Operation.ReadPolicy] = "  xx ",
-        [Operation.EvaluatePolicy] = " x   ",
+        //                                reader worker operator admin approver agentworker
+        [Operation.StartRun] = "  xx  ",
+        [Operation.SignalRun] = "  xx  ",
+        [Operation.CancelRun] = "  xx  ",
+        [Operation.TerminateRun] = "  xx  ",
+        [Operation.ReadRun] = "x xxx ",
+        [Operation.ReadAuditLog] = "   x  ",
+        [Operation.PollWorkflowTask] = " x   x",
+        [Operation.PollActivityTask] = " x   x",
+        [Operation.CompleteTask] = " x   x",
+        [Operation.HeartbeatTask] = " x   x",
+        [Operation.ResumeStuckTask] = "   x  ",
+        [Operation.FailRun] = "   x  ",
+        [Operation.DecideApproval] = "    x ",
+        [Operation.ExportHistory] = "  xx  ",
+        [Operation.ManagePolicy] = "   x  ",
+        [Operation.ReadPolicy] = "  xx  ",
+        [Operation.EvaluatePolicy] = " x   x",
+        [Operation.StartConversation] = "     x",
+        [Operation.SignalConversation] = "     x",
+        [Operation.CancelConversation] = "     x",
+        [Operation.ReadConversation] = "     x",
     };
 
-    private static readonly Role[] Roles = [Role.Reader, Role.Worker, Role.Operator, Role.Admin, Role.Approver];
+    private static readonly Role[] Roles = [Role.Reader, Role.Worker, Role.Operator, Role.Admin, Role.Approver, Role.AgentWorker];
 
     public static TheoryData<Operation> AllOperations()
     {
@@ -71,6 +75,25 @@ public sealed class AccessPolicyTests
                 Assert.False(AccessPolicy.IsAllowed(principal, operation, other), $"{Roles[i]} must not {operation} outside its own namespace.");
             }
         }
+    }
+
+    [Fact]
+    public void An_agent_worker_holds_what_a_worker_holds_and_the_conversation_operations_and_nothing_a_person_does()
+    {
+        var plain = new Principal(Own, Role.Worker, "w", null);
+        var agent = new Principal(Own, Role.AgentWorker, "aw", null);
+
+        Assert.All(AccessPolicy.For(Role.Worker), op => Assert.True(AccessPolicy.IsAllowed(agent, op, Own), $"{op}"));
+        Assert.All(new[] { Operation.StartConversation, Operation.SignalConversation, Operation.CancelConversation, Operation.ReadConversation }, op =>
+        {
+            Assert.True(AccessPolicy.IsAllowed(agent, op, Own));
+            Assert.False(AccessPolicy.IsAllowed(plain, op, Own)); // an ordinary worker does not get them with an upgrade
+        });
+        Assert.All(
+            new[] { Operation.StartRun, Operation.SignalRun, Operation.CancelRun, Operation.TerminateRun, Operation.ReadRun, Operation.DecideApproval, Operation.ReadAuditLog, Operation.ExportHistory, Operation.ManagePolicy, Operation.ReadPolicy, Operation.FailRun, Operation.ResumeStuckTask },
+            op => Assert.False(AccessPolicy.IsAllowed(agent, op, Own), $"{op}"));
+        Assert.All(new[] { Role.Reader, Role.Operator, Role.Admin, Role.Approver }, role =>
+            Assert.All(new[] { Operation.StartConversation, Operation.SignalConversation, Operation.CancelConversation, Operation.ReadConversation }, op => Assert.False(AccessPolicy.IsAllowed(new Principal(Own, role, "p", null), op, Own))));
     }
 
     [Fact]

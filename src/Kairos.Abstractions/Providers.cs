@@ -115,6 +115,12 @@ public enum Role
 
     /// <summary>Decide approvals (and read runs to see what is being approved). Cannot start, signal, cancel or terminate.</summary>
     Approver,
+
+    /// <summary>
+    /// A worker that also runs durable agents and workflows whose activities talk to conversations of durable agents (nested agents, an executor that calls an agent): everything <see cref="Worker"/> may do, plus start, signal, ask to stop and read
+    /// <b>conversations</b> in its own namespace, and nothing else. A server grants it only to credentials it was told to; an ordinary worker does not have it.
+    /// </summary>
+    AgentWorker,
 }
 
 /// <summary>An authenticated caller: one tenant, one namespace, one role.</summary>

@@ -40,3 +40,6 @@ public sealed record HistoryPage(IReadOnlyList<HistoryEvent> Events, long LastSe
         ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, MaxLimit);
     }
 }
+
+/// <summary>What a run is, fixed when it starts: the workflow id it belongs to and its workflow type. A data plane that lets a caller act on a kind of run (the conversations of durable agents) decides by these.</summary>
+public sealed record RunIdentity(string WorkflowId, string WorkflowType);

@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Kairos.Agents.AgentFramework.Tests" />
+    <InternalsVisibleTo Include="Kairos.Observability.Tests" /> <!-- compiles the shared test harness, which uses the test seams -->
   </ItemGroup>
 
 </Project>
