@@ -138,6 +138,32 @@ internal sealed class AskThenTicket(string id, Ledger ledger, DurableAgents agen
     }
 }
 
+/// <summary>Adds a line of about 400 characters to the list it is handed and passes the list on.</summary>
+internal sealed class Pile(string id, Ledger ledger) : Executor<List<string>, List<string>>(id)
+{
+    public override ValueTask<List<string>> HandleAsync(List<string> message, AfContext context, CancellationToken cancellationToken)
+    {
+        ledger.Ran(Id);
+        message.Add(string.Concat(Enumerable.Repeat($"{Id}-{message.Count}-", 60)));
+        return new(message);
+    }
+}
+
+internal sealed class StartPile(string id) : Executor<string, List<string>>(id)
+{
+    public override ValueTask<List<string>> HandleAsync(string message, AfContext context, CancellationToken cancellationToken) => new([message]);
+}
+
+[YieldsOutput(typeof(string))]
+internal sealed class EndPile(string id, Ledger ledger) : Executor<List<string>>(id)
+{
+    public override async ValueTask HandleAsync(List<string> message, AfContext context, CancellationToken cancellationToken)
+    {
+        ledger.Ran(Id);
+        await context.YieldOutputAsync($"{message.Count} lines, {message.Sum(l => l.Length)} characters", cancellationToken);
+    }
+}
+
 internal sealed class ToTicket(string id, Ledger ledger) : Executor<string, Ticket>(id)
 {
     public override ValueTask<Ticket> HandleAsync(string message, AfContext context, CancellationToken cancellationToken)
@@ -266,6 +292,23 @@ internal static class TestWorkflows
         ExecutorBinding end = new Finish("end", ledger).BindExecutor();
         return new WorkflowBuilder(split).AddEdge(split, toTicket).AddEdge(toTicket, gate).AddEdge(gate, conclude)
             .AddEdge(split, c1).AddEdge(c1, c2).AddEdge(c2, end).WithOutputFrom(conclude, end).Build();
+    }
+
+    /// <summary>A list that is handed from one executor to the next and grows by a line each time: the same value under another name in every checkpoint.</summary>
+    public static Workflow Pile(Ledger ledger, int executors = 8)
+    {
+        ExecutorBinding start = new StartPile("start").BindExecutor();
+        var builder = new WorkflowBuilder(start);
+        ExecutorBinding previous = start;
+        for (int i = 0; i < executors; i++)
+        {
+            ExecutorBinding next = new Pile("p" + i, ledger).BindExecutor();
+            builder.AddEdge(previous, next);
+            previous = next;
+        }
+
+        ExecutorBinding end = new EndPile("end", ledger).BindExecutor();
+        return builder.AddEdge(previous, end).WithOutputFrom(end).Build();
     }
 
     /// <summary>The same as <see cref="Question"/> with one more executor between the port and the end: a changed structure.</summary>

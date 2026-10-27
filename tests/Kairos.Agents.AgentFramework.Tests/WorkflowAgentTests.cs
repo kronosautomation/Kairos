@@ -12,8 +12,9 @@ public sealed class WorkflowAgentTests
     private static readonly Principal Operator = new(AfHarness.Scope, Role.Operator, "ops", null);
     private static readonly Principal Viewer = new(AfHarness.Scope, Role.Reader, "intern", null);
 
-    private static AfHarness Harness(Ledger ledger, ScriptedChatClient writer, Action<AgentFrameworkOptions>? options = null, bool faults = false, Action<AgentFrameworkBuilder>? more = null, params AITool[] writerTools) =>
-        new(af =>
+    private static AfHarness Harness(Ledger ledger, ScriptedChatClient writer, Action<AgentFrameworkOptions>? options = null, bool faults = false, Action<AgentFrameworkBuilder>? more = null, params AITool[] writerTools)
+    {
+        var h = new AfHarness(af =>
         {
             af.Configure(o => options?.Invoke(o));
             af.AddAgent(AfHarness.AgentWith(writer, "writer", writerTools));
@@ -22,6 +23,9 @@ public sealed class WorkflowAgentTests
             af.AddWorkflow<string>("agentic-question", ctx => TestWorkflows.AgentThenQuestion(ledger, ctx.Agents));
             more?.Invoke(af);
         }, faultInjection: faults);
+        h.RunConversationsFromTheWaitingExecutor(); // one thread, the same order every time: the executor that waits for a conversation runs the conversation's work itself
+        return h;
+    }
 
     private static async Task<DurableWorkflowRun> StartAsync(AfHarness h, string workflow, string input = "write a haiku") => await WorkflowTests.StartAsync(h, workflow, input);
 
@@ -35,7 +39,7 @@ public sealed class WorkflowAgentTests
         AfHarness h = Harness(ledger, AfHarness.Echo("an old pond"));
         DurableWorkflowRun run = await StartAsync(h, "agentic");
 
-        await h.DriveParallelAsync();
+        await h.DriveAsync();
         WorkflowView view = await WorkflowTests.ReadAsync(run);
 
         Assert.True(view.Status == DurableWorkflowStatus.Completed, view.Error);
@@ -54,7 +58,7 @@ public sealed class WorkflowAgentTests
         AfHarness h = Harness(ledger, writer, o => o.SuperstepsPerStep = 3);
         DurableWorkflowRun run = await StartAsync(h, "agentic-flaky");
 
-        await h.DriveParallelAsync();
+        await h.DriveAsync();
         WorkflowView view = await WorkflowTests.ReadAsync(run);
 
         Assert.True(view.Status == DurableWorkflowStatus.Completed, view.Error);
@@ -92,11 +96,11 @@ public sealed class WorkflowAgentTests
         DurableWorkflowRun run = await WorkflowTests.StartAsync(h, "agentic", "x");
 
         // The "writer" agent here wants a refund approved by a person: the executor would hold its worker until someone did.
-        await h.DriveParallelAsync(idlePolls: 200);
+        await h.DriveAsync();
         WorkflowView view = await WorkflowTests.ReadAsync(run);
 
         Assert.Equal(DurableWorkflowStatus.Failed, view.Status);
-        Assert.Contains("WorkflowAgentWaitException", view.Error, StringComparison.Ordinal);
+        Assert.True(view.Error!.Contains("WorkflowAgentWaitException", StringComparison.Ordinal), view.Error);
         Assert.True(view.Error!.Contains("af/writer/wf.", StringComparison.Ordinal), view.Error);
         Assert.True(view.Error!.Contains("RequestPort", StringComparison.Ordinal), view.Error);
         Assert.Equal(1, ledger.Runs("ask")); // not retried: the error is the author's to fix
@@ -114,12 +118,12 @@ public sealed class WorkflowAgentTests
         var ledger = new Ledger();
         AfHarness h = Harness(ledger, AfHarness.Echo("an old pond"));
         DurableWorkflowRun run = await StartAsync(h, "agentic-question");
-        await h.DriveParallelAsync();
+        await h.DriveAsync();
         WorkflowView waiting = await WorkflowTests.ReadAsync(run);
         Assert.Equal(DurableWorkflowStatus.Waiting, waiting.Status); // the agent answered; a person has to answer the workflow
 
         Assert.True(await AfHarness.Retry(async () => await run.CancelAsync("changed our mind").AsTask()));
-        await h.DriveParallelAsync();
+        await h.DriveAsync();
 
         WorkflowView view = await WorkflowTests.ReadAsync(run);
         Assert.Equal(DurableWorkflowStatus.Cancelled, view.Status);
@@ -135,14 +139,14 @@ public sealed class WorkflowAgentTests
         var ledger = new Ledger();
         AfHarness h = Harness(ledger, AfHarness.Echo("an old pond"));
         DurableWorkflowRun run = await StartAsync(h, "agentic-question");
-        await h.DriveParallelAsync();
+        await h.DriveAsync();
         await WorkflowTests.ReadAsync(run);
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(async () => await run.TerminateAsync(Viewer, "no right"));
         Assert.Equal(DurableWorkflowStatus.Waiting, (await WorkflowTests.ReadAsync(run)).Status); // nothing happened
 
         Assert.True(await AfHarness.Retry(async () => await run.TerminateAsync(Operator, "stuck").AsTask()));
-        await h.DriveParallelAsync();
+        await h.DriveAsync();
 
         WorkflowView view = await WorkflowTests.ReadAsync(run);
         Assert.Equal(DurableWorkflowStatus.Terminated, view.Status);

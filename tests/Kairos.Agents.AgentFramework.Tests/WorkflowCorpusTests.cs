@@ -25,6 +25,8 @@ public sealed class WorkflowCorpusTests
         ("afw-continue-first.khist", "a long workflow: the first run, ended by handing over to a fresh run with the checkpoint"),
         ("afw-continue-second.khist", "a long workflow: the fresh run, started with the checkpoint and the outputs so far"),
         ("afw-version-change.khist", "a run whose Agent Framework package changed while it waited: a person allowed it, and the override is in history"),
+        ("afw-moves-first.khist", "a list handed from executor to executor and growing: checkpoints recorded as references to where the list was; the run ends by handing over, which puts the checkpoint together from them"),
+        ("afw-moves-second.khist", "the fresh run that went on from that checkpoint"),
     ];
 
     private static string Dir => Path.Combine(AppContext.BaseDirectory, "Corpus", Recorded);
@@ -37,6 +39,10 @@ public sealed class WorkflowCorpusTests
             case "afw-continue-first.khist":
             case "afw-continue-second.khist":
                 af.AddWorkflow<string>("chain", _ => TestWorkflows.Chain(ledger));
+                break;
+            case "afw-moves-first.khist":
+            case "afw-moves-second.khist":
+                af.AddWorkflow<string>("pile", _ => TestWorkflows.Pile(ledger));
                 break;
             case "afw-approval.khist":
             case "afw-restored.khist":
@@ -59,6 +65,7 @@ public sealed class WorkflowCorpusTests
     private static string WorkflowOf(string file) => file switch
     {
         "afw-plain.khist" or "afw-continue-first.khist" or "afw-continue-second.khist" => "chain",
+        "afw-moves-first.khist" or "afw-moves-second.khist" => "pile",
         "afw-approval.khist" or "afw-restored.khist" => "approval",
         "afw-signal.khist" or "afw-version-change.khist" => "question",
         _ => "agentic",
@@ -132,6 +139,22 @@ public sealed class WorkflowCorpusTests
         Assert.IsType<WorkflowContinued>(firstRun[^1]);
         recorded["afw-continue-first.khist"] = firstRun;
         recorded["afw-continue-second.khist"] = secondRun;
+
+        h = new AfHarness(af => Registrations("afw-moves-first.khist", ledger)(af.Configure(o => o.ContinueAfterEvents = 22)));
+        run = await WorkflowTests.StartAsync(h, "pile", "begin");
+        await WorkflowTests.FinishAsync(h, run);
+        histories = [];
+        foreach (RunSummary r in await h.Store.ListRunsAsync(AfHarness.Scope, new RunFilter(), 50, default))
+        {
+            histories.Add(await h.HistoryAsync(r.Run));
+        }
+
+        firstRun = histories.Single(x => ((WorkflowStarted)x[0]).PreviousRunId == Guid.Empty);
+        secondRun = histories.First(x => ((WorkflowStarted)x[0]).PreviousRunId == firstRun[0].RunId);
+        Assert.IsType<WorkflowContinued>(firstRun[^1]);
+        Assert.Contains(firstRun, e => e is ActivityCompleted c && System.Text.Encoding.UTF8.GetString(c.Result).Contains("\"m\":[", StringComparison.Ordinal)); // the recording does hold references
+        recorded["afw-moves-first.khist"] = firstRun;
+        recorded["afw-moves-second.khist"] = secondRun;
 
         h = new AfHarness(Registrations("afw-version-change.khist", ledger));
         run = await WorkflowTests.StartAsync(h, "question", "x");
@@ -214,6 +237,7 @@ public sealed class WorkflowCorpusTests
         Assert.Contains(Load("afw-agent.khist", out _), e => e is ActivityCompleted c && System.Text.Encoding.UTF8.GetString(c.Result).Contains("af/writer/wf.", StringComparison.Ordinal));
         Assert.Contains(Load("afw-cancelled.khist", out _), e => e is ActivityScheduled a && a.ActivityType == AgentFrameworkNames.WorkflowCancel);
         Assert.IsType<WorkflowContinued>(Load("afw-continue-first.khist", out _)[^1]);
+        Assert.Contains(Load("afw-moves-first.khist", out _), e => e is ActivityCompleted c && System.Text.Encoding.UTF8.GetString(c.Result).Contains("\"m\":[", StringComparison.Ordinal));
         Assert.Equal("user:alice", Assert.Single(AgentFrameworkAudit.Read(Load("afw-version-change.khist", out _)).OfType<WorkflowOverrideAuditRecord>()).Approver);
     }
 }
