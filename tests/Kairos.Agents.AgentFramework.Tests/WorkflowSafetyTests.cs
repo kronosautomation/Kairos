@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Kairos.Agents;
+using Kairos.Cloud.SelfHosted;
 using Kairos.Testing.Simulation;
+using Kairos.Worker;
 using Microsoft.Agents.AI.Workflows;
 
 namespace Kairos.Agents.AgentFramework.Tests;
@@ -114,6 +116,32 @@ public sealed class WorkflowSafetyTests
         Assert.Contains("RedactState<T>", view.Error, StringComparison.Ordinal);
         Assert.DoesNotContain(RedactionTests_Secret, RedactionTests.Everything(await h.HistoryAsync(run.Run)), StringComparison.Ordinal);
         Assert.Equal(1, ledger.Runs("remember")); // a failure that is the author's to fix is not retried
+    }
+
+    // ---- encryption --------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task With_client_side_encryption_the_checkpoint_the_input_the_requests_and_the_outputs_are_ciphertext_in_the_store()
+    {
+        var ledger = new Ledger();
+        var protector = new EnvelopePayloadProtector(LocalKeyProvider.CreateEphemeral());
+        var h = new AfHarness(
+            af => af.AddWorkflow<string>("stateful", _ => TestWorkflows.Stateful(ledger)).AddWorkflow<string>("question", _ => TestWorkflows.Question(ledger)),
+            protector: protector);
+        DurableWorkflowRun stateful = await WorkflowTests.StartAsync(h, "stateful", $"call {RedactionTests_Secret}", "s1");
+        WorkflowView done = await WorkflowTests.FinishAsync(h, stateful);
+        DurableWorkflowRun question = await WorkflowTests.StartAsync(h, "question", $"call {RedactionTests_Secret}", "q1");
+        WorkflowView waiting = await WorkflowTests.FinishAsync(h, question);
+
+        Assert.True(done.Status == DurableWorkflowStatus.Completed, done.Error);
+        Assert.Equal($"call {RedactionTests_Secret}", Assert.Single(done.Outputs).As<string>()); // the client reads it
+        Assert.Equal($"call {RedactionTests_Secret}", waiting.Pending[0].As<Ticket>(new JsonSerializerOptions(JsonSerializerDefaults.Web))!.Body);
+        foreach (DurableWorkflowRun run in new[] { stateful, question })
+        {
+            IReadOnlyList<HistoryEvent> stored = await h.Store.GetHistoryAsync(run.Run, default);
+            Assert.DoesNotContain(RedactionTests_Secret, RedactionTests.Everything(stored), StringComparison.Ordinal); // the server does not
+            Assert.Contains(RedactionTests_Secret, RedactionTests.Everything(await h.HistoryAsync(run.Run)), StringComparison.Ordinal);
+        }
     }
 
     // ---- who may do what ---------------------------------------------------------------------------------------
@@ -317,10 +345,62 @@ public sealed class WorkflowSafetyTests
     }
 
     [Fact]
+    public async Task An_open_approval_keeps_a_run_from_handing_over_until_it_is_decided()
+    {
+        var ledger = new Ledger();
+        AfHarness h = WorkflowTests.Harness(
+            ledger,
+            af => af.Configure(o => o.ContinueAfterEvents = 8).AddWorkflow<string>("parallel-approval", _ => TestWorkflows.ParallelApproval(ledger), r => r.RequestsAsApprovals("approve", new ApprovalRequirement { Roles = ["finance"] })));
+        DurableWorkflowRun run = await WorkflowTests.StartAsync(h, "parallel-approval", "x");
+
+        WorkflowView waiting = await WorkflowTests.FinishAsync(h, run);
+
+        Assert.Equal(DurableWorkflowStatus.Waiting, waiting.Status);
+        Assert.Equal("x>c1>c2>c3>c4>c5>c6", Assert.Single(waiting.Outputs).As<string>()); // the branch ran to its end while the approval was open
+        Assert.Single(await h.Store.ListRunsAsync(AfHarness.Scope, new RunFilter(), 50, default), r => r.WorkflowId == "afw/parallel-approval/w1"); // and the run did not hand over, because the approval cannot go with it
+        Assert.Single(AgentHistory.PendingApprovals(await h.HistoryAsync(run.Run)));
+
+        await AfHarness.Retry(async () => await h.Approvals.ApproveAsync(run.Run, AgentHistory.PendingApprovals(await h.HistoryAsync(run.Run)).Single().ApprovalId, Alice).AsTask());
+        WorkflowView done = await WorkflowTests.FinishAsync(h, run);
+        Assert.True(done.Status == DurableWorkflowStatus.Completed, done.Error);
+        Assert.Equal(["approved", "x>c1>c2>c3>c4>c5>c6"], done.Outputs.Select(o => o.As<string>()!).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_hand_over_carries_the_outputs_so_far_the_open_request_and_the_conversations_the_executors_started()
+    {
+        var ledger = new Ledger();
+        AfHarness h = new(af =>
+        {
+            af.Configure(o => o.ContinueAfterEvents = 8);
+            af.AddAgent(AfHarness.AgentWith(AfHarness.Echo("an old pond"), "writer"));
+            af.AddWorkflow<string>("carries", ctx => TestWorkflows.Carries(ledger, ctx.Agents));
+        });
+        h.RunConversationsFromTheWaitingExecutor();
+        DurableWorkflowRun run = await WorkflowTests.StartAsync(h, "carries", "begin");
+
+        WorkflowView waiting = await WorkflowTests.FinishAsync(h, run);
+
+        RunSummary[] runs = [.. (await h.Store.ListRunsAsync(AfHarness.Scope, new RunFilter(), 50, default)).Where(r => r.WorkflowId == "afw/carries/w1")];
+        Assert.True(runs.Length >= 3, $"expected hand-overs, saw {runs.Length} run(s)");
+        Assert.Equal(DurableWorkflowStatus.Waiting, waiting.Status);
+        Assert.Equal("begin", Assert.Single(waiting.Outputs).As<string>()); // yielded in the first run, here after the hand-overs
+        WorkflowRequest request = Assert.Single(waiting.Pending);
+        Assert.False(request.IsApproval);
+
+        // The conversation the writer started in an early run is still the workflow's: cancelling stops it.
+        Assert.True(await AfHarness.Retry(async () => await run.CancelAsync("changed our mind").AsTask()));
+        await h.DriveAsync();
+        Assert.Equal(DurableWorkflowStatus.Cancelled, (await WorkflowTests.ReadAsync(run)).Status);
+        RunSummary conversation = Assert.Single(await h.Store.ListRunsAsync(AfHarness.Scope, new RunFilter(), 50, default), r => r.WorkflowId.StartsWith("af/writer/", StringComparison.Ordinal));
+        Assert.Equal(nameof(SagaCancelledException), Assert.IsType<WorkflowFailed>((await h.HistoryAsync(conversation.Run))[^1]).ErrorType);
+    }
+
+    [Fact]
     public async Task A_request_that_waits_across_a_hand_over_is_answered_in_the_fresh_run()
     {
         var ledger = new Ledger();
-        AfHarness h = WorkflowTests.Harness(ledger, af => af.Configure(o => o.ContinueAfterEvents = 14).AddWorkflow<string>("parallel", _ => TestWorkflows.Parallel(ledger)));
+        AfHarness h = WorkflowTests.Harness(ledger, af => af.Configure(o => o.ContinueAfterEvents = 8).AddWorkflow<string>("parallel", _ => TestWorkflows.Parallel(ledger)));
         DurableWorkflowRun run = await WorkflowTests.StartAsync(h, "parallel", "x");
 
         WorkflowView waiting = await WorkflowTests.FinishAsync(h, run);

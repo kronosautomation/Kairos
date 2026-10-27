@@ -173,6 +173,7 @@ public sealed class WorkflowContractTests
         Assert.Equal(first, WorkflowDefinition.StructureOf(TestWorkflows.Question(new Ledger())));
         Assert.NotEqual(first, WorkflowDefinition.StructureOf(TestWorkflows.QuestionWithAudit(new Ledger())));
         Assert.NotEqual(first, WorkflowDefinition.StructureOf(TestWorkflows.Approval(new Ledger()))); // a port of another type
+        Assert.NotEqual(first, WorkflowDefinition.StructureOf(TestWorkflows.QuestionOtherPrepare(new Ledger()))); // the same ids, an executor of another type
     }
 
     [Fact]

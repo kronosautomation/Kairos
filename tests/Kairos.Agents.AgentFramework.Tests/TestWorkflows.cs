@@ -311,6 +311,59 @@ internal static class TestWorkflows
         return builder.AddEdge(previous, end).WithOutputFrom(end).Build();
     }
 
+    /// <summary>
+    /// split > (an early output, and an agent whose answer goes through a chain of four steps to a person's signal): an output that is yielded early, a conversation an executor started and a request that is raised late,
+    /// all of which a long run's hand-overs must carry.
+    /// </summary>
+    public static Workflow Carries(Ledger ledger, DurableAgents agents)
+    {
+        ExecutorBinding split = new Split("split", ledger).BindExecutor();
+        ExecutorBinding early = new Finish("early", ledger).BindExecutor();
+        ExecutorBinding write = new Ask("write", ledger, agents, "writer").BindExecutor();
+        ExecutorBinding toTicket = new ToTicket("to-ticket", ledger).BindExecutor();
+        ExecutorBinding gate = RequestPort.Create<Ticket, string>("ask").BindAsExecutor();
+        ExecutorBinding conclude = new ConcludeText("conclude", ledger).BindExecutor();
+        var builder = new WorkflowBuilder(split).AddEdge(split, early).AddEdge(split, write).WithOutputFrom(conclude, early);
+        ExecutorBinding previous = write;
+        for (int i = 1; i <= 4; i++)
+        {
+            ExecutorBinding next = new Step("c" + i, ledger, "").BindExecutor();
+            builder.AddEdge(previous, next);
+            previous = next;
+        }
+
+        return builder.AddEdge(previous, toTicket).AddEdge(toTicket, gate).AddEdge(gate, conclude).Build();
+    }
+
+    /// <summary>split > (a ticket for a person to approve, and a chain of six steps that ends in an output): the chain runs on while the approval is open.</summary>
+    public static Workflow ParallelApproval(Ledger ledger)
+    {
+        ExecutorBinding split = new Split("split", ledger).BindExecutor();
+        ExecutorBinding toTicket = new Prepare("prepare", ledger).BindExecutor();
+        ExecutorBinding gate = RequestPort.Create<Ticket, bool>("approve").BindAsExecutor();
+        ExecutorBinding conclude = new Conclude("conclude", ledger).BindExecutor();
+        var builder = new WorkflowBuilder(split).AddEdge(split, toTicket).AddEdge(toTicket, gate).AddEdge(gate, conclude);
+        ExecutorBinding previous = split;
+        for (int i = 1; i <= 6; i++)
+        {
+            ExecutorBinding next = new Step("c" + i, ledger, "").BindExecutor();
+            builder.AddEdge(previous, next);
+            previous = next;
+        }
+
+        ExecutorBinding end = new Finish("end", ledger).BindExecutor();
+        return builder.AddEdge(previous, end).WithOutputFrom(conclude, end).Build();
+    }
+
+    /// <summary>The same as <see cref="Question"/> with the first executor of another type (and the same id).</summary>
+    public static Workflow QuestionOtherPrepare(Ledger ledger)
+    {
+        ExecutorBinding prepare = new ToTicket("prepare", ledger).BindExecutor();
+        ExecutorBinding gate = RequestPort.Create<Ticket, string>("ask").BindAsExecutor();
+        ExecutorBinding conclude = new ConcludeText("conclude", ledger).BindExecutor();
+        return new WorkflowBuilder(prepare).AddEdge(prepare, gate).AddEdge(gate, conclude).WithOutputFrom(conclude).Build();
+    }
+
     /// <summary>The same as <see cref="Question"/> with one more executor between the port and the end: a changed structure.</summary>
     public static Workflow QuestionWithAudit(Ledger ledger)
     {

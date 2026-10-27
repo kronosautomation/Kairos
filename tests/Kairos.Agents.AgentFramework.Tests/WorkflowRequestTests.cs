@@ -90,6 +90,7 @@ public sealed class WorkflowRequestTests
         WorkflowRequest request = Assert.Single(waiting.Pending);
         Assert.False(request.IsApproval);
         Assert.Equal("ask", request.PortId);
+        Assert.Equal(2, waiting.Steps); // the superstep that prepared the ticket and the one that raised the request
 
         Assert.True(await AfHarness.Retry(async () => await run.RespondAsync(request.RequestId, "blue").AsTask()));
         Assert.True(await AfHarness.Retry(async () => await run.RespondAsync(request.RequestId, "blue").AsTask())); // taken again, not answered again
@@ -98,6 +99,20 @@ public sealed class WorkflowRequestTests
         Assert.True(done.Status == DurableWorkflowStatus.Completed, done.Error);
         Assert.Equal("answered: blue", Assert.Single(done.Outputs).As<string>());
         Assert.Single((await h.HistoryAsync(run.Run)).OfType<SignalReceived>(), s => s.SignalName.StartsWith("af.workflow.response/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_request_that_stays_open_while_the_rest_of_the_workflow_runs_is_asked_once()
+    {
+        var ledger = new Ledger();
+        AfHarness h = WorkflowTests.Harness(ledger, af => af.AddWorkflow<string>("fan", _ => TestWorkflows.FanOutWithDecision(ledger), r => r.RequestsAsApprovals("approve", new ApprovalRequirement { Roles = ["finance"] })));
+        DurableWorkflowRun run = await WorkflowTests.StartAsync(h, "fan", "x");
+
+        WorkflowView waiting = await WorkflowTests.FinishAsync(h, run);
+
+        Assert.Equal(DurableWorkflowStatus.Waiting, waiting.Status);
+        Assert.Equal("x>c1>c2", Assert.Single(waiting.Outputs).As<string>()); // the other branch ran to its end in steps that all listed the open request
+        Assert.Single(AgentHistory.PendingApprovals(await h.HistoryAsync(run.Run))); // and the person was asked once
     }
 
     [Fact]

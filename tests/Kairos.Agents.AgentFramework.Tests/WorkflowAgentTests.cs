@@ -84,16 +84,19 @@ public sealed class WorkflowAgentTests
                 l.EnableMeasurementEvents(instrument);
             }
         };
-        listener.SetMeasurementEventCallback<long>((_, value, _, _) =>
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
         {
-            lock (waits)
+            if (tags.ToArray().Any(t => t.Key == "workflow" && (string?)t.Value == "agentic-limit")) // the meter is the process's: other tests wait too
             {
-                waits.Add(value);
+                lock (waits)
+                {
+                    waits.Add(value);
+                }
             }
         });
         listener.Start();
-        AfHarness h = Harness(ledger, model, o => o.WorkflowAgentWait = TimeSpan.FromMilliseconds(400), writerTools: new ApprovalRequiredAIFunction(refund));
-        DurableWorkflowRun run = await WorkflowTests.StartAsync(h, "agentic", "x");
+        AfHarness h = Harness(ledger, model, o => o.WorkflowAgentWait = TimeSpan.FromMilliseconds(400), more: af => af.AddWorkflow<string>("agentic-limit", ctx => TestWorkflows.WithAgent(ledger, ctx.Agents)), writerTools: new ApprovalRequiredAIFunction(refund));
+        DurableWorkflowRun run = await WorkflowTests.StartAsync(h, "agentic-limit", "x");
 
         // The "writer" agent here wants a refund approved by a person: the executor would hold its worker until someone did.
         await h.DriveAsync();
