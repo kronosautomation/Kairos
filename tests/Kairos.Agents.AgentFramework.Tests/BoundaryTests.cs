@@ -14,7 +14,7 @@ public sealed class BoundaryTests
     ];
 
     /// <summary>The Agent Framework packages the adapter may use. The provider packages (.OpenAI, .Foundry and the like), hosting and the Durable Task one are not among them.</summary>
-    private static readonly string[] AgentFrameworkPackages = ["Microsoft.Agents.AI", "Microsoft.Agents.AI.Abstractions"];
+    private static readonly string[] AgentFrameworkPackages = ["Microsoft.Agents.AI", "Microsoft.Agents.AI.Abstractions", "Microsoft.Agents.AI.Workflows"];
 
     [Fact]
     public void The_assembly_references_no_vendor_sdk_directly_or_through_anything_it_loads()
@@ -47,7 +47,7 @@ public sealed class BoundaryTests
     }
 
     [Fact]
-    public void The_package_depends_on_the_engine_the_model_abstractions_and_two_agent_framework_packages_only()
+    public void The_package_depends_on_the_engine_the_model_abstractions_and_three_agent_framework_packages_only()
     {
         string[] allowed =
         [

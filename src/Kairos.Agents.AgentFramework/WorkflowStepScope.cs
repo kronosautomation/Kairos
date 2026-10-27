@@ -43,6 +43,25 @@ public sealed class WorkflowExecutorFailedException : Exception
     }
 }
 
+/// <summary>Agent Framework cannot restore the checkpoint a run was left at into the workflow this worker has (it resumes a checkpoint only into a workflow with the same executors, edges and ports).</summary>
+public sealed class WorkflowIncompatibleException : Exception
+{
+    public WorkflowIncompatibleException()
+        : base("The checkpoint cannot be restored into this workflow.")
+    {
+    }
+
+    public WorkflowIncompatibleException(string message)
+        : base(message)
+    {
+    }
+
+    public WorkflowIncompatibleException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
 /// <summary>No durable workflow is registered under the name, or the registered workflow is not the one the run was started with.</summary>
 public sealed class UnknownWorkflowException : Exception
 {

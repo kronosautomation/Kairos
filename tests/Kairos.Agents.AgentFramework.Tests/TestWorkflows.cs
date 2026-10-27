@@ -18,7 +18,14 @@ public sealed class Ledger
 
     public int Total => _runs.Values.Sum();
 
-    public void Ran(string executor) => _runs.AddOrUpdate(executor, 1, (_, n) => n + 1);
+    /// <summary>Called whenever an executor runs (a test's way to do something in the middle of a superstep, such as cancelling the workflow).</summary>
+    public Action<string>? OnRun { get; set; }
+
+    public void Ran(string executor)
+    {
+        _runs.AddOrUpdate(executor, 1, (_, n) => n + 1);
+        OnRun?.Invoke(executor);
+    }
 
     public IReadOnlyDictionary<string, int> Snapshot => new Dictionary<string, int>(_runs);
 
@@ -131,12 +138,23 @@ internal sealed class AskThenTicket(string id, Ledger ledger, DurableAgents agen
     }
 }
 
+internal sealed class ToTicket(string id, Ledger ledger) : Executor<string, Ticket>(id)
+{
+    public override ValueTask<Ticket> HandleAsync(string message, AfContext context, CancellationToken cancellationToken)
+    {
+        ledger.Ran(Id);
+        return new(new Ticket("t-1", message));
+    }
+}
+
 internal sealed class Remember(string id, Ledger ledger) : Executor<string, string>(id)
 {
+    public const string Secret = "SECRET-123-4567";
+
     public override async ValueTask<string> HandleAsync(string message, AfContext context, CancellationToken cancellationToken)
     {
         ledger.Ran(Id);
-        await context.QueueStateUpdateAsync("last", new Ticket("s-1", "note: " + message), cancellationToken);
+        await context.QueueStateUpdateAsync("last", new Ticket("s-1", "note: " + message + " " + Secret), cancellationToken);
         return message;
     }
 }
@@ -214,6 +232,44 @@ internal static class TestWorkflows
         ExecutorBinding gate = RequestPort.Create<Ticket, string>("ask").BindAsExecutor();
         ExecutorBinding conclude = new ConcludeText("conclude", ledger).BindExecutor();
         return new WorkflowBuilder(write).AddEdge(write, gate).AddEdge(gate, conclude).WithOutputFrom(conclude).Build();
+    }
+
+    /// <summary>split > (gate "ask" answered by signal, and a chain of five steps) > both end in an output: the chain runs on while the request waits.</summary>
+    public static Workflow Parallel(Ledger ledger)
+    {
+        ExecutorBinding split = new Split("split", ledger).BindExecutor();
+        ExecutorBinding toTicket = new ToTicket("to-ticket", ledger).BindExecutor();
+        ExecutorBinding gate = RequestPort.Create<Ticket, string>("ask").BindAsExecutor();
+        ExecutorBinding conclude = new ConcludeText("conclude", ledger).BindExecutor();
+        var builder = new WorkflowBuilder(split).AddEdge(split, toTicket).AddEdge(toTicket, gate).AddEdge(gate, conclude).WithOutputFrom(conclude);
+        ExecutorBinding previous = split;
+        for (int i = 1; i <= 5; i++)
+        {
+            ExecutorBinding next = new Step("c" + i, ledger, "").BindExecutor();
+            builder.AddEdge(previous, next);
+            previous = next;
+        }
+
+        ExecutorBinding end = new Finish("end", ledger).BindExecutor();
+        return builder.AddEdge(previous, end).WithOutputFrom(end).Build();
+    }
+
+    /// <summary>The same as <see cref="Question"/> with one more executor between the port and the end: a changed structure.</summary>
+    public static Workflow QuestionWithAudit(Ledger ledger)
+    {
+        ExecutorBinding prepare = new Prepare("prepare", ledger).BindExecutor();
+        ExecutorBinding gate = RequestPort.Create<Ticket, string>("ask").BindAsExecutor();
+        ExecutorBinding audit = new Step("audit", ledger, "").BindExecutor();
+        ExecutorBinding conclude = new ConcludeText("conclude", ledger).BindExecutor();
+        return new WorkflowBuilder(prepare).AddEdge(prepare, gate).AddEdge(gate, audit).AddEdge(audit, conclude).WithOutputFrom(conclude).Build();
+    }
+
+    /// <summary>A workflow whose executor ids change every time it is built.</summary>
+    public static Workflow Unstable(Ledger ledger)
+    {
+        ExecutorBinding a = new Step("a-" + Guid.NewGuid().ToString("N"), ledger, "").BindExecutor();
+        ExecutorBinding done = new Finish("done", ledger).BindExecutor();
+        return new WorkflowBuilder(a).AddEdge(a, done).WithOutputFrom(done).Build();
     }
 
     /// <summary>remember (executor state with text) > done.</summary>

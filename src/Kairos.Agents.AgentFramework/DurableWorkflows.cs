@@ -264,9 +264,9 @@ public sealed class DurableWorkflowRun
                 return true;
             }
 
-            if (await _owner.Client.GetStateAsync(run, cancellationToken).ConfigureAwait(false) is RunState.Completed or RunState.Failed)
+            if (await _owner.Client.GetStateAsync(run, cancellationToken).ConfigureAwait(false) is null or RunState.Completed or RunState.Failed)
             {
-                return false;
+                return false; // ended, or not there in this scope
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(10 << attempt), _owner.Time, cancellationToken).ConfigureAwait(false); // it handed over to a fresh run between the lookup and the signal

@@ -16,7 +16,7 @@ public sealed partial class AgentFrameworkRuntime
         NonRetryableErrorTypes =
         [
             nameof(SnapshotTooLargeException), nameof(SnapshotShapeException), nameof(SnapshotIntegrityException), nameof(UnknownWorkflowException),
-            nameof(WorkflowAgentWaitException), nameof(FormatException),
+            nameof(WorkflowAgentWaitException), nameof(WorkflowIncompatibleException), nameof(FormatException),
         ],
     };
 
@@ -33,21 +33,6 @@ public sealed partial class AgentFrameworkRuntime
         AfwStepRequest request = AfCodec.Read(input, AfwJson.Default.AfwStepRequest);
         WorkflowDefinition definition = WorkflowDefinitionOf(request.Workflow);
         WorkflowRegistration registration = definition.Registration;
-
-        if (request.Structure is { } pinned && (!string.Equals(pinned, definition.Structure, StringComparison.Ordinal) || !string.Equals(request.Version, WorkflowDefinition.PackageVersion, StringComparison.Ordinal)))
-        {
-            // Not a failure: a recorded outcome the workflow turns into an approval, so a person decides whether the run may go on with the changed workflow.
-            return AfCodec.Write(
-                new AfwStepResult
-                {
-                    Outcome = AfwOutcomes.StructureChanged,
-                    PinnedStructure = pinned,
-                    PinnedVersion = request.Version,
-                    Structure = definition.Structure,
-                    Version = WorkflowDefinition.PackageVersion,
-                },
-                AfwJson.Default.AfwStepResult);
-        }
 
         int limit = Options.MaxCheckpointBytes;
         SessionText? before = null;
@@ -82,6 +67,27 @@ public sealed partial class AgentFrameworkRuntime
             throw new FormatException("A workflow step was given neither an input nor a checkpoint.");
         }
 
+        if (request.Structure is { } pinned && (!string.Equals(pinned, definition.Structure, StringComparison.Ordinal) || !string.Equals(request.Version, WorkflowPackageVersion, StringComparison.Ordinal)))
+        {
+            // A person decides whether a run may go on with a changed workflow, but only when it can: if Agent Framework would refuse the checkpoint (it requires the same executors and edges) no approval helps,
+            // so that is found out first and ends the run with the reason. Not a failure otherwise: a recorded outcome the workflow turns into an approval.
+            if (before is not null)
+            {
+                await TryRestoreAsync(context, definition, before, cancellationToken).ConfigureAwait(false);
+            }
+
+            return AfCodec.Write(
+                new AfwStepResult
+                {
+                    Outcome = AfwOutcomes.StructureChanged,
+                    PinnedStructure = pinned,
+                    PinnedVersion = request.Version,
+                    Structure = definition.Structure,
+                    Version = WorkflowPackageVersion,
+                },
+                AfwJson.Default.AfwStepResult);
+        }
+
         var scope = new WorkflowStepScope(definition.Name, context.IdempotencyKey, Options.WorkflowAgentWait);
         using IDisposable entered = WorkflowStepScope.Enter(scope);
         var carrier = new CarrierStore();
@@ -102,7 +108,7 @@ public sealed partial class AgentFrameworkRuntime
         var environment = InProcessExecution.Lockstep.WithCheckpointing(manager);
         StreamingRun run = before is null
             ? await registration.Start(environment, workflow, request.Input!.Value, CarrierStore.Session, cancellationToken).ConfigureAwait(false)
-            : await environment.ResumeStreamingAsync(workflow, carrier.Seed(SnapshotCodec.Element(before.Text)), cancellationToken).ConfigureAwait(false);
+            : await ResumeAsync(environment, workflow, carrier.Seed(SnapshotCodec.Element(before.Text)), definition, cancellationToken).ConfigureAwait(false);
         await using (run.ConfigureAwait(false))
         {
             foreach (AfwResponse response in request.Responses)
@@ -205,7 +211,7 @@ public sealed partial class AgentFrameworkRuntime
             new AfwStepResult
             {
                 Structure = definition.Structure,
-                Version = WorkflowDefinition.PackageVersion,
+                Version = WorkflowPackageVersion,
                 Checkpoint = whole,
                 Delta = change,
                 CheckpointHash = after.Hash,
@@ -220,6 +226,34 @@ public sealed partial class AgentFrameworkRuntime
                 Conversations = scope.Owned,
             },
             AfwJson.Default.AfwStepResult);
+    }
+
+    /// <summary>The version of the Agent Framework workflows package: its checkpoint format is the package's. (A test can say it is another one, to stand for a deploy of a newer package.)</summary>
+    internal string WorkflowPackageVersion { get; set; } = WorkflowDefinition.PackageVersion;
+
+    private static async ValueTask<StreamingRun> ResumeAsync(
+        Microsoft.Agents.AI.Workflows.InProc.InProcessExecutionEnvironment environment, Workflow workflow, CheckpointInfo checkpoint, WorkflowDefinition definition, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await environment.ResumeStreamingAsync(workflow, checkpoint, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new WorkflowIncompatibleException(
+                $"Workflow '{definition.Name}': Agent Framework cannot restore the checkpoint the run was left at into the workflow this worker has ({ex.Message}). Agent Framework resumes a checkpoint only into a workflow with the same executors, edges and ports. " +
+                "Let the runs in flight finish, or cancel them, before deploying a change to the graph, or register the changed graph under a new name.", ex);
+        }
+    }
+
+    private async Task TryRestoreAsync(ActivityContext context, WorkflowDefinition definition, SessionText checkpoint, CancellationToken cancellationToken)
+    {
+        var carrier = new CarrierStore();
+        var agents = new DurableAgents(this, Client, new TenantScope(context.Run.TenantId, context.Run.NamespaceId), Agents.Config.Time);
+        Workflow workflow = definition.Registration.Factory(new WorkflowBuildContext(agents, Services));
+        var environment = InProcessExecution.Lockstep.WithCheckpointing(CheckpointManager.CreateJson(carrier, definition.Registration.Options));
+        StreamingRun run = await ResumeAsync(environment, workflow, carrier.Seed(SnapshotCodec.Element(checkpoint.Text)), definition, cancellationToken).ConfigureAwait(false);
+        await run.DisposeAsync().ConfigureAwait(false); // restoring runs nothing; this was only to see that it can be done
     }
 
     private AfwOutput ToOutput(WorkflowDefinition definition, string executorId, object value)
