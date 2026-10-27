@@ -121,6 +121,11 @@ public sealed class TestDatabase(string name, PostgresFixture fixture) : IAsyncD
     public string DataPlaneConnectionString =>
         fixture.ConnectionString(Name, PostgresProvisioning.DataPlaneRole, PostgresFixture.PasswordFor(PostgresProvisioning.DataPlaneRole));
 
+    /// <summary>The data-plane connection string without its password, and the password: for tests of a password that comes from somewhere else (a token provider).</summary>
+    public string DataPlaneConnectionStringWithoutPassword => fixture.ConnectionString(Name, PostgresProvisioning.DataPlaneRole, null);
+
+    public static string DataPlanePassword => PostgresFixture.PasswordFor(PostgresProvisioning.DataPlaneRole);
+
     /// <summary>For tools that connect as the reporting role (read-only, bound by row-level security like everything else).</summary>
     public string ReadOnlyConnectionString =>
         fixture.ConnectionString(Name, PostgresProvisioning.ReadOnlyRole, PostgresFixture.PasswordFor(PostgresProvisioning.ReadOnlyRole));

@@ -148,6 +148,7 @@
         "type": "Project",
         "dependencies": {
           "Kairos.Hosting": "[1.0.0, )",
+          "Kairos.Persistence.Postgres": "[1.0.0, )",
           "Kairos.Worker": "[1.0.0, )"
         }
       },

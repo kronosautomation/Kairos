@@ -42,6 +42,8 @@
   href: agent-framework.md
 - name: Agent Framework workflows, made durable
   href: agent-framework-workflows.md
+- name: Connecting without a password
+  href: database-sign-in.md
 - name: Observability and Aspire
   href: observability.md
 - name: Deploy safety (replay check)

@@ -1,4 +1,5 @@
 using System.Text;
+using Kairos.Persistence.Postgres;
 using Kairos.Worker;
 
 namespace Kairos.Samples.Concepts;
@@ -138,5 +139,24 @@ public static class EncryptionExamples
         var shorter = new EnvelopePayloadProtector(keys, TimeProvider.System, EnvelopeOptions.ShortLived(TimeSpan.FromMinutes(10), maxUses: 50));
         return (tightest, shorter);
     }
+    #endregion
+}
+
+/// <summary>A database password that is a short-lived token. The page on database sign-in quotes this.</summary>
+public static class DatabaseSignInExamples
+{
+    #region token-source
+    // Asked for a password whenever the data source opens a connection (and again every few minutes), so nothing is kept in configuration.
+    // A cloud's identity service has a real implementation of this; here it is a stand-in that returns whatever the caller gives it.
+    public sealed class MyTokenSource(Func<DatabaseEndpoint, CancellationToken, ValueTask<string>> fetch) : IDatabaseTokenSource
+    {
+        public ValueTask<string> GetPasswordAsync(DatabaseEndpoint endpoint, CancellationToken cancellationToken) => fetch(endpoint, cancellationToken);
+    }
+    #endregion
+
+    #region use-token
+    // The connection string names the host, the database and the role, and carries no password.
+    public static KairosOptions Connect(KairosOptions options, string connectionStringWithoutPassword, IDatabaseTokenSource tokens) =>
+        options.UsePostgres(connectionStringWithoutPassword, builder => builder.UseTokenPassword(tokens));
     #endregion
 }

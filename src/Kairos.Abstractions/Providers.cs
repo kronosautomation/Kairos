@@ -163,6 +163,21 @@ public interface IWorkerAuthenticator
     ValueTask<AuthResult> AuthenticateAsync(Credential credential, DateTimeOffset now, CancellationToken cancellationToken);
 }
 
+// ---- database sign-in ---------------------------------------------------------------------------------------------
+
+/// <summary>Which database a token is for: the host, port and role a connection is about to be made as.</summary>
+public readonly record struct DatabaseEndpoint(string Host, int Port, string Username);
+
+/// <summary>
+/// A short-lived password for the database, from the cloud's identity service (an RDS IAM token, an Entra access token, a Cloud SQL IAM access token), so that no password is configured anywhere.
+/// The value is a secret: it is never logged and never put in an exception message. An implementation fails (throws) when it cannot give a token; it never returns an empty one.
+/// Use it with <c>NpgsqlDataSourceBuilder.UseTokenPassword(source)</c> (<c>Kairos.Persistence.Postgres</c>), which asks again before the token expires.
+/// </summary>
+public interface IDatabaseTokenSource
+{
+    ValueTask<string> GetPasswordAsync(DatabaseEndpoint endpoint, CancellationToken cancellationToken);
+}
+
 // ---- events -------------------------------------------------------------------------------------------------------
 
 /// <summary>

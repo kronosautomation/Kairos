@@ -1,4 +1,4 @@
-﻿using Kairos.Persistence.Postgres;
+using Kairos.Persistence.Postgres;
 using Npgsql;
 
 namespace Kairos;
@@ -56,12 +56,22 @@ public sealed class KairosOptions
     }
 
     /// <summary>Postgres only: no cluster, no sidecar. Connect as the <c>kairos_dataplane</c> role.</summary>
-    public KairosOptions UsePostgres(string connectionString)
+    public KairosOptions UsePostgres(string connectionString) => UsePostgres(connectionString, _ => { });
+
+    /// <summary>
+    /// Postgres, with the data source configured by the caller before it is built. This is how a password that is not in the connection string is supplied: a short-lived token
+    /// from the cloud's identity service, through <c>builder.UsePeriodicPasswordProvider(...)</c> (RDS IAM, Entra, Cloud SQL IAM: see the cloud adapters). The one data source built here serves
+    /// the store and the work-notification connection, so what is configured applies to both.
+    /// </summary>
+    public KairosOptions UsePostgres(string connectionString, Action<NpgsqlDataSourceBuilder> configure)
     {
         ArgumentException.ThrowIfNullOrEmpty(connectionString);
+        ArgumentNullException.ThrowIfNull(configure);
         StoreFactory = _ =>
         {
-            NpgsqlDataSource ds = NpgsqlDataSource.Create(connectionString);
+            var builder = new NpgsqlDataSourceBuilder(connectionString);
+            configure(builder);
+            NpgsqlDataSource ds = builder.Build();
             PostgresWorkNotifier notifier = PostgresWorkNotifier.Start(ds);
             var store = new PostgresKairosStore(ds);
             store.AttachNotifier(notifier);
@@ -78,11 +88,12 @@ public sealed class KairosOptions
     /// Postgres, with the connection string read from configuration under <c>ConnectionStrings:{name}</c>. This is where .NET Aspire puts the string when the app
     /// references the database (<c>builder.AddKairos("kairos").WithReference(postgres)</c> in the AppHost).
     /// </summary>
-    public KairosOptions UsePostgresFromConfiguration(Microsoft.Extensions.Configuration.IConfiguration configuration, string name = "kairos")
+    public KairosOptions UsePostgresFromConfiguration(Microsoft.Extensions.Configuration.IConfiguration configuration, string name = "kairos", Action<NpgsqlDataSourceBuilder>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        return UsePostgres(configuration["ConnectionStrings:" + name]
-            ?? throw new InvalidOperationException($"No connection string named '{name}' is configured (ConnectionStrings:{name})."));
+        return UsePostgres(
+            configuration["ConnectionStrings:" + name] ?? throw new InvalidOperationException($"No connection string named '{name}' is configured (ConnectionStrings:{name})."),
+            configure ?? (_ => { }));
     }
 
     /// <summary>Any store implementation (tests, simulators). Workers fall back to timed polling.</summary>
