@@ -106,7 +106,8 @@ internal sealed class AfHarness
                 continue;
             }
 
-            if (!jumpClock || MemoryStore.NextWakeup(DefaultScope, Time.GetUtcNow()) is not { } wake)
+            // Retries and short waits are lived through; a wait for a person (an approval that times out in days, a parent looking in on a child now and then) is where a test stops and acts.
+            if (!jumpClock || MemoryStore.NextWakeup(DefaultScope, Time.GetUtcNow()) is not { } wake || wake - Time.GetUtcNow() > TimeSpan.FromSeconds(90))
             {
                 return;
             }

@@ -99,8 +99,6 @@ public sealed class AgentRegistration
 
     internal bool TurnLevel { get; private set; }
 
-    internal bool HostedTools { get; private set; }
-
     internal string? ModelAlias { get; private set; }
 
     internal int? MaxOutputTokensValue { get; private set; }
@@ -135,8 +133,9 @@ public sealed class AgentRegistration
     }
 
     /// <summary>
-    /// Allows an agent that cannot be run one model call at a time (an A2A agent, a custom agent, <c>LoopAgent</c> and <c>ToolApprovalAgent</c> wrappers) to be recorded one <b>turn</b> at a time instead.
-    /// This weakens the guarantee: tools run inside the turn, outside the tool policy and without their own recorded steps, and a crash during a turn runs the whole turn again.
+    /// Allows an agent that cannot be run one model call at a time (an A2A agent, a custom agent, <c>LoopAgent</c> and <c>ToolApprovalAgent</c> wrappers, an agent with tools that run at the model provider such as hosted web search or
+    /// hosted MCP servers) to be recorded one <b>turn</b> at a time instead. This weakens the guarantee: tools run inside the turn, outside the tool policy and without their own recorded steps, and a crash during a turn runs the whole turn again.
+    /// Approvals the agent asks for are still turned into Kairos approvals.
     /// </summary>
     public AgentRegistration AllowTurnLevel()
     {
@@ -151,13 +150,6 @@ public sealed class AgentRegistration
     public AgentRegistration AllowOpaqueNesting(params string[] tools)
     {
         Add(OpaqueNesting, tools);
-        return this;
-    }
-
-    /// <summary>Allows tools that run at the model provider (hosted web search, hosted MCP servers, code interpreters). They are outside the Kairos tool policy; approvals they ask for are still turned into Kairos approvals.</summary>
-    public AgentRegistration AllowHostedTools()
-    {
-        HostedTools = true;
         return this;
     }
 

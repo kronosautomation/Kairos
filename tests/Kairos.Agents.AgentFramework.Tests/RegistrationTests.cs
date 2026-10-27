@@ -96,11 +96,15 @@ public sealed class RegistrationTests
     }
 
     [Fact]
-    public void A_hosted_tool_is_refused_unless_allowed()
+    public void An_agent_with_a_hosted_tool_runs_a_turn_at_a_time_or_not_at_all()
     {
         var hosted = new HostedWebSearchTool();
         InvalidOperationException e = Assert.Throws<InvalidOperationException>(() => Create(af => af.AddAgent(AgentWith("a", hosted))));
-        Assert.Contains("AllowHostedTools()", e.Message, StringComparison.Ordinal);
+        Assert.Contains("hosted tool", e.Message, StringComparison.Ordinal);
+        Assert.Contains("outside the Kairos tool policy", e.Message, StringComparison.Ordinal);
+        Assert.Contains("AllowTurnLevel()", e.Message, StringComparison.Ordinal);
+
+        Assert.False(Create(af => af.AddAgent(AgentWith("a", hosted), r => r.AllowTurnLevel())).Definitions["a"].Stepped);
     }
 
     [Fact]

@@ -83,13 +83,16 @@ internal sealed partial class AgentDefinition
         }
 
         ChatClientAgent? inner = agent.GetService<ChatClientAgent>();
+        AITool? hosted = agent.GetService<ChatOptions>()?.Tools?.FirstOrDefault(t => t is not AIFunctionDeclaration);
         string? why = inner is null
             ? "it is not a ChatClientAgent"
             : agent.GetService<ToolApprovalAgent>() is not null
                 ? "it is wrapped in a ToolApprovalAgent, which approves and re-runs calls by itself"
                 : agent.GetService<LoopAgent>() is not null
                     ? "it is wrapped in a LoopAgent, which re-runs the agent by itself"
-                    : null;
+                    : hosted is not null
+                        ? $"it has a hosted tool '{hosted.Name}' ({hosted.GetType().Name}), which runs at the model provider, outside the Kairos tool policy"
+                        : null;
         if (why is not null && !registration.TurnLevel)
         {
             throw new InvalidOperationException(
@@ -133,18 +136,8 @@ internal sealed partial class AgentDefinition
     {
         if (tool is not AIFunction function)
         {
-            if (tool is AIFunctionDeclaration)
-            {
-                throw new InvalidOperationException($"Agent '{agent}' has a tool '{tool.Name}' that is only a declaration: nothing can run it. Give it an implementation, or remove it.");
-            }
-
-            if (!registration.HostedTools)
-            {
-                throw new InvalidOperationException(
-                    $"Agent '{agent}' has a hosted tool '{tool.Name}' ({tool.GetType().Name}), which runs at the model provider, outside the Kairos tool policy. Register the agent with AllowHostedTools() if that is intended.");
-            }
-
-            throw new InvalidOperationException($"Hosted tools are not supported yet (tool '{tool.Name}' of agent '{agent}'). Remove it or use a function tool.");
+            // Only a declaration remains here: hosted tools make the agent turn level before its tools are looked at.
+            throw new InvalidOperationException($"Agent '{agent}' has a tool '{tool.Name}' that is only a declaration: nothing can run it. Give it an implementation, or remove it.");
         }
 
         string name = function.Name;

@@ -137,6 +137,18 @@ public sealed class DurableAgentFunction : AIFunction
         Description = description ?? "";
     }
 
+    /// <summary>
+    /// The nested agent registered as <paramref name="agentName"/>, as a tool for another agent. Use it where the calling agent is built, which is before the durable agents exist
+    /// (<c>durableAgents.Get(name).AsAIFunction()</c> is the same thing once they do).
+    /// </summary>
+    /// <param name="agentName">The name the nested agent is registered under.</param>
+    /// <param name="description">What the model is told the tool does. Say when to ask the nested agent.</param>
+    public static DurableAgentFunction For(string agentName, string? description = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
+        return new DurableAgentFunction(agentName, description);
+    }
+
     /// <summary>The nested agent.</summary>
     public string AgentName { get; }
 
