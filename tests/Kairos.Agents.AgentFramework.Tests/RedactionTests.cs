@@ -115,6 +115,8 @@ public sealed class RedactionTests
     [InlineData("""{"stateBag":{"InMemoryChatHistoryProvider":{"messages":[{"role":"user","contents":[],"surprise":1}]}}}""", "surprise")]
     [InlineData("""{"stateBag":{"InMemoryChatHistoryProvider":{"messages":[{"role":"user","contents":[{"$type":"hostedFile","fileId":"f"}]}]}}}""", "hostedFile")]
     [InlineData("""{"stateBag":{"InMemoryChatHistoryProvider":{"messages":[{"role":"user","contents":[{"$type":"text","text":"x","annotations":[]}]}]}}}""", "annotations")]
+    [InlineData("""{"stateBag":{"InMemoryChatHistoryProvider":{"messages":[{"role":"user","contents":[{"$type":"imageGenerationToolCall"}]}]}}}""", "imageGenerationToolCall")]
+    [InlineData("""{"stateBag":{"InMemoryChatHistoryProvider":{"messages":[{"role":"user","contents":[],"additionalProperties":{"x":1}}]}}}""", "additionalProperties")]
     [InlineData("""[1,2]""", "not a JSON object")]
     public void A_shape_the_redactor_does_not_know_is_refused_not_skipped(string json, string named)
     {
