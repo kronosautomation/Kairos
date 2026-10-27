@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\src\Kairos.Mcp.TaskStore\Kairos.Mcp.TaskStore.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Cloud.SelfHosted\Kairos.Cloud.SelfHosted.csproj" />
     <ProjectReference Include="..\Kairos.Testing\Kairos.Testing.csproj" />
+    <ProjectReference Include="..\Kairos.Conformance\Kairos.Conformance.csproj" />
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

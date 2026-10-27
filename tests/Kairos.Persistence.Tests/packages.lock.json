@@ -496,6 +496,13 @@
           "Kairos.Core": "[1.0.0, )"
         }
       },
+      "kairos.conformance": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )",
+          "xunit": "[2.9.3, )"
+        }
+      },
       "kairos.core": {
         "type": "Project",
         "dependencies": {

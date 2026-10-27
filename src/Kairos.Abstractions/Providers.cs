@@ -163,6 +163,37 @@ public interface IWorkerAuthenticator
     ValueTask<AuthResult> AuthenticateAsync(Credential credential, DateTimeOffset now, CancellationToken cancellationToken);
 }
 
+// ---- accept-once sign-in --------------------------------------------------------------------------------------------
+
+/// <summary>The outcome of remembering a credential that was just accepted.</summary>
+public enum ReplayDecision
+{
+    /// <summary>It was not remembered (or only as an expired entry): this presentation is the first.</summary>
+    Added,
+
+    /// <summary>It is remembered and not yet expired: the credential has been accepted before.</summary>
+    Duplicate,
+
+    /// <summary>A bounded store is full of live entries and cannot remember this one; accepting it would make a replay possible later, so the caller refuses.</summary>
+    Full,
+}
+
+/// <summary>
+/// Remembers credentials that were accepted once (a signed request, an ID token), until they would be refused as too old anyway, so that a second presentation is refused. A cloud sign-in credential is a bearer
+/// credential: with several server instances the memory has to be shared or each instance accepts it once. An entry is made <b>only after</b> the credential was verified and mapped to a scope, so
+/// junk cannot fill the store, and the scope is part of the key (the store keeps tenants apart like everything else). Adding is atomic: of any number of concurrent presentations exactly one gets
+/// <see cref="ReplayDecision.Added"/>, on one instance or on many.
+/// </summary>
+public interface IReplayStore
+{
+    /// <param name="scope">The scope the credential was mapped to.</param>
+    /// <param name="key">What names the credential (a hash of it; never the credential itself).</param>
+    /// <param name="expiresAt">When the credential would be refused as too old anyway; the entry may be forgotten after it.</param>
+    /// <param name="now">The caller's current time.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    ValueTask<ReplayDecision> TryAddAsync(TenantScope scope, string key, DateTimeOffset expiresAt, DateTimeOffset now, CancellationToken cancellationToken);
+}
+
 // ---- database sign-in ---------------------------------------------------------------------------------------------
 
 /// <summary>Which database a token is for: the host, port and role a connection is about to be made as.</summary>
