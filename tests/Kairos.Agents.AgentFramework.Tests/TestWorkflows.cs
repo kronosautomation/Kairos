@@ -355,6 +355,16 @@ internal static class TestWorkflows
         return builder.AddEdge(previous, end).WithOutputFrom(conclude, end).Build();
     }
 
+    /// <summary>The same four executors as <see cref="Chain"/> with different edges: a diamond.</summary>
+    public static Workflow Diamond(Ledger ledger)
+    {
+        ExecutorBinding a = new Step("a", ledger, "").BindExecutor();
+        ExecutorBinding b = new Step("b", ledger, "").BindExecutor();
+        ExecutorBinding c = new Step("c", ledger, "").BindExecutor();
+        ExecutorBinding done = new Finish("done", ledger).BindExecutor();
+        return new WorkflowBuilder(a).AddEdge(a, b).AddEdge(a, c).AddEdge(b, done).AddEdge(c, done).WithOutputFrom(done).Build();
+    }
+
     /// <summary>The same as <see cref="Question"/> with the first executor of another type (and the same id).</summary>
     public static Workflow QuestionOtherPrepare(Ledger ledger)
     {

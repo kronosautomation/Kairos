@@ -174,6 +174,7 @@ public sealed class WorkflowContractTests
         Assert.NotEqual(first, WorkflowDefinition.StructureOf(TestWorkflows.QuestionWithAudit(new Ledger())));
         Assert.NotEqual(first, WorkflowDefinition.StructureOf(TestWorkflows.Approval(new Ledger()))); // a port of another type
         Assert.NotEqual(first, WorkflowDefinition.StructureOf(TestWorkflows.QuestionOtherPrepare(new Ledger()))); // the same ids, an executor of another type
+        Assert.NotEqual(WorkflowDefinition.StructureOf(TestWorkflows.Chain(new Ledger())), WorkflowDefinition.StructureOf(TestWorkflows.Diamond(new Ledger()))); // the same executors, other edges
     }
 
     [Fact]
@@ -251,6 +252,30 @@ public sealed class WorkflowContractTests
         WorkflowTypePolicy policy = Policy();
         SnapshotShapeException ex = Assert.Throws<SnapshotShapeException>(() => policy.RedactCheckpoint(JsonNode.Parse(json)!, Redact));
         Assert.Contains(mentions, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_walker_redacts_the_data_of_an_outstanding_request_and_the_requests_an_executor_wrapped()
+    {
+        WorkflowTypePolicy policy = Policy(r => r.RedactState<Ticket>(t => t with { Body = Redact(t.Body) }));
+        var checkpoint = JsonNode.Parse("""
+            {
+              "runnerData": {
+                "outstandingRequests": [ { "portInfo": { "portId": "ask" }, "requestId": "r1", "data": { "typeId": { "typeName": "Kairos.Agents.AgentFramework.Tests.Ticket" }, "value": { "id": "t", "body": "call SECRET now" } } } ]
+              },
+              "stateData": {
+                "ask||WrappedRequestsStateKey": { "typeId": { "typeName": "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib, Version=10.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[Microsoft.Agents.AI.Workflows.ExternalRequest, Microsoft.Agents.AI.Workflows, Version=1.24.0.0, Culture=neutral, PublicKeyToken=f300afd708cefcd3]]" },
+                  "value": { "r1": { "portInfo": { "portId": "ask" }, "requestId": "r1", "data": { "typeId": { "typeName": "System.String" }, "value": "also SECRET" } } } }
+              }
+            }
+            """)!;
+
+        policy.RedactCheckpoint(checkpoint, Redact);
+
+        string text = checkpoint.ToJsonString();
+        Assert.DoesNotContain("SECRET", text, StringComparison.Ordinal);
+        Assert.Contains("call [x] now", text, StringComparison.Ordinal);
+        Assert.Contains("also [x]", text, StringComparison.Ordinal);
     }
 
     [Fact]
