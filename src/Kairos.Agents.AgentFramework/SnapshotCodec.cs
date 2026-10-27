@@ -27,13 +27,14 @@ public sealed class SnapshotIntegrityException : Exception
 
 /// <summary>
 /// What a session snapshot is made of, so that it can be recorded once and then only as changes: a canonical form (object members in ordinal order, so the same session is the same text whoever wrote it), a content hash of
-/// that form, and a change (<see cref="Diff"/>) that <see cref="Apply"/> turns back into the new snapshot. The hash is what makes a reference to a snapshot checkable: whoever applies changes compares the result with the hash that was
+/// that form, and a change (<see cref="Diff(JsonNode?, JsonNode?)"/>) that <see cref="Apply(JsonNode?, JsonNode)"/> turns back into the new snapshot. The hash is what makes a reference to a snapshot checkable: whoever applies changes compares the result with the hash that was
 /// recorded for it.
 /// </summary>
 /// <remarks>
 /// A change is a JSON object: <c>{"e": 1}</c> is no change at all; <c>{"s": value}</c> replaces the value; <c>{"o": {name: change}, "d": [names]}</c> changes members of an object (a member that is new carries <c>{"s": value}</c>) and removes the listed ones;
 /// <c>{"f": d, "k": n, "t": [values]}</c> drops the first d elements of an array (none when "f" is absent), keeps the next n and appends the tail. A conversation grows by appending messages, so its change is the new messages;
-/// one kept to a window also drops its oldest.
+/// one kept to a window also drops its oldest. A checkpoint of a workflow may also use <c>{"m": path, "c": change}</c> (the value at that path of the snapshot the change applies to, with the change applied to it: a message handed on from one executor to the next),
+/// <c>{"w": {name: change}}</c> (a new object some of whose members are such references) and <c>{"a": [changes]}</c> (the same for a new array).
 /// </remarks>
 internal static class SnapshotCodec
 {
@@ -79,7 +80,15 @@ internal static class SnapshotCodec
     }
 
     /// <summary>The change that turns <paramref name="before"/> into <paramref name="after"/> (both canonical), or null when they are equal.</summary>
-    public static JsonNode? Diff(JsonNode? before, JsonNode? after)
+    public static JsonNode? Diff(JsonNode? before, JsonNode? after) => Diff(before, after, allowMoves: false);
+
+    /// <summary>
+    /// The same, and with <paramref name="allowMoves"/> a value that is new at its place but is already in <paramref name="before"/> somewhere else (a message handed from one executor's queue to the next) is
+    /// written as a reference to where it was, with what was added to it, instead of being written out again. Only a checkpoint of a workflow uses this; a session's changes are written as they always were.
+    /// </summary>
+    public static JsonNode? Diff(JsonNode? before, JsonNode? after, bool allowMoves) => Diff(before, after, allowMoves ? MoveIndex.Of(before) : null);
+
+    private static JsonNode? Diff(JsonNode? before, JsonNode? after, MoveIndex? moves)
     {
         if (JsonNode.DeepEquals(before, after))
         {
@@ -93,9 +102,9 @@ internal static class SnapshotCodec
             {
                 if (!b.TryGetPropertyValue(member.Key, out JsonNode? old))
                 {
-                    members[member.Key] = new JsonObject { ["s"] = member.Value?.DeepClone() };
+                    members[member.Key] = Written(member.Value, moves);
                 }
-                else if (Diff(old, member.Value) is { } change)
+                else if (Diff(old, member.Value, moves) is { } change)
                 {
                     members[member.Key] = change;
                 }
@@ -158,7 +167,149 @@ internal static class SnapshotCodec
             return change;
         }
 
-        return new JsonObject { ["s"] = after?.DeepClone() };
+        return Written(after, moves);
+    }
+
+    /// <summary>A value with nothing at its place to compare with: written out, or (when moves are allowed) as references to the parts of it that are elsewhere in the snapshot it replaces.</summary>
+    private static JsonNode Written(JsonNode? value, MoveIndex? moves)
+    {
+        if (moves is not null && value is JsonObject or JsonArray)
+        {
+            bool moved = false;
+            JsonNode expression = Express(value, moves, ref moved);
+            if (moved)
+            {
+                return expression;
+            }
+        }
+
+        return new JsonObject { ["s"] = value?.DeepClone() };
+    }
+
+    /// <summary>The smallest value, as compact text, that is worth a reference.</summary>
+    private const int MoveMinimum = 256;
+
+    private static JsonNode Express(JsonNode? value, MoveIndex moves, ref bool moved)
+    {
+        if (value is not (JsonObject or JsonArray))
+        {
+            return new JsonObject { ["s"] = value?.DeepClone() };
+        }
+
+        string text = Text(value);
+        if (text.Length >= MoveMinimum)
+        {
+            if (moves.Find(text) is { } path)
+            {
+                moved = true;
+                return new JsonObject { ["m"] = path.DeepClone() };
+            }
+
+            if (value is JsonArray array && array.Count > 1)
+            {
+                // The same list with a few more at the end (a conversation that grew by a message while it moved on).
+                string[] items = [.. array.Select(item => item is null ? "null" : Text(item))];
+                for (int drop = 1; drop <= 4 && drop < array.Count; drop++)
+                {
+                    string prefix = "[" + string.Join(',', items.Take(array.Count - drop)) + "]";
+                    if (prefix.Length >= MoveMinimum && moves.Find(prefix) is { } source)
+                    {
+                        var tail = new JsonArray();
+                        for (int i = array.Count - drop; i < array.Count; i++)
+                        {
+                            tail.Add(array[i]?.DeepClone());
+                        }
+
+                        moved = true;
+                        return new JsonObject { ["m"] = source.DeepClone(), ["c"] = new JsonObject { ["k"] = array.Count - drop, ["t"] = tail } };
+                    }
+                }
+            }
+
+            // A small wrapper around something that is elsewhere: look inside.
+            bool inside = false;
+            JsonNode built;
+            if (value is JsonObject o)
+            {
+                var members = new JsonObject();
+                foreach (KeyValuePair<string, JsonNode?> member in o)
+                {
+                    members[member.Key] = Express(member.Value, moves, ref inside);
+                }
+
+                built = new JsonObject { ["w"] = members };
+            }
+            else
+            {
+                var elements = new JsonArray();
+                foreach (JsonNode? item in (JsonArray)value)
+                {
+                    elements.Add(Express(item, moves, ref inside));
+                }
+
+                built = new JsonObject { ["a"] = elements };
+            }
+
+            if (inside)
+            {
+                moved = true;
+                return built;
+            }
+        }
+
+        return new JsonObject { ["s"] = value.DeepClone() };
+    }
+
+    /// <summary>The containers of a snapshot that are large enough to be worth a reference, found by what they say, and where each is.</summary>
+    private sealed class MoveIndex
+    {
+        private readonly Dictionary<string, JsonArray> _paths = new(StringComparer.Ordinal);
+
+        public static MoveIndex? Of(JsonNode? root)
+        {
+            var index = new MoveIndex();
+            if (root is JsonObject or JsonArray)
+            {
+                index.Add(root, []);
+            }
+
+            return index;
+        }
+
+        public JsonArray? Find(string text) => _paths.TryGetValue(Hash(text), out JsonArray? path) ? path : null;
+
+        private void Add(JsonNode node, List<JsonNode> path)
+        {
+            if (Text(node).Length >= MoveMinimum)
+            {
+                _paths.TryAdd(Hash(Text(node)), new JsonArray([.. path.Select(p => p.DeepClone())]));
+            }
+
+            if (node is JsonObject o)
+            {
+                foreach (KeyValuePair<string, JsonNode?> member in o)
+                {
+                    if (member.Value is JsonObject or JsonArray)
+                    {
+                        path.Add(JsonValue.Create(member.Key));
+                        Add(member.Value, path);
+                        path.RemoveAt(path.Count - 1);
+                    }
+                }
+            }
+            else if (node is JsonArray a)
+            {
+                for (int i = 0; i < a.Count; i++)
+                {
+                    if (a[i] is JsonObject or JsonArray)
+                    {
+                        path.Add(JsonValue.Create(i));
+                        Add(a[i]!, path);
+                        path.RemoveAt(path.Count - 1);
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>How many elements of <paramref name="after"/>, from its start, equal the elements of <paramref name="before"/> from <paramref name="from"/>.</summary>
@@ -175,7 +326,9 @@ internal static class SnapshotCodec
 
     /// <summary>The value that results from applying <paramref name="change"/> to <paramref name="before"/>. Neither argument is changed.</summary>
     /// <exception cref="SnapshotIntegrityException">The change does not fit what it is applied to.</exception>
-    public static JsonNode? Apply(JsonNode? before, JsonNode change)
+    public static JsonNode? Apply(JsonNode? before, JsonNode change) => Apply(before, change, before);
+
+    private static JsonNode? Apply(JsonNode? before, JsonNode change, JsonNode? root)
     {
         if (change is not JsonObject c)
         {
@@ -185,6 +338,45 @@ internal static class SnapshotCodec
         if (c.TryGetPropertyValue("s", out JsonNode? set))
         {
             return set?.DeepClone();
+        }
+
+        if (c.TryGetPropertyValue("m", out JsonNode? from))
+        {
+            // A value that is in the snapshot this change applies to, somewhere else, with what was added to it.
+            JsonNode? found = Resolve(root, from);
+            return c["c"] is { } added ? Apply(found, added, root) : found?.DeepClone();
+        }
+
+        if (c.TryGetPropertyValue("w", out JsonNode? built))
+        {
+            if (built is not JsonObject written)
+            {
+                throw new SnapshotIntegrityException("A written object is not an object.");
+            }
+
+            var made = new JsonObject();
+            foreach (KeyValuePair<string, JsonNode?> member in written)
+            {
+                made[member.Key] = member.Value is null ? null : Apply(null, member.Value, root);
+            }
+
+            return Sort(made);
+        }
+
+        if (c.TryGetPropertyValue("a", out JsonNode? elements))
+        {
+            if (elements is not JsonArray written)
+            {
+                throw new SnapshotIntegrityException("A written array is not an array.");
+            }
+
+            var made = new JsonArray();
+            foreach (JsonNode? item in written)
+            {
+                made.Add(item is null ? null : Apply(null, item, root));
+            }
+
+            return made;
         }
 
         if (c.ContainsKey("e"))
@@ -232,7 +424,7 @@ internal static class SnapshotCodec
                 continue;
             }
 
-            changed[member.Key] = members is not null && members.TryGetPropertyValue(member.Key, out JsonNode? inner) && inner is not null ? Apply(member.Value, inner) : member.Value?.DeepClone();
+            changed[member.Key] = members is not null && members.TryGetPropertyValue(member.Key, out JsonNode? inner) && inner is not null ? Apply(member.Value, inner, root) : member.Value?.DeepClone();
         }
 
         if (members is not null)
@@ -241,13 +433,34 @@ internal static class SnapshotCodec
             {
                 if (!obj.ContainsKey(member.Key) && member.Value is not null)
                 {
-                    changed[member.Key] = Apply(null, member.Value);
+                    changed[member.Key] = Apply(null, member.Value, root);
                 }
             }
         }
 
         // Members are kept in canonical order, whatever order they were added in.
         return Sort(changed);
+    }
+
+    private static JsonNode? Resolve(JsonNode? root, JsonNode? path)
+    {
+        if (path is not JsonArray steps)
+        {
+            throw new SnapshotIntegrityException("A reference to the snapshot has no path.");
+        }
+
+        JsonNode? at = root;
+        foreach (JsonNode? step in steps)
+        {
+            at = at switch
+            {
+                JsonObject o when step is JsonValue key && key.TryGetValue(out string? name) && o.TryGetPropertyValue(name, out JsonNode? member) => member,
+                JsonArray a when step is JsonValue index && index.TryGetValue(out int position) && position >= 0 && position < a.Count => a[position],
+                _ => throw new SnapshotIntegrityException("A reference to the snapshot points at nothing."),
+            };
+        }
+
+        return at;
     }
 }
 

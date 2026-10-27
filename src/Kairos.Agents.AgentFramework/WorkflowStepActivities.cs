@@ -192,7 +192,7 @@ public sealed partial class AgentFrameworkRuntime
         bool recordWhole = before is null || request.StepsSinceFull + 1 >= Options.FullSnapshotEvery;
         if (!recordWhole)
         {
-            string delta = (SnapshotCodec.Diff(before!.Node, after.Node) ?? new JsonObject { ["e"] = 1 }).ToJsonString();
+            string delta = (SnapshotCodec.Diff(before!.Node, after.Node, allowMoves: true) ?? new JsonObject { ["e"] = 1 }).ToJsonString();
             if (delta.Length < after.Text.Length)
             {
                 change = SnapshotCodec.Element(delta);

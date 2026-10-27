@@ -64,7 +64,8 @@ public sealed class WorkflowSampleTests
                 workflow = (await store.ListRunsAsync(KairosOptions.DefaultScope, new RunFilter(), 20, CancellationToken.None)).FirstOrDefault(r => r.WorkflowId.StartsWith("afw/refund-review/", StringComparison.Ordinal));
                 if (workflow is not null)
                 {
-                    asked = AgentHistory.PendingApprovals(await client.GetOpenedHistoryAsync(workflow.Run)).FirstOrDefault();
+                    IReadOnlyList<PendingApproval> waiting = AgentHistory.PendingApprovals(await client.GetOpenedHistoryAsync(workflow.Run));
+                    asked = waiting.Count > 0 ? waiting[0] : null;
                 }
 
                 await Task.Delay(10);

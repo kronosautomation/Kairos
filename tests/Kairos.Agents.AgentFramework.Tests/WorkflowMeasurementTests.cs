@@ -22,6 +22,27 @@ public sealed class WorkflowMeasurementTests
         }
     }
 
+    /// <summary>The same, with the history kept in a scope every executor shares (executor state under one name) and only a token passed on.</summary>
+    private sealed class GrowInState(string id) : Executor<string, string>(id)
+    {
+        public override async ValueTask<string> HandleAsync(string message, AfContext context, CancellationToken cancellationToken)
+        {
+            List<ChatMessage> history = await context.ReadOrInitStateAsync("history", () => new List<ChatMessage>(), "chat", cancellationToken);
+            history.Add(new ChatMessage(ChatRole.Assistant, MeasurementTests.Record(3, history.Count)));
+            await context.QueueStateUpdateAsync("history", history, "chat", cancellationToken);
+            return message;
+        }
+    }
+
+    private sealed class AskAboutState() : Executor<string, Ticket>("ask-person")
+    {
+        public override async ValueTask<Ticket> HandleAsync(string message, AfContext context, CancellationToken cancellationToken)
+        {
+            List<ChatMessage> history = await context.ReadStateAsync<List<ChatMessage>>("history", "chat", cancellationToken) ?? [];
+            return new Ticket("t", $"{history.Count} messages");
+        }
+    }
+
     private sealed class Start() : Executor<string, List<ChatMessage>>("start")
     {
         public override ValueTask<List<ChatMessage>> HandleAsync(string message, AfContext context, CancellationToken cancellationToken) => new([new ChatMessage(ChatRole.User, message)]);
@@ -30,6 +51,29 @@ public sealed class WorkflowMeasurementTests
     private sealed class AskPerson() : Executor<List<ChatMessage>, Ticket>("ask-person")
     {
         public override ValueTask<Ticket> HandleAsync(List<ChatMessage> message, AfContext context, CancellationToken cancellationToken) => new(new Ticket("t", $"{message.Count} messages"));
+    }
+
+    private static Workflow BuildState()
+    {
+        ExecutorBinding start = new PassOn().BindExecutor();
+        var builder = new WorkflowBuilder(start);
+        ExecutorBinding previous = start;
+        for (int i = 0; i < Supersteps - 3; i++)
+        {
+            ExecutorBinding next = new GrowInState("g" + i).BindExecutor();
+            builder.AddEdge(previous, next);
+            previous = next;
+        }
+
+        ExecutorBinding ask = new AskAboutState().BindExecutor();
+        ExecutorBinding gate = RequestPort.Create<Ticket, string>("reply").BindAsExecutor();
+        ExecutorBinding done = new ConcludeText("done", new Ledger()).BindExecutor();
+        return builder.AddEdge(previous, ask).AddEdge(ask, gate).AddEdge(gate, done).WithOutputFrom(done).Build();
+    }
+
+    private sealed class PassOn() : Executor<string, string>("start")
+    {
+        public override ValueTask<string> HandleAsync(string message, AfContext context, CancellationToken cancellationToken) => new(message);
     }
 
     private static Workflow Build()
@@ -61,7 +105,7 @@ public sealed class WorkflowMeasurementTests
         _ => 0,
     };
 
-    private static AfHarness Harness(int fullEvery, int supersteps, List<CountingStore> counting) =>
+    private static AfHarness Harness(int fullEvery, int supersteps, List<CountingStore> counting, bool inState = false) =>
         new(af => af
             .Configure(o =>
             {
@@ -69,7 +113,7 @@ public sealed class WorkflowMeasurementTests
                 o.SuperstepsPerStep = supersteps;
                 o.MaxCheckpointBytes = 16 * 1024 * 1024;
             })
-            .AddWorkflow<string>("long", _ => Build(), r => r.JsonOptions(AIJsonUtilities.DefaultOptions)),
+            .AddWorkflow<string>("long", _ => inState ? BuildState() : Build(), r => r.JsonOptions(AIJsonUtilities.DefaultOptions)),
             wrapStore: store =>
             {
                 var c = new CountingStore(store);
@@ -78,13 +122,16 @@ public sealed class WorkflowMeasurementTests
             });
 
     [Theory]
-    [InlineData(1, 1)]
-    [InlineData(16, 1)]
-    [InlineData(16, 5)]
-    public async Task What_a_workflow_of_a_hundred_supersteps_with_a_chat_history_costs_in_history(int fullEvery, int supersteps)
+    [InlineData(1, 1, false)]
+    [InlineData(16, 1, false)]
+    [InlineData(16, 5, false)]
+    [InlineData(1, 1, true)]
+    [InlineData(16, 1, true)]
+    [InlineData(16, 5, true)]
+    public async Task What_a_workflow_of_a_hundred_supersteps_with_a_chat_history_costs_in_history(int fullEvery, int supersteps, bool inState)
     {
         var counting = new List<CountingStore>();
-        AfHarness h = Harness(fullEvery, supersteps, counting);
+        AfHarness h = Harness(fullEvery, supersteps, counting, inState);
         DurableWorkflowRun run = await AfHarness.Retry(async () => await h.Workflows.Get("long").StartAsync("write me a long story", "w1").AsTask());
 
         await h.DriveAsync();
@@ -92,11 +139,11 @@ public sealed class WorkflowMeasurementTests
 
         AfwStepResult[] results = [.. history.OfType<ActivityCompleted>().Select(c => AfCodec.Read(c.Result, AfwJson.Default.AfwStepResult))];
         long total = history.Sum(Size);
-        long checkpointBytes = results.Last().CheckpointBytes ?? 0;
+        long checkpointBytes = results.Max(r => r.CheckpointBytes ?? 0);
         int whole = results.Count(r => r.Checkpoint is not null);
         Console.Error.WriteLine(
-            $"[measure] FullSnapshotEvery={fullEvery}, SuperstepsPerStep={supersteps}: {results.Length} steps, {results.Sum(r => r.Supersteps)} supersteps; history {total:N0} bytes ({total / Math.Max(1, results.Length):N0} per step); " +
-            $"checkpoint at the end {checkpointBytes:N0} bytes; {whole} steps record it whole, {results.Length - whole} as changes");
+            $"[measure] history in {(inState ? "shared state" : "the messages passed on")}, FullSnapshotEvery={fullEvery}, SuperstepsPerStep={supersteps}: {results.Length} steps, {results.Sum(r => r.Supersteps)} supersteps; history {total:N0} bytes ({total / Math.Max(1, results.Length):N0} per step); " +
+            $"largest checkpoint {checkpointBytes:N0} bytes; {whole} steps record it whole, {results.Length - whole} as changes");
         Assert.True(results.Sum(r => r.Supersteps) >= Supersteps - 2);
         Assert.True(checkpointBytes > 100 * 1024, "the checkpoint should have grown with the history it carries");
     }
