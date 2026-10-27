@@ -100,7 +100,7 @@ asks whether the answer is there; a `DurableTurn` is looked at by one caller at 
 ### Keeping long conversations small
 
 A worker loads the whole session for every model call, so a long conversation costs more with every message. What history records is kept far smaller than that: a step names the session an earlier step recorded instead of carrying it again,
-the session is recorded whole every `FullSnapshotEvery` steps (8 by default) and otherwise as the change since the step before, and workers remember the sessions they ran (`SnapshotCacheBytes`). A worker that does not have the session, after a deploy
+the session is recorded whole every `FullSnapshotEvery` steps (16 by default) and otherwise as the change since the step before, and workers remember the sessions they ran (`SnapshotCacheBytes`). A worker that does not have the session, after a deploy
 or a move to another worker, is sent it once. This keeps what grows with the length of a conversation from growing with the square of it.
 
 It does not make the session itself smaller, and `MaxSnapshotBytes` (512 KiB by default) fails a step with a clear error instead of letting a session grow without limit. **For conversations that go on, keep the session small with Agent Framework's own

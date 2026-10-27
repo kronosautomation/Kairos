@@ -32,9 +32,9 @@ public sealed class AgentFrameworkOptions
 
     /// <summary>
     /// How often history holds the whole session: a step records it whole when this many steps have passed since the last whole record, and otherwise records only what changed (when that is smaller). Reading a session
-    /// applies at most this many changes to a whole one. Default 8; 1 records it whole every time.
+    /// applies at most this many changes to a whole one. Default 16; 1 records it whole every time.
     /// </summary>
-    public int FullSnapshotEvery { get; set; } = 8;
+    public int FullSnapshotEvery { get; set; } = 16;
 
     /// <summary>How much memory a worker may use to remember the sessions of the steps it ran, so that the next step of a conversation need not be sent the session again. Least recently used out first. Default 64 MiB.</summary>
     public long SnapshotCacheBytes { get; set; } = 64L * 1024 * 1024;

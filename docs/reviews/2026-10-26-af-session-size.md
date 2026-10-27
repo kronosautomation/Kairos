@@ -45,7 +45,7 @@ Sensitivity to the interval (100 messages, no compaction), so that the default c
 | 16 | 14,465,501 B | 144,655 B |
 | 32 | 9,390,053 B | 93,900 B |
 
-A larger interval records fewer whole sessions; the cost is that a read applies up to N-1 changes (microseconds) and that a worker without the session is sent it from the last whole one. 16 would be a better default than 8 for sessions this size. I kept 8, which is what the other figures were taken with; the choice is yours.
+A larger interval records fewer whole sessions; the cost is that a read applies up to N-1 changes (microseconds) and that a worker without the session is sent it from the last whole one. 16 would be a better default than 8 for sessions this size. I kept 8 for the figures above (taken with it), and then changed the default to 16 on request (27 Oct); the 100-message total without compaction is then 14.5 MB.
 
 ## Compaction: what I tried, and why the documented default is the history provider's reducer
 
