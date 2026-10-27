@@ -170,6 +170,7 @@ public sealed class ConversationTests
         ConversationEndedException e = await Assert.ThrowsAsync<ConversationEndedException>(async () => await h.Agents.Get("chat").TryReadAsync(big));
         Assert.Contains("SnapshotTooLargeException", e.Message, StringComparison.Ordinal);
         Assert.Contains("MaxSnapshotBytes", e.Message, StringComparison.Ordinal);
+        Assert.Equal(2, model.CallCount); // a failure that is the caller's to fix is not retried: the model was not asked a third time
     }
 
     [Fact]
