@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>Makes Microsoft Agent Framework agents durable on Kairos: each model call and each tool call is a recorded step, sessions survive crashes and redeploys, approvals wait without holding compute, and the tool policy, budgets and redaction apply as they do to native Kairos agents.</Description>
+    <Description>Makes Microsoft Agent Framework agents and workflows durable: each model call, tool call and workflow superstep is a recorded step, sessions and checkpoints survive crashes and redeploys, approvals and requests wait without holding compute, and the tool policy, budgets and redaction apply as they do to native Kairos agents.</Description>
     <!-- Microsoft.Agents.AI is not trim- or AOT-annotated, so this package is not either. (The engine and Kairos.Agents are.) -->
     <NoWarn>$(NoWarn);MEAI001;MAAI001</NoWarn>
   </PropertyGroup>

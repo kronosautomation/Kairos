@@ -82,11 +82,34 @@ public sealed class UnknownWorkflowException : Exception
 }
 
 /// <summary>
+/// What an executor of a durable workflow may know about the step it runs in, for the services it calls: an executor can be run again after a crash, and a service that honours an idempotency key makes that harmless.
+/// Set only while a step runs.
+/// </summary>
+public static class AgentFrameworkWorkflowContext
+{
+    /// <summary>True while a durable workflow's step is running.</summary>
+    public static bool IsInStep => WorkflowStepScope.Current is not null;
+
+    /// <summary>
+    /// The idempotency key to pass to a service for what the executor <paramref name="executorId"/> does in this step: the same every time the step is run again (after a crash, a lost lease, a retry), and different for every
+    /// executor and every step. Pass it on, and the service does the thing once.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Not inside an executor of a durable workflow.</exception>
+    public static string IdempotencyKey(string executorId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executorId);
+        return WorkflowStepScope.Current is { } step ? $"{step.StepKey}:{executorId}" : throw new InvalidOperationException("This is not inside an executor of a durable workflow.");
+    }
+}
+
+/// <summary>
 /// What a step of a durable workflow tells the durable agents its executors call: which step this is, so that a call repeated after a crash is recognised and answered from the conversation it started; and how long the
 /// executor may wait for an answer. Set only while a step runs.
 /// </summary>
-internal sealed class WorkflowStepScope(string workflow, string stepKey, TimeSpan maxWait)
+internal sealed class WorkflowStepScope(string workflow, string stepKey, TimeSpan maxWait, Func<ValueTask>? heartbeat = null)
 {
+    public string StepKey { get; } = stepKey;
+
     /// <summary>The id prefix of conversations that belong to a workflow: they are cancelled with it.</summary>
     public const string OwnedPrefix = "wf.";
 
@@ -122,10 +145,13 @@ internal sealed class WorkflowStepScope(string workflow, string stepKey, TimeSpa
     {
         string key = $"{kind}|{agent}|{session}|{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)))}";
         int n = _occurrences.AddOrUpdate(key, 1, (_, count) => count + 1);
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{stepKey}|{key}|{n}")))[..32];
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{StepKey}|{key}|{n}")))[..32];
     }
 
     public void Own(string workflowId) => _owned.TryAdd(workflowId, 0);
+
+    /// <summary>Renews the step activity's lease: an activity that waits for a conversation says now and then that it is alive (the worker also does it by itself while it runs, when it can).</summary>
+    public ValueTask HeartbeatAsync() => heartbeat is null ? ValueTask.CompletedTask : heartbeat();
 
     /// <summary>Counts an activity as waiting for a conversation until the returned scope is disposed.</summary>
     public IDisposable StartWaiting()

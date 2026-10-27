@@ -51,6 +51,8 @@ public sealed class DurableAgents
 
     internal AgentFrameworkOptions Options => _runtime.Options;
 
+    internal Func<CancellationToken, ValueTask>? WaitHook => _runtime.WhileWaitingForConversation;
+
     internal TimeProvider Time => _time;
 
     internal async ValueTask<DurableTurn> SendAsync(

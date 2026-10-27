@@ -15,6 +15,8 @@ ordinary `AIAgent`, so everything that takes one (Agent Framework workflows, hos
 
 [!code-csharp[](../../samples/AgentFramework/SupportAgentSample.cs#use)]
 
+For Agent Framework *workflows* (graphs of executors) see [workflows, made durable](agent-framework-workflows.md).
+
 The same agent is available as a keyed `AIAgent` service (the key is its name), as `DurableAgents.Get("support")`, and for an agent you already hold, `agent.AsDurable(durableAgents)`.
 
 ## What is recorded

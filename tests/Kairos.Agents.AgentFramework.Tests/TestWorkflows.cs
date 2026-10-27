@@ -254,6 +254,20 @@ internal static class TestWorkflows
         return builder.AddEdge(previous, end).WithOutputFrom(end).Build();
     }
 
+    /// <summary>split > (a ticket for a person to approve, and a chain of two steps) > both end in an output: a fan-out, a decision in the middle.</summary>
+    public static Workflow FanOutWithDecision(Ledger ledger)
+    {
+        ExecutorBinding split = new Split("split", ledger).BindExecutor();
+        ExecutorBinding toTicket = new Prepare("prepare", ledger).BindExecutor();
+        ExecutorBinding gate = RequestPort.Create<Ticket, bool>("approve").BindAsExecutor();
+        ExecutorBinding conclude = new Conclude("conclude", ledger).BindExecutor();
+        ExecutorBinding c1 = new Step("c1", ledger, "").BindExecutor();
+        ExecutorBinding c2 = new Step("c2", ledger, "").BindExecutor();
+        ExecutorBinding end = new Finish("end", ledger).BindExecutor();
+        return new WorkflowBuilder(split).AddEdge(split, toTicket).AddEdge(toTicket, gate).AddEdge(gate, conclude)
+            .AddEdge(split, c1).AddEdge(c1, c2).AddEdge(c2, end).WithOutputFrom(conclude, end).Build();
+    }
+
     /// <summary>The same as <see cref="Question"/> with one more executor between the port and the end: a changed structure.</summary>
     public static Workflow QuestionWithAudit(Ledger ledger)
     {

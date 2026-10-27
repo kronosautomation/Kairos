@@ -91,6 +91,12 @@ public sealed partial class AgentFrameworkRuntime
 
     internal AgentsRuntime Agents { get; }
 
+    /// <summary>
+    /// A test seam: while an executor of a durable workflow waits for a conversation, this is called instead of waiting for the engine to say the run was written to. A simulation uses it to run the conversation's work from
+    /// the waiting thread, so that the order of every store operation is the same each time (what a crash-at-every-operation test needs).
+    /// </summary>
+    internal Func<CancellationToken, ValueTask>? WhileWaitingForConversation { get; set; }
+
     /// <summary>The application's services when the host runs workers, handed to workflow factories; otherwise null.</summary>
     internal IServiceProvider? Services { get; private set; }
 

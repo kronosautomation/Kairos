@@ -107,7 +107,27 @@ The same measurements will be taken for a workflow of a hundred supersteps with 
 - Executors with side effects that are not idempotent will run twice after a crash. We can state it; we cannot stop it.
 - A very wide superstep (hundreds of parallel executors) is one activity; its crash cost is the whole superstep.
 
-## 11. Decisions I need
+## 11. Decisions
+
+**Decided 27 Oct 2026** (the questions are kept below as they were asked; this is the answer to each and what it became in the build; the review note is `docs/reviews/2026-10-27-af-workflows.md`).
+
+| # | Decision | In the build |
+|---|---|---|
+| 1 | (a) Kairos runs the workflow. A public checkpoint store only if someone asks. | `DurableWorkflows` / `DurableWorkflow` / `DurableWorkflowRun`; no public `JsonCheckpointStore`. |
+| 2 | A setting, `SuperstepsPerStep`, default 1. | `AgentFrameworkOptions.SuperstepsPerStep`; carried in the run's input, like the other per-run settings. |
+| 3 | A, with a limit: a wait inside a superstep has a configurable maximum (default 5 minutes), past it the step fails with an error naming the conversation and saying to use a request port; a metric for activities waiting on a conversation; C documented as the right pattern; B later. | `WorkflowAgentWait`, `WorkflowAgentWaitException` (not retried), `kairos.af.workflow.conversation_waits`; the wait loop also heartbeats the step. |
+| 4 | Approval when the port says so, signal otherwise; the default `Describe` shows the port name and the redacted request. | `RequestsAsApprovals(port, requirement, describe)`; the port's response type must be `bool` (a registration error otherwise). Signals: `af.workflow.response/<requestId>`, `DurableWorkflowRun.RespondAsync`. |
+| 5 | A registration error: with a redactor, unknown state types fail at startup naming the type and the option, the same fail-safe rule as step 1. | `AllowStateType<T>()`, `RedactState<T>(...)`. Startup sees the protocol (executor input/output types, ports, outputs); a type that only appears in executor *state* cannot be seen at startup and is refused when the checkpoint that holds it is recorded (`SnapshotShapeException`, with the same words). |
+| 6 | The factory per step. | `AddWorkflow<TInput>(name, Func<WorkflowBuildContext, Workflow>, configure)`; registration builds it twice and refuses it when the two builds differ. |
+| 7 | Include terminate (audited with the verified principal); leave out output streaming. | `TerminateAsync(principal, reason)` (the conversations are asked to stop first); outputs are in the view, not streamed. |
+| 8 | Accept the pin; continuing after a structure-hash or version change needs an approval, audited with the verified principal. | `OnStructureChange(requirement)`, `WorkflowOverrideAuditRecord`. **What the build found:** Agent Framework restores a checkpoint only into a workflow with the same executors, edges and ports (X8 below), so a *structure* change can never be approved into a working run. The step tries the restore first: if the framework refuses, the run ends with `WorkflowIncompatibleException` and the reason, and nobody is asked to approve the impossible. The approval is real for what the framework accepts: a different package version (a newer checkpoint format). |
+| 9 | Include hand-over. | The checkpoint travels whole once, the outputs so far and the open signal requests go with it. **A hand-over waits for open approvals to be decided** (an approval belongs to the history of the run that asked it). |
+
+Also decided: `FullSnapshotEvery` default 16.
+
+Experiment X8 (27 Oct, while building decision 8): a checkpoint written by one graph was restored into (a) the same graph: works; (b) a graph with one executor's type changed: `InvalidDataException: The specified checkpoint is not compatible with the workflow associated with this runner`; (c) a graph with an added executor and edges: the same exception; (d) an added unreachable executor: refused by the builder itself.
+
+### The questions as asked
 
 1. **What is wanted: orchestration or storage?** (a) Kairos runs the workflow: a Kairos run, an activity per superstep, requests as approvals, resumption on any worker (this document). (b) Only a `KairosCheckpointStore` that an application plugs into its own `CheckpointManager`: much smaller, no recovery or waiting. (c) (a), with (b) falling out as a public type later. I recommend (a), and (b) only if someone asks for it separately.
 2. **Granularity.** One superstep per activity (recommended) or run to idle per activity, or the setting with a default of 1?

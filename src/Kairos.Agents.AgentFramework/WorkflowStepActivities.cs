@@ -88,12 +88,12 @@ public sealed partial class AgentFrameworkRuntime
                 AfwJson.Default.AfwStepResult);
         }
 
-        var scope = new WorkflowStepScope(definition.Name, context.IdempotencyKey, Options.WorkflowAgentWait);
+        var scope = new WorkflowStepScope(definition.Name, context.IdempotencyKey, Options.WorkflowAgentWait, context.HeartbeatAsync);
         using IDisposable entered = WorkflowStepScope.Enter(scope);
         var carrier = new CarrierStore();
         JsonSerializerOptions json = registration.Options;
         CheckpointManager manager = CheckpointManager.CreateJson(carrier, json);
-        var agents = new DurableAgents(this, Client, new TenantScope(context.Run.TenantId, context.Run.NamespaceId), Agents.Config.Time);
+        var agents = new DurableAgents(this, Client, new TenantScope(context.Run.TenantId, context.Run.NamespaceId), TimeProvider.System); // an executor waits for a conversation in real time, whatever clock the worker keeps its leases and timers by
         Workflow workflow = registration.Factory(new WorkflowBuildContext(agents, Services));
         if (!string.Equals(WorkflowDefinition.StructureOf(workflow), definition.Structure, StringComparison.Ordinal))
         {
@@ -249,7 +249,7 @@ public sealed partial class AgentFrameworkRuntime
     private async Task TryRestoreAsync(ActivityContext context, WorkflowDefinition definition, SessionText checkpoint, CancellationToken cancellationToken)
     {
         var carrier = new CarrierStore();
-        var agents = new DurableAgents(this, Client, new TenantScope(context.Run.TenantId, context.Run.NamespaceId), Agents.Config.Time);
+        var agents = new DurableAgents(this, Client, new TenantScope(context.Run.TenantId, context.Run.NamespaceId), TimeProvider.System); // an executor waits for a conversation in real time, whatever clock the worker keeps its leases and timers by
         Workflow workflow = definition.Registration.Factory(new WorkflowBuildContext(agents, Services));
         var environment = InProcessExecution.Lockstep.WithCheckpointing(CheckpointManager.CreateJson(carrier, definition.Registration.Options));
         StreamingRun run = await ResumeAsync(environment, workflow, carrier.Seed(SnapshotCodec.Element(checkpoint.Text)), definition, cancellationToken).ConfigureAwait(false);

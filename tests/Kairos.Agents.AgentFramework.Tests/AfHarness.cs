@@ -126,6 +126,45 @@ internal sealed class AfHarness
     }
 
     /// <summary>
+    /// Makes an executor that waits for a durable agent's conversation run that conversation's work itself, on a second worker, instead of waiting: one thread, the same order of store operations every time. This is what lets a
+    /// workflow with a durable agent in an executor be killed at every store operation. The clock moves, a little at a time, when the second worker has nothing to do and the conversation still waits for a lease or a timer
+    /// (a worker that died); never by so much that the waiting step's own lease could end.
+    /// </summary>
+    public void RunConversationsFromTheWaitingExecutor()
+    {
+        WorkerRuntime side = NewWorker();
+        Runtime.WhileWaitingForConversation = async cancellationToken =>
+        {
+            bool did;
+            try
+            {
+                did = await side.ProcessWorkflowTaskAsync(default);
+                did |= await side.ProcessActivityTaskAsync(default);
+                did |= await side.FireTimersAsync(default) > 0;
+            }
+            catch (SimulatedFaultException)
+            {
+                side = NewWorker(); // the process died; a new one takes over
+                did = true;
+            }
+
+            if (!did)
+            {
+                if (MemoryStore.NextWakeup(DefaultScope, Time.GetUtcNow()) is { } wake)
+                {
+                    // Not past the waiting step's lease: it renews it each time round (a heartbeat), then time moves again.
+                    DateTimeOffset now = Time.GetUtcNow();
+                    Time.AdvanceTo(wake - now > TimeSpan.FromSeconds(45) ? now + TimeSpan.FromSeconds(45) : wake);
+                }
+                else
+                {
+                    await Task.Delay(1, cancellationToken);
+                }
+            }
+        };
+    }
+
+    /// <summary>
     /// Drives several workers at once, for work in which one activity waits for another run to make progress (an executor waiting for a durable agent's conversation). Returns when every worker has found nothing to do for a
     /// while and none is inside an activity.
     /// </summary>
@@ -148,18 +187,25 @@ internal sealed class AfHarness
     private async Task DriveParallelOnceAsync(int workers, int idlePolls)
     {
         int busy = 0;
-        WorkerRuntime[] pool = [.. Enumerable.Range(0, workers).Select(_ => NewWorker())];
-        await Task.WhenAll(pool.Select(worker => Task.Run(async () =>
+        int quiet = 0;
+        int jumps = 0;
+        await Task.WhenAll(Enumerable.Range(0, workers).Select(_ => Task.Run(async () =>
         {
+            WorkerRuntime worker = NewWorker();
             for (int idle = 0; idle < idlePolls;)
             {
                 Interlocked.Increment(ref busy);
-                bool did;
+                bool did = false;
                 try
                 {
                     did = await worker.ProcessWorkflowTaskAsync(default);
                     did |= await worker.ProcessActivityTaskAsync(default);
                     did |= await worker.FireTimersAsync(default) > 0;
+                }
+                catch (SimulatedFaultException)
+                {
+                    worker = NewWorker(); // the process died; a new one takes over
+                    did = true;
                 }
                 finally
                 {
@@ -169,15 +215,31 @@ internal sealed class AfHarness
                 if (did)
                 {
                     idle = 0;
-                }
-                else if (Volatile.Read(ref busy) == 0)
-                {
-                    idle++;
-                    await Task.Delay(5);
+                    Volatile.Write(ref quiet, 0);
+                    Volatile.Write(ref jumps, 0);
                 }
                 else
                 {
-                    await Task.Delay(5); // another worker is inside an activity: its work may make some for this one
+                    if (Volatile.Read(ref busy) == 0)
+                    {
+                        idle++; // another worker may be inside an activity whose work makes some for this one: only count the quiet
+                    }
+                    else if (Interlocked.Increment(ref quiet) >= 8 && Volatile.Read(ref jumps) < 4)
+                    {
+                        // Everyone else is quiet and one activity is waiting for another run: that run may be waiting for a lease or a timer (a worker died). Time moves a little, the waiting activity heartbeats as it waits, so its own lease is renewed after each move and is never the first thing to end.
+                        lock (Time)
+                        {
+                            if (MemoryStore.NextWakeup(DefaultScope, Time.GetUtcNow()) is { } wake && wake - Time.GetUtcNow() <= TimeSpan.FromSeconds(75))
+                            {
+                                Time.AdvanceTo(wake);
+                                Interlocked.Increment(ref jumps);
+                            }
+                        }
+
+                        Volatile.Write(ref quiet, 0);
+                    }
+
+                    await Task.Delay(5);
                 }
             }
         })));

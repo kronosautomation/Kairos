@@ -194,6 +194,7 @@ public sealed class DurableAIAgent : AIAgent
             TimeSpan? left = null;
             if (step is not null)
             {
+                await step.HeartbeatAsync().ConfigureAwait(false);
                 left = step.MaxWait - System.Diagnostics.Stopwatch.GetElapsedTime(started);
                 if (left <= TimeSpan.Zero)
                 {
@@ -204,7 +205,14 @@ public sealed class DurableAIAgent : AIAgent
                 }
             }
 
-            await _owner.WaitForUpdateAsync(turn, left, cancellationToken).ConfigureAwait(false);
+            if (step is not null && _owner.WaitHook is { } hook)
+            {
+                await hook(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await _owner.WaitForUpdateAsync(turn, left, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
