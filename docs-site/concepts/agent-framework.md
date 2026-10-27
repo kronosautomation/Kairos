@@ -123,6 +123,22 @@ Offer a registered agent to another as a tool with `DurableAgentFunction.For("re
 in the approvals inbox, its model calls count against the budgets, and the calling agent waits without holding compute. An agent run by Agent Framework's own `AsAIFunction()` is refused at registration, because its tools would run
 outside the policy; allow it by name with `AllowOpaqueNesting("name")` if that is what you want.
 
+### Stopping a conversation, and the agents it asked
+
+[!code-csharp[](../../samples/AgentFramework/ConversationSample.cs#stop)]
+
+A nested agent does not outlive the run that asked it:
+
+- **Cancelling** a conversation (`CancelAsync`) stops it at its next step. The model call or tool call in flight finishes and is recorded; a conversation waiting for a message, for an approval, or for a nested agent stops at once. Each nested agent it is waiting
+  for is asked to stop, and asks the agents it is waiting for in turn. The request is the reserved cancel signal with a fixed id, so asking twice, or a worker dying while the rollback runs, still reaches each nested agent once. The runs end as failed with the
+  cancellation, and what they undid (the nested agents they asked) is in their history.
+- **Terminating** a run (`TerminateAsync`, or an operator in the dashboard) closes it from outside and gives its workflow no chance to cancel anything. `TerminateAsync` asks the nested agents first. A nested agent that is missed, because the run was terminated
+  some other way, looks now and then whether the run that asked it is still open (first after `ParentWatchInterval`, one minute by default, then less often, up to a quarter of an hour) and stops when it is not. `null` turns the look off.
+- A conversation recorded before this was added does not stop on a cancel; only the runs started after it do.
+
+Nested agents are asked to stop and the watch is made by the adapter's own steps, which call Kairos with the worker's client. A worker that only connects outbound to a server needs a client that may start and signal runs of its tenant for nested agents
+to work at all (starting one needs it too).
+
 ## Agents that cannot be run one call at a time
 
 An agent that is not a `ChatClientAgent` (an A2A agent, a custom one), one wrapped in `LoopAgent` or `ToolApprovalAgent`, and one with tools that run at the model provider (hosted web search, hosted MCP servers) cannot be cut into steps. Registration refuses it and names the

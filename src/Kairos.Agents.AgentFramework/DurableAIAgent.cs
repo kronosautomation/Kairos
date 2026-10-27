@@ -77,6 +77,27 @@ public sealed class DurableAIAgent : AIAgent
         return _owner.FindRunAsync(_definition, session, cancellationToken);
     }
 
+    /// <summary>
+    /// Asks the conversation to stop. It stops at its next step (the model call or tool call in flight finishes and is recorded), at once if it is waiting for a message or an approval; the nested agents it asked stop with it; and the
+    /// conversation's run ends as failed with the cancellation. Asking twice is one request. False when the conversation has not started or has ended.
+    /// </summary>
+    public ValueTask<bool> CancelAsync(DurableAgentSession session, string reason = "", CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return _owner.CancelAsync(_definition, session, reason, cancellationToken);
+    }
+
+    /// <summary>
+    /// Terminates the conversation's run now, as an operator (the principal must be allowed to terminate runs). A terminated run runs no more workflow code, so the nested agents it asked are cancelled first, from here. A nested agent
+    /// that is missed this way finds out by itself within <see cref="AgentFrameworkOptions.ParentWatchInterval"/> and the intervals that follow.
+    /// </summary>
+    public ValueTask<bool> TerminateAsync(DurableAgentSession session, Principal principal, string reason, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(principal);
+        return _owner.TerminateAsync(_definition, session, principal, reason, cancellationToken);
+    }
+
     /// <summary>Ends the conversation. Its history stays; further messages need a new session.</summary>
     public ValueTask CloseAsync(DurableAgentSession session, CancellationToken cancellationToken = default)
     {

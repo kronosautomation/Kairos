@@ -1,3 +1,4 @@
+using Kairos.Agents.AgentFramework;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
@@ -31,5 +32,22 @@ public static class ConversationSample
             ChatOptions = new ChatOptions { Instructions = "You help customers with their orders.", Tools = [.. tools] },
             ChatHistoryProvider = LongConversationHistory(),
         });
+    #endregion
+
+    #region stop
+    /// <summary>
+    /// Stops a conversation. <c>CancelAsync</c> asks it to stop: it stops at its next step (at once if it is waiting for a message or an approval), and the nested agents it is waiting for are cancelled with it. An operator who
+    /// has to end a run now terminates it; the nested agents it asked are cancelled first, so they do not go on working for a run that is gone.
+    /// </summary>
+    public static async Task StopAsync(DurableAIAgent support, DurableAgentSession conversation, Principal? operatorPrincipal, CancellationToken cancellationToken)
+    {
+        if (operatorPrincipal is null)
+        {
+            await support.CancelAsync(conversation, "the customer left", cancellationToken);
+            return;
+        }
+
+        await support.TerminateAsync(conversation, operatorPrincipal, "stopped from the console", cancellationToken);
+    }
     #endregion
 }

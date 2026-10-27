@@ -25,6 +25,8 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
 
         public string? Hash { get; set; }
 
+        public int MaxSteps { get; init; }
+
         public string LastText { get; set; } = "";
     }
 
@@ -35,7 +37,7 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
         AgentDefinition definition = runtime.Definition(input.Agent); // a worker without the agent does not register this agent's workflow type, so the engine leaves the run for one that has it
 
         ctx.OnBehalfOf = input.OnBehalfOf;
-        var state = new Conversation { Snapshot = input.Snapshot, Hash = input.Hash };
+        var state = new Conversation { Snapshot = input.Snapshot, Hash = input.Hash, MaxSteps = input.MaxStepsPerTurn ?? runtime.Options.MaxStepsPerTurn };
         if (wf.IsPatched(AfProtocol.Patch)) // runs recorded before this have no marker and keep the first protocol, in which every step carries the whole session
         {
             state.Chain = new SessionChain();
@@ -49,13 +51,29 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
         var recent = new List<string>(input.Recent);
         Task<byte[]> close = wf.WaitForSignalAsync(AgentFrameworkNames.CloseSignal);
 
+        // A run started now is a saga: a cancel request stops it at the next step and rolls back what it registered (the nested agents it asked), and a nested agent's run stops when the run that asked it has ended.
+        // A run recorded before has no marker and goes on as it was recorded.
+        return wf.IsPatched(AfProtocol.CancelPatch)
+            ? await ctx.RunSagaAsync(saga => LoopAsync(ctx, definition, input, state, pending, recent, close, saga))
+            : await LoopAsync(ctx, definition, input, state, pending, recent, close, saga: null);
+    }
+
+    private async Task<byte[]> LoopAsync(
+        IAgentContext ctx, AgentDefinition definition, AfDriverInput input, Conversation state, Queue<AfTurn> pending, List<string> recent, Task<byte[]> close, ISaga? saga)
+    {
+        IWorkflowContext wf = ctx.Workflow;
+        if (saga is not null && input.Parent is { } asked && input.ParentWatchSeconds is { } every)
+        {
+            _ = WatchParentAsync(wf, asked, TimeSpan.FromSeconds(every));
+        }
+
         try
         {
             while (true)
             {
                 if (pending.Count == 0)
                 {
-                    AfTurn? next = await NextAsync(wf, close, input.IdleSeconds);
+                    AfTurn? next = await NextAsync(wf, close, input.IdleSeconds, saga);
                     if (next is null)
                     {
                         break; // told to stop, or nobody wrote for too long
@@ -99,7 +117,8 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
                     recent.RemoveAt(0);
                 }
 
-                await TurnAsync(ctx, definition, state, turn);
+                saga?.ThrowIfCancelled();
+                await TurnAsync(ctx, definition, state, turn, saga);
                 if (input.Parent is { } parent)
                 {
                     await NotifyAsync(wf, parent, new AfChildAnswer { Ok = true, Text = state.LastText });
@@ -117,15 +136,27 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
         return [];
     }
 
-    private static async Task<AfTurn?> NextAsync(IWorkflowContext wf, Task<byte[]> close, double? idleSeconds)
+    private static async Task<AfTurn?> NextAsync(IWorkflowContext wf, Task<byte[]> close, double? idleSeconds, ISaga? saga)
     {
         Task<byte[]> message = wf.WaitForSignalAsync(AgentFrameworkNames.MessageSignal);
         Task? idle = idleSeconds is { } s ? wf.DelayAsync(TimeSpan.FromSeconds(s)) : null;
-        Task winner = idle is null ? await Task.WhenAny(message, close) : await Task.WhenAny(message, close, idle);
+        var waiting = new List<Task>(4) { message, close };
+        if (idle is not null)
+        {
+            waiting.Add(idle);
+        }
+
+        if (saga is not null)
+        {
+            waiting.Add(saga.WhenCancelled); // a conversation that is waiting for its next message is stopped at once, not at the next message
+        }
+
+        Task winner = await Task.WhenAny(waiting);
+        saga?.ThrowIfCancelled();
         return winner == message ? AfCodec.Read(message.Result, AfJson.Default.AfTurn) : null;
     }
 
-    private async Task TurnAsync(IAgentContext ctx, AgentDefinition definition, Conversation state, AfTurn turn)
+    private async Task TurnAsync(IAgentContext ctx, AgentDefinition definition, Conversation state, AfTurn turn, ISaga? saga)
     {
         JsonElement messages = runtime.Redactor is { } redact ? SnapshotRedactor.RedactMessages(turn.Messages, redact) : turn.Messages;
         JsonElement? newMessages = messages;
@@ -133,9 +164,10 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
         AfApprovalResponse[] responses = [];
         for (int step = 0; ; step++)
         {
-            if (step >= runtime.Options.MaxStepsPerTurn)
+            saga?.ThrowIfCancelled(); // a cancel is noticed between steps; the call in flight finishes and is recorded
+            if (step >= state.MaxSteps)
             {
-                throw new AgentStepLimitException($"Agent '{definition.Name}' used more than {runtime.Options.MaxStepsPerTurn} model calls for one message (MaxStepsPerTurn).");
+                throw new AgentStepLimitException($"Agent '{definition.Name}' used more than {state.MaxSteps} model calls for one message (MaxStepsPerTurn).");
             }
 
             AfStepResult result = await StepAsync(ctx, definition, state, turn.TurnId, newMessages, results, responses);
@@ -158,7 +190,7 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
             newMessages = null;
 
             // Several calls in one answer run at the same time: they are independent steps, and parallel tool calls stay parallel.
-            Task<AfToolResult>[] tools = [.. result.ToolCalls.Select(call => RunToolAsync(ctx, definition, call))];
+            Task<AfToolResult>[] tools = [.. result.ToolCalls.Select(call => RunToolAsync(ctx, definition, call, saga))];
             Task<AfApprovalResponse>[] approvals = [.. result.ApprovalRequests.Select(request => DecideAsync(ctx, definition, request))];
             await Task.WhenAll(tools.Cast<Task>().Concat(approvals));
             results = [.. tools.Select(t => t.Result)];
@@ -281,44 +313,86 @@ internal sealed class AgentFrameworkDriver(AgentFrameworkRuntime runtime)
         static string Short(string hash) => hash.Length <= 12 ? hash : hash[..12];
     }
 
-    private async Task<AfToolResult> RunToolAsync(IAgentContext ctx, AgentDefinition definition, AfToolCall call)
+    private async Task<AfToolResult> RunToolAsync(IAgentContext ctx, AgentDefinition definition, AfToolCall call, ISaga? saga)
     {
         var content = new FunctionCallContent(call.CallId, call.Name, WireCodec.JsonToArguments(call.ArgumentsJson));
         ToolStepResult step = await ctx.InvokeToolWithOutcomeAsync(content);
         var answer = (FunctionResultContent)step.Message.Contents[0];
         string text = answer.Result as string ?? "";
 
-        if (step.Outcome == ToolStepOutcome.Completed && definition.Tools.Any(t => t.Name == call.Name && t.ChildAgent is not null) && text.StartsWith(ChildMarker, StringComparison.Ordinal))
+        if (step.Outcome == ToolStepOutcome.Completed && definition.Tools.FirstOrDefault(t => t.Name == call.Name && t.ChildAgent is not null) is { } child && text.StartsWith(ChildMarker, StringComparison.Ordinal))
         {
-            text = await AwaitChildAsync(ctx.Workflow, text[ChildMarker.Length..]);
+            text = await AwaitChildAsync(ctx.Workflow, text[ChildMarker.Length..], child.ChildAgent!, saga);
         }
 
         return new AfToolResult { CallId = answer.CallId, Content = text };
     }
 
     /// <summary>Waits for a nested agent's answer without holding compute: for its signal, and now and then (growing to a quarter of an hour) for a look at whether the child run still exists.</summary>
-    private async Task<string> AwaitChildAsync(IWorkflowContext wf, string marker)
+    private async Task<string> AwaitChildAsync(IWorkflowContext wf, string marker, string childAgent, ISaga? saga)
     {
         int slash = marker.IndexOf('/', StringComparison.Ordinal);
         string signal = marker[..slash];
         var run = Guid.ParseExact(marker[(slash + 1)..], "N");
+
+        // If this run is cancelled while the nested agent is working, the nested agent is cancelled with it. Registered once the child exists, taken back when it has answered or ended.
+        string workflowId = $"af/{childAgent}/{signal["af.child.".Length..]}";
+        SagaCompensationHandle? undo = saga?.Compensate(
+            $"cancel nested agent {childAgent}",
+            policy => wf.ExecuteActivityAsync(
+                AgentFrameworkNames.ChildCancel,
+                AfCodec.Write(new AfChildCancel { WorkflowId = workflowId, Reason = "the run that asked this nested agent was cancelled" }, AfJson.Default.AfChildCancel),
+                policy));
+
         Task<byte[]> answer = wf.WaitForSignalAsync(signal);
         TimeSpan wait = TimeSpan.FromSeconds(15);
         while (true)
         {
             Task timer = wf.DelayAsync(wait);
-            Task winner = await Task.WhenAny(answer, timer);
+            Task winner = saga is null ? await Task.WhenAny(answer, timer) : await Task.WhenAny(answer, timer, saga.WhenCancelled);
             if (winner == answer || answer.IsCompleted)
             {
+                undo?.Discard();
                 AfChildAnswer reply = AfCodec.Read(answer.Result, AfJson.Default.AfChildAnswer);
                 return reply.Ok ? reply.Text : $"The nested agent failed ({reply.Text}).";
             }
+
+            saga?.ThrowIfCancelled(); // the rollback asks the nested agent to stop
 
             byte[] checkedState = await wf.ExecuteActivityAsync(
                 AgentFrameworkNames.ChildCheck, AfCodec.Write(new AfChildCheck { RunId = run }, AfJson.Default.AfChildCheck), runtime.Agents.Config.ToolRetry);
             if (AfCodec.Read(checkedState, AfJson.Default.AfChildCheckResult).State != "running" && !answer.IsCompleted)
             {
+                undo?.Discard();
                 return "The nested agent ended without answering.";
+            }
+
+            wait = TimeSpan.FromTicks(Math.Min(wait.Ticks * 2, TimeSpan.FromMinutes(15).Ticks));
+        }
+    }
+
+    /// <summary>
+    /// A nested agent's run looks every so often (starting at <see cref="AgentFrameworkOptions.ParentWatchInterval"/>, growing to a quarter of an hour) whether the run that asked it is still open, and stops when it is not.
+    /// Terminating a run gives its workflow no chance to cancel the runs it asked, so this is how they find out. It runs beside the conversation and ends with the run.
+    /// </summary>
+    private async Task WatchParentAsync(IWorkflowContext wf, AfParent parent, TimeSpan first)
+    {
+        TimeSpan wait = first;
+        while (true)
+        {
+            await wf.DelayAsync(wait);
+            try
+            {
+                byte[] reply = await wf.ExecuteActivityAsync(
+                    AgentFrameworkNames.ParentWatch, AfCodec.Write(new AfParentWatch { Parent = parent }, AfJson.Default.AfParentWatch), runtime.Agents.Config.ToolRetry);
+                if (!AfCodec.Read(reply, AfJson.Default.AfParentWatchResult).Open)
+                {
+                    return; // it asked this run to stop; the conversation's saga takes it from there
+                }
+            }
+            catch (ActivityFailureException)
+            {
+                // could not look this time; look again
             }
 
             wait = TimeSpan.FromTicks(Math.Min(wait.Ticks * 2, TimeSpan.FromMinutes(15).Ticks));

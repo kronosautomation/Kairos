@@ -49,6 +49,15 @@ internal sealed record AfDriverInput
     /// <summary>The conversation ends when nobody writes for this long. Null waits indefinitely.</summary>
     public double? IdleSeconds { get; init; }
 
+    /// <summary>
+    /// For a nested agent's run: how often it first looks whether the run that asked it is still open (growing to a quarter of an hour). Part of the run's input, not read from the worker's options while the workflow runs,
+    /// so changing the option never disturbs a run in flight. Null never looks.
+    /// </summary>
+    public double? ParentWatchSeconds { get; init; }
+
+    /// <summary>The most model calls one message may cause, as it was when the run started (see <see cref="ParentWatchSeconds"/> for why it is in the input). Null: the worker's option, for runs recorded before.</summary>
+    public int? MaxStepsPerTurn { get; init; }
+
     /// <summary>Hands over to a fresh run when the history is this long (test knob; the engine's own limit applies regardless).</summary>
     public int? ContinueAfterEvents { get; init; }
 
@@ -148,6 +157,12 @@ internal static class AfProtocol
 
     /// <summary>The marker (see <see cref="IWorkflowContext.IsPatched"/>) a run takes when it uses <see cref="Referenced"/>. Runs recorded before have no marker and replay on the first protocol.</summary>
     public const string Patch = "kairos.af.v5";
+
+    /// <summary>
+    /// The marker a run takes when it runs as a saga: a cancel request (or the end of the run that asked a nested agent) stops it at the next step, and a nested agent's run is cancelled with the run that called it. Runs recorded
+    /// before have no marker and are not cancel-aware.
+    /// </summary>
+    public const string CancelPatch = "kairos.af.cancel";
 }
 
 internal sealed record AfStepResult
@@ -248,6 +263,31 @@ internal sealed record AfChildCheckResult
     public string State { get; init; } = "running";
 }
 
+/// <summary>Asks the conversation <see cref="WorkflowId"/> (a nested agent's, in whatever run it is now) to stop.</summary>
+internal sealed record AfChildCancel
+{
+    public string WorkflowId { get; init; } = "";
+
+    public string Reason { get; init; } = "";
+}
+
+internal sealed record AfChildCancelResult
+{
+    /// <summary>True when an open run took the request (also when it had already been asked).</summary>
+    public bool Sent { get; init; }
+}
+
+/// <summary>A nested agent's run looks whether the run that asked it is still open, and cancels itself when it is not.</summary>
+internal sealed record AfParentWatch
+{
+    public AfParent Parent { get; init; } = new();
+}
+
+internal sealed record AfParentWatchResult
+{
+    public bool Open { get; init; } = true;
+}
+
 /// <summary>What a nested agent answers its parent (the signal payload), and what the parent turns into the tool result.</summary>
 internal sealed record AfChildAnswer
 {
@@ -276,6 +316,10 @@ internal sealed record AfNotify
 [JsonSerializable(typeof(AfChildCheckResult))]
 [JsonSerializable(typeof(AfChildAnswer))]
 [JsonSerializable(typeof(AfNotify))]
+[JsonSerializable(typeof(AfChildCancel))]
+[JsonSerializable(typeof(AfChildCancelResult))]
+[JsonSerializable(typeof(AfParentWatch))]
+[JsonSerializable(typeof(AfParentWatchResult))]
 internal sealed partial class AfJson : JsonSerializerContext;
 
 internal static class AfCodec

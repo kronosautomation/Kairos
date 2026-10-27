@@ -72,6 +72,7 @@ public sealed class DurableAgents
             Pending = [turn],
             OnBehalfOf = session.OnBehalfOf,
             IdleSeconds = _runtime.Options.ConversationIdleTimeout?.TotalSeconds,
+            MaxStepsPerTurn = _runtime.Options.MaxStepsPerTurn,
             ContinueAfterEvents = _runtime.Options.ContinueAfterEvents,
         };
 
@@ -197,6 +198,7 @@ public sealed class DurableAgents
                 nameof(BudgetExceededException) => new BudgetExceededException(failed.Message) { Limit = QuotedName(failed.Message) },
                 nameof(DefinitionChangedException) => new DefinitionChangedException(failed.Message),
                 nameof(AgentStepLimitException) => new AgentStepLimitException(failed.Message),
+                nameof(SagaCancelledException) => new ConversationEndedException($"The conversation with agent '{agent.Name}' was cancelled: {failed.Message}"),
                 _ => new ConversationEndedException($"The conversation with agent '{agent.Name}' failed ({failed.ErrorType}): {failed.Message}"),
             };
         }
@@ -221,6 +223,65 @@ public sealed class DurableAgents
         {
             await _client.SignalAsync(run, AgentFrameworkNames.CloseSignal, [], "close", cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    internal async ValueTask<bool> CancelAsync(AgentDefinition agent, DurableAgentSession session, string reason, CancellationToken cancellationToken)
+    {
+        if (await _client.GetCurrentRunAsync(_scope, WorkflowId(agent.Name, session.SessionId), cancellationToken).ConfigureAwait(false) is not { } run)
+        {
+            return false;
+        }
+
+        // The reserved cancel signal with its fixed id: asking twice is one request.
+        return await _client.SignalAsync(run, ReservedSignals.Cancel, System.Text.Encoding.UTF8.GetBytes(reason ?? ""), ReservedSignals.CancelSignalId, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async ValueTask<bool> TerminateAsync(AgentDefinition agent, DurableAgentSession session, Principal principal, string reason, CancellationToken cancellationToken)
+    {
+        if (await _client.GetCurrentRunAsync(_scope, WorkflowId(agent.Name, session.SessionId), cancellationToken).ConfigureAwait(false) is not { } run)
+        {
+            return false;
+        }
+
+        // A terminated run gives its workflow no chance to cancel the nested agents it asked, so they are asked first, from what the run's history says it started. (A nested agent that is missed here finds out
+        // when it next looks at whether the run that asked it is still open.)
+        IReadOnlyList<HistoryEvent> history = await _client.GetOpenedHistoryAsync(run, cancellationToken).ConfigureAwait(false);
+        foreach (string workflowId in NestedConversations(agent, history))
+        {
+            if (await _client.GetCurrentRunAsync(_scope, workflowId, cancellationToken).ConfigureAwait(false) is { } child)
+            {
+                await _client.SignalAsync(child, ReservedSignals.Cancel, System.Text.Encoding.UTF8.GetBytes("the run that asked this nested agent was terminated"), ReservedSignals.CancelSignalId, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return await _client.TerminateRunAsync(principal, run, reason, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The conversations of the nested agents a run started: a tool step of a nested-agent tool whose result is the marker the tool step returns when it has started the child.</summary>
+    private static List<string> NestedConversations(AgentDefinition agent, IReadOnlyList<HistoryEvent> history)
+    {
+        var called = new Dictionary<int, string>();
+        var found = new List<string>();
+        foreach (HistoryEvent e in history)
+        {
+            if (e is ActivityScheduled s && s.ActivityType == AgentActivityNames.Tool)
+            {
+                called[s.ActivityId] = WireCodec.Read(s.Input, AgentJson.Default.ToolStepRequest).Name;
+            }
+            else if (e is ActivityCompleted c && called.TryGetValue(c.ActivityId, out string? tool))
+            {
+                string? child = agent.Tools.FirstOrDefault(t => t.Name == tool)?.ChildAgent;
+                string content = WireCodec.Read(c.Result, AgentJson.Default.ToolStepResponse).Content ?? "";
+                const string Marker = "kairos.af.child/af.child.";
+                if (child is not null && content.StartsWith(Marker, StringComparison.Ordinal))
+                {
+                    int slash = content.IndexOf('/', Marker.Length);
+                    found.Add($"af/{child}/{content[Marker.Length..slash]}");
+                }
+            }
+        }
+
+        return found;
     }
 
     internal ValueTask<RunKey?> FindRunAsync(AgentDefinition agent, DurableAgentSession session, CancellationToken cancellationToken) =>

@@ -42,6 +42,9 @@ public sealed class CorpusTests
     [
         ("af-need-snapshot.khist", "the second message ran on a worker that did not hold the session: the step said so, the workflow sent the session once, and the step ran"),
         ("af-snapshot-changes.khist", "seven messages with the session recorded whole every third step and as changes in between"),
+        ("af-cancel-parent.khist", "a conversation cancelled while its nested agent waits for a person: the cancel, the rollback that asks the nested agent to stop, and the end"),
+        ("af-cancel-child.khist", "the nested agent of that conversation: it received the cancel while waiting for an approval and ended"),
+        ("af-cancel-watch.khist", "a nested agent whose parent run was terminated: it looked, found the parent closed, asked itself to stop and ended"),
     ];
 
     private static AfHarness Plain(out ScriptedChatClient model)
@@ -83,6 +86,12 @@ public sealed class CorpusTests
             case "af-need-snapshot.khist":
             case "af-snapshot-changes.khist":
                 builder.AddAgent(AfHarness.AgentWith(AfHarness.Echo(), "chat"));
+                break;
+            case "af-cancel-parent.khist":
+            case "af-cancel-child.khist":
+            case "af-cancel-watch.khist":
+                builder.AddAgent(AfHarness.AgentWith(AfHarness.Echo(), "manager", DurableAgentFunction.For("researcher")), r => r.ReadOnly("researcher"));
+                builder.AddAgent(AfHarness.AgentWith(AfHarness.Echo(), "researcher", new ApprovalRequiredAIFunction(AIFunctionFactory.Create((string orderId) => "refunded", "issue_refund", "Refunds."))));
                 break;
             default:
                 throw new InvalidOperationException(file);
@@ -211,10 +220,52 @@ public sealed class CorpusTests
 
         recorded["af-snapshot-changes.khist"] = await h.HistoryAsync(await h.RunOfAsync("chat", "s"));
 
+        (AfHarness cancelled, IReadOnlyList<HistoryEvent> managerRun, IReadOnlyList<HistoryEvent> researcherRun) = await CancelledAsync(terminate: false);
+        recorded["af-cancel-parent.khist"] = managerRun;
+        recorded["af-cancel-child.khist"] = researcherRun;
+        Assert.NotNull(cancelled);
+        (_, _, IReadOnlyList<HistoryEvent> watcherRun) = await CancelledAsync(terminate: true);
+        recorded["af-cancel-watch.khist"] = watcherRun;
+
         foreach ((string file, string description) in Files.Concat(V5Only))
         {
             await System.IO.File.WriteAllTextAsync(Path.Combine(target, file), HistoryFile.Serialize(recorded[file], Recorded, description, ReplayWith));
         }
+    }
+
+    /// <summary>A manager whose nested researcher waits for a person's approval; the manager's conversation is then cancelled, or its run terminated from outside.</summary>
+    private static async Task<(AfHarness H, IReadOnlyList<HistoryEvent> Manager, IReadOnlyList<HistoryEvent> Researcher)> CancelledAsync(bool terminate)
+    {
+        AIFunction refund = AIFunctionFactory.Create((string orderId) => "refunded", "issue_refund", "Refunds.");
+        var manager = new ScriptedChatClient(messages => messages.Any(m => m.Contents.OfType<FunctionResultContent>().Any())
+            ? new ChatMessage(ChatRole.Assistant, "done")
+            : new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("ask-1", "researcher", AfHarness.Args("""{"query":"q"}"""))]));
+        var researcher = new ScriptedChatClient(messages => messages.Any(m => m.Contents.OfType<FunctionResultContent>().Any())
+            ? new ChatMessage(ChatRole.Assistant, "done")
+            : new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("call-1", "issue_refund", AfHarness.Args("""{"orderId":"A-1"}"""))]));
+        var h = new AfHarness(af =>
+        {
+            af.Configure(o => o.ParentWatchInterval = TimeSpan.FromSeconds(20));
+            af.AddAgent(AfHarness.AgentWith(manager, "manager", DurableAgentFunction.For("researcher")), r => r.ReadOnly("researcher"));
+            af.AddAgent(AfHarness.AgentWith(researcher, "researcher", new ApprovalRequiredAIFunction(refund)));
+        });
+        await h.AskAsync("manager", "s", "go");
+        RunSummary[] runs = [.. await h.Store.ListRunsAsync(AfHarness.Scope, new RunFilter(), 50, default)];
+        RunKey managerRun = runs.Single(r => r.WorkflowId.StartsWith("af/manager/", StringComparison.Ordinal)).Run;
+        RunKey researcherRun = runs.Single(r => r.WorkflowId.StartsWith("af/researcher/", StringComparison.Ordinal)).Run;
+        if (terminate)
+        {
+            Assert.True(await h.Client.TerminateRunAsync(new Principal(AfHarness.Scope, Role.Operator, "ops", null), managerRun, "terminated"));
+            h.Time.Advance(TimeSpan.FromMinutes(20));
+        }
+        else
+        {
+            DurableAIAgent durable = h.Agents.Get("manager");
+            Assert.True(await durable.CancelAsync(durable.Session("s"), "customer left"));
+        }
+
+        await h.DriveAsync();
+        return (h, await h.HistoryAsync(managerRun), await h.HistoryAsync(researcherRun));
     }
 
     // ---- replay (every build) ----------------------------------------------------------------------------------------

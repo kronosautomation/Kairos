@@ -137,6 +137,19 @@ public sealed class MeasurementTests
         Console.Error.WriteLine($"[measure] WITH COMPACTION {messages} messages: total recorded {total:N0} bytes ({total / messages:N0} per message on average); session after {messages}: {rows[^1].SessionBytes:N0} bytes");
     }
 
+    [Theory]
+    [InlineData(4)]
+    [InlineData(16)]
+    [InlineData(32)]
+    public async Task What_the_interval_between_whole_sessions_costs_in_history(int every)
+    {
+        var h = new AfHarness(af => af.Configure(o => { o.MaxSnapshotBytes = 16 * 1024 * 1024; o.FullSnapshotEvery = every; }).AddAgent(SupportAgent(SupportModel()), r => r.ReadOnly("lookup_order", "lookup_customer")));
+
+        (List<(int Message, long SessionBytes, long TurnBytes, int Events)> rows, long total) = await ConversationAsync(h, 100);
+
+        Console.Error.WriteLine($"[measure] FullSnapshotEvery={every}, 100 messages: total recorded {total:N0} bytes ({total / 100:N0} per message); message 50 recorded {rows[49].TurnBytes:N0}");
+    }
+
     [Fact]
     public async Task What_it_costs_to_wait_for_an_answer_in_a_conversation_of_a_hundred_messages()
     {

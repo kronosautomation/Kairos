@@ -13,7 +13,7 @@ public sealed class CrashMatrixTests
     private static readonly ApproverIdentity Alice = new("user:alice", "Alice", ["finance"]);
 
     /// <summary>Kills the worker at every store operation of <paramref name="drive"/>; the outcome string must equal the fault-free one, and <paramref name="check"/> holds after each.</summary>
-    private static async Task MatrixAsync(Func<AfHarness> build, Func<AfHarness, Task<string>> drive, Func<AfHarness, string, Task>? check = null, int minimumOperations = 20)
+    internal static async Task MatrixAsync(Func<AfHarness> build, Func<AfHarness, Task<string>> drive, Func<AfHarness, string, Task>? check = null, int minimumOperations = 20)
     {
         AfHarness baseline = build();
         baseline.Faults!.FaultsEnabled = false;

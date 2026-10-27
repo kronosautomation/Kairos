@@ -25,6 +25,8 @@ public static class AgentFrameworkNames
     internal const string Override = "kairos.af.override";
     internal const string ChildCheck = "kairos.af.child.check";
     internal const string ChildNotify = "kairos.af.child.notify";
+    internal const string ChildCancel = "kairos.af.child.cancel";
+    internal const string ParentWatch = "kairos.af.parent.watch";
 
     /// <summary>The signal a conversation waits on for its next message. (Not under the engine's <c>kairos.</c> prefix: callers may send it.)</summary>
     public const string MessageSignal = "af.message";
@@ -61,6 +63,8 @@ public sealed partial class AgentFrameworkRuntime
             [AgentFrameworkNames.Override] = (_, input, _) => Task.FromResult(input),
             [AgentFrameworkNames.ChildCheck] = ChildCheckAsync,
             [AgentFrameworkNames.ChildNotify] = ChildNotifyAsync,
+            [AgentFrameworkNames.ChildCancel] = ChildCancelAsync,
+            [AgentFrameworkNames.ParentWatch] = ParentWatchAsync,
         };
         Conversation = agents.Workflow(new AgentFrameworkDriver(this).RunAsync);
     }

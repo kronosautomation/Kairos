@@ -76,24 +76,24 @@ public sealed class WaitingTests
     }
 
     [Fact]
-    public async Task A_message_sent_again_with_its_id_after_it_was_answered_finds_the_answer()
+    public async Task A_message_sent_again_with_its_id_after_it_was_answered_finds_the_answer_to_that_message()
     {
-        AfHarness h = Support(out _);
-        DurableAIAgent support = h.Agents.Get("support");
-        DurableAgentSession session = support.Session("s");
-        DurableTurn first = await support.SendAsync([new ChatMessage(ChatRole.User, "hello")], session, "message-1");
+        var model = new ScriptedChatClient(messages => new ChatMessage(ChatRole.Assistant, "you said: " + messages.Last(m => m.Role == ChatRole.User).Text));
+        var h = new AfHarness(af => af.AddAgent(AfHarness.AgentWith(model, "chat")));
+        DurableAIAgent chat = h.Agents.Get("chat");
+        DurableAgentSession session = chat.Session("s");
+        DurableTurn first = await chat.SendAsync([new ChatMessage(ChatRole.User, "hello")], session, "message-1");
         await h.DriveAsync();
-        string? answer = (await support.TryReadAsync(first))?.Text;
+        Assert.Equal("you said: hello", (await chat.TryReadAsync(first))?.Text);
         for (int i = 2; i <= 4; i++)
         {
-            await h.AskAsync("support", "s", $"more {i}");
+            await h.AskAsync("chat", "s", $"more {i}");
         }
 
-        DurableTurn repeat = await support.SendAsync([new ChatMessage(ChatRole.User, "hello")], session, "message-1"); // a caller that did not hear the first reply
+        DurableTurn repeat = await chat.SendAsync([new ChatMessage(ChatRole.User, "hello")], session, "message-1"); // a caller that did not hear the first reply
         await h.DriveAsync();
 
-        Assert.NotNull(answer);
-        Assert.Equal(answer, (await support.TryReadAsync(repeat))?.Text); // answered once; the repeat reads the answer from the run's start
+        Assert.Equal("you said: hello", (await chat.TryReadAsync(repeat))?.Text); // answered once; the repeat reads that answer, not the latest one
     }
 
     [Fact]
@@ -171,5 +171,41 @@ public sealed class WaitingTests
             await stop.CancelAsync();
             await pump;
         }
+    }
+
+    [Fact]
+    public async Task A_caller_that_waits_does_not_look_again_until_the_run_is_written_to()
+    {
+        AfHarness h = Support(out Func<CountingStore> counting);
+        DurableAIAgent support = h.Agents.Get("support");
+        Task<AgentResponse> asking = support.RunAsync("hello", support.Session("s")); // no worker is running: nothing will be written
+        await Task.Delay(600);
+        long looks = counting().Calls;
+
+        await h.DriveAsync();
+        await asking.WaitAsync(TimeSpan.FromSeconds(20));
+
+        Assert.InRange(looks, 1, 4); // the first look and a few more; a poll every 25 ms would be twenty
+    }
+
+    [Fact]
+    public async Task A_message_that_went_with_its_conversation_to_a_fresh_run_is_looked_for_there_from_then_on()
+    {
+        AfHarness h = Support(out _, o => o.ContinueAfterEvents = 12);
+        DurableAIAgent support = h.Agents.Get("support");
+        for (int i = 1; i <= 3; i++)
+        {
+            await h.AskAsync("support", "s", $"question {i}");
+        }
+
+        DurableTurn turn = await support.SendAsync([new ChatMessage(ChatRole.User, "and now?")], support.Session("s"));
+        RunKey before = turn.Run;
+        await h.DriveAsync();
+        AgentResponse? reply = await support.TryReadAsync(turn);
+
+        Assert.NotNull(reply);
+        RunKey current = await h.RunOfAsync("support", "s");
+        Assert.NotEqual(before, current); // the conversation handed over while the message was waiting
+        Assert.Equal(current, turn.Run);
     }
 }
