@@ -16,4 +16,4 @@ It runs inside your application (`services.AddKairos(...)`) with nothing to oper
 | [Concepts](concepts/index.md) | Workflows, activities, replay, determinism, history, timers, signals, retries, leases, versions. |
 | [API reference](api/index.md) | The public types of every package. |
 
-All code on these pages is taken from sample projects that are compiled and tested with every build.
+All C# on these pages is taken from sample projects that are compiled and tested with every build.
