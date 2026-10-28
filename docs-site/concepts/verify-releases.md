@@ -63,7 +63,7 @@ A package is a function of the commit and the toolchain. The toolchain is pinned
 `packages.lock.json`, and the release tools listed in `.config/dotnet-tools.json`.
 
 1. Check out the release's tag and install the SDK that `global.json` names.
-2. Run `CI=true dotnet pack src/Kairos.Core/Kairos.Core.csproj -c Release -p:Version=<version>` (or `build/release/Build-Packages.ps1` for all packages).
+2. Run `CI=true dotnet pack src/Kairos.Core/Kairos.Core.csproj -c Release -p:Version=<version>` (or `build/release/Build-Packages.ps1 -Version <version> -Output <folder>` for all packages).
 3. Compare what the package contains. A `.nupkg` is a zip, and NuGet records the time of packing in it, so compare the files inside and not the archive: every file in the package we
    shipped (apart from the signature, which is added afterwards) has the same SHA-256 as the file you built.
 
@@ -73,7 +73,7 @@ If a file differs, that is worth a report: see `SECURITY.md`.
 
 - The signature proves the package was signed with our certificate, and that nothing changed after. It does not prove the code is free of defects.
 - The provenance names the commit and the pipeline run. It is **SLSA Build level 2**: a hosted pipeline produced it and signed it with a key that is held in a key vault and usable only
-  by the release pipeline's identity. It is not level 3, because the signing runs in the same job as the build, so a compromised build step could in principle ask for a signature. The
+  by the release pipeline's identity. It is not level 3, because the pipeline's own identity signs what the build stage produced, and the build and signing stages run under the same pipeline definition, so a compromised pipeline could in principle ask for a signature. The
   reproducible build is how you check it independently.
 - The SBOM lists the dependency closure the package was built against, which for a build-time package (analyzers, for instance) can be wider than what the package places in your application.
 - None of these replaces your own review of what you run. They tell you that what you run is what we released, and where it came from.

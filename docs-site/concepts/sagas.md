@@ -68,6 +68,6 @@ stop waiting at once. `ctx.CurrentSaga` gives such a step the saga that is runni
 
 ## Agents
 
-An agent that takes actions fits the same pattern. Do the action in a tool, register its undo, and let a rejected or expired approval
-unwind what the agent already did. Wrap the whole agent loop in `ctx.RunSagaAsync` (the agent context has the same method), so model
+An agent that takes actions fits the same pattern. Do the action in a tool, register its undo, and call `ThrowIfNotApproved()` on the approval's decision, so that a rejected or expired approval
+unwinds what the agent already did. (Without it, the agent receives a message that the call was not made and carries on; nothing is rolled back.) Wrap the whole agent loop in `ctx.RunSagaAsync` (the agent context has the same method), so model
 calls, tool calls and approvals all notice a cancel request.

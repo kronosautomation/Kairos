@@ -37,7 +37,8 @@ held; a failure that will be retried keeps it, because the retry reuses the rese
 The policy is evaluated on the worker, inside the tool step, immediately before the tool would run. The decision is part of the step's
 recorded result, so:
 
-- changing a policy affects the **next** decision, never a run that is already waiting or replaying;
+- a policy that records its decisions (`IRecordedToolPolicy`) is not asked again for a call that already has one: changing it affects the **next** decision, never a call that is
+  waiting for approval or being replayed. A plain `IToolPolicy` is asked again when the approval arrives, so a change made while a call waits can still apply to it;
 - a workflow bug cannot skip the check, because the tool's own step performs it;
 - the history shows why a tool did or did not run.
 

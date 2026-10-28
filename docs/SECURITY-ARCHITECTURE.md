@@ -25,7 +25,7 @@ The data plane cannot create tenants or keys. The control plane cannot read work
 
 1. **Namespace = isolation boundary.** Every row carries `tenant_id` + `namespace_id`.
 2. **Postgres Row-Level Security** with `FORCE ROW LEVEL SECURITY`. The server connects as a non-owner role and sets
-   `app.tenant_id` per transaction (`SET LOCAL`), so a missing `WHERE` clause cannot leak rows.
+   `app.tenant_id` and `app.namespace_id` per transaction (`SET LOCAL`), so a missing `WHERE` clause cannot leak rows.
 3. **Separate database roles:**
    - `kairos_migrator` — DDL only, used by migrations in CI/CD, never by running services.
    - `kairos_dataplane` — DML on workflow tables, bound by RLS, no DDL.
@@ -46,15 +46,23 @@ The data plane cannot create tenants or keys. The control plane cannot read work
    falls back to its other wake-ups, so the key can be rotated by restarting nodes without losing work. A test subscribes as a
    plain connection through a multi-tenant workload and fails if any tenant, namespace, queue or build identifier appears in any
    notification.
-7. **Named exceptions to row-level security are listed here, and there is one.** A policy that lets the data-plane role read across
+7. **Named exceptions to row-level security are listed here, and there are two.** A policy that lets the data-plane role read across
    scopes is a hole in isolation unless it is narrow, read-only, named and tested. `open_work_sweep` (commercial policy library,
    migration 0003) lets a session that sets `app.sweep = 'reconcile'` `SELECT` the budget reservations that still have work to do
    (reserved and not settled, or settled after a retry whose failed attempts are not yet added) in every scope, so that a node
    can find a scope whose workers are gone and settle what a crash left. It allows no write; it opens no other table or row; the
    marker is set by one query (a test fails if any other source file contains it); the result is used for scope ids only. It
    adds no power the role lacked (the role can already set `app.tenant_id` to any value, so isolation against a *compromised
-   data plane* is not a property of RLS and is not claimed); it makes the one cross-scope read explicit. Any further exception
-   belongs in this list, with its test, before it is merged.
+   data plane* is not a property of RLS and is not claimed); it makes the one cross-scope read explicit.
+
+   `unpublished_sweep` (migration 0010 of the engine's store) lets a session that sets `app.sweep = 'publish-events'` `SELECT` the
+   runs that still have events to publish (`last_seq > published_seq`) in every scope, so that a node can hand the events of a run
+   to the deployment's event sink even when no worker of its scope is polling. It allows no write, opens no other table, and is
+   granted to the data-plane role only (the read-only role gets nothing from it); the marker is set by one query (a test fails if any
+   other source file contains it); the result is used for scope ids only, and the events are then read scope by scope under the
+   ordinary policy. The same argument applies as above: it adds no power the role lacked. Tests: `UnpublishedSweepOnPostgresTests`.
+
+   Any further exception belongs in this list, with its test, before it is merged.
 
 ## 4. Data protection
 

@@ -30,7 +30,8 @@ input is reported as "a different input (14 bytes against 12 recorded)", not as 
 ## Telling the tool about your build
 
 The tool loads the assembly you point it at and asks it for its workflows. It does not start your application. Add a setup class
-next to the code that configures Kairos:
+next to the code that configures Kairos, and name it with the `ReplayCheckSetup` assembly attribute shown at the top of the sample (or pass `--setup <type name>`
+to the command). Without one of the two the command stops with exit code 2 and says so:
 
 [!code-csharp[](../../samples/GettingStarted/ReplayCheck.cs#replay-setup)]
 

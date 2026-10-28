@@ -38,4 +38,5 @@ Things worth knowing:
 
 A workflow that must stop waiting after a deadline can start the work in an activity that checks a deadline, or end the run from the
 outside (see [Leases and heartbeats](leases-and-heartbeats.md#runs-that-get-stuck) for the operator actions). Racing a timer against a
-signal inside one workflow method is not supported.
+signal inside your own workflow method is not supported; the agent runtime does exactly that for approvals that have a deadline (see [Approvals](approvals.md)), and
+you should use that rather than writing the race yourself.

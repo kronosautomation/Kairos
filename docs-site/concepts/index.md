@@ -24,4 +24,9 @@ Read these in order the first time; each one builds on the one before.
 | [Calling other agents with A2A](a2a.md) | Durable A2A calls, signed Agent Cards, and a Kairos run reported as an A2A task. |
 | [Agent Framework agents, made durable](agent-framework.md) | Your Microsoft Agent Framework agent with recorded steps, approvals that wait, and the same policy and budgets as native agents. |
 | [Agent Framework workflows, made durable](agent-framework-workflows.md) | Your Microsoft Agent Framework workflow with recorded supersteps, requests that wait for a person holding nothing, and cancel and terminate. |
+| [Connecting without a password](database-sign-in.md) | A short-lived token in place of the database password, from the identity the application already runs as. |
+| [Observability and Aspire](observability.md) | Spans, metrics and health for runs, tasks, activities and agents, and the Aspire integration. |
+| [Deploy safety (replay check)](deploy-safety.md) | Checking a new build against real runs before it ships. |
+| [Replay a run locally](replay-locally.md) | Stepping through a production run in your debugger from an exported history. |
+| [Payload encryption and its limits](payload-encryption.md) | How payloads are sealed, what one data key covers, large payloads in a blob store, and what encryption does not protect. |
 | [Verifying a release](verify-releases.md) | Signatures, SBOMs, build provenance and how to rebuild a release. |

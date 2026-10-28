@@ -28,7 +28,7 @@ If you prefer to subscribe yourself, set `options.RegisterTelemetry = false` and
 | `kairos.run` | in-process | The whole run, from its start to its closing event, with the outcome (`completed`, `failed`, `continued`). |
 
 Spans carry ids, names, counts and outcomes: run id, workflow type, build id, activity type and attempt number, timer duration, signal
-or approval id, the number of events in the history. Tenant and namespace ids are included as well, since they are what you filter on in
+name or approval id, the number of events in the history. Tenant and namespace ids are included as well, since they are what you filter on in
 a shared environment.
 
 Timers, signals, approvals and the closing `kairos.run` span are produced from history, with the times recorded there. They are

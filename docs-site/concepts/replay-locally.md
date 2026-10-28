@@ -10,8 +10,9 @@ code on your machine, under your debugger.
 kairos history export 3f2a9c1e-8d4b-4c47-9a10-5b7e6d2f0a11 --reason "reproduce ticket 4411" --out run.khist
 ```
 
-- **Operators only.** Exporting needs the operator role or above in the run's namespace. The command connects with a data-plane
-  database role, because an export is always recorded; a read-only role cannot export.
+- **Exporting is a privileged action.** Through the server's API it needs the operator role or above in the run's namespace. The command line connects to the database
+  directly with a data-plane role, because an export is always recorded; a read-only role cannot export. Whoever holds that connection string can export, so keep it to the people
+  who may.
 - **A reason is required**, up to 500 characters. It is written to the audit log in the same transaction that reads the history, together
   with the hash of the last event exported. There is no export without an audit entry. Say why; do not paste data into it.
 - **Who exported is not something you can type.** The audit entry names the database login the server authenticated and the network

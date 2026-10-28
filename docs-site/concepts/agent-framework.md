@@ -92,7 +92,7 @@ af.ConfigureAgents(agents => agents.UseModelCallGuard(budget).UseRedactor(Redact
 
 ## Conversations
 
-One conversation is one run, and each message is a signal to it. A session id is the run's workflow id, so a conversation can be picked up from another process. Messages are answered once: send again with the same message id and the conversation answers it once.
+One conversation is one run, and each message is a signal to it. A session id is the last part of the run's workflow id (`af/{agent}/{session id}`), so a conversation can be picked up from another process. Messages are answered once: send again with the same message id and the conversation answers it once.
 When the history grows long the run hands over to a fresh one, carrying the session. A conversation ends when it is closed, or after `ConversationIdleTimeout`; a message to an ended conversation is refused with a clear error.
 
 `DurableAIAgent.RunAsync` waits for the answer without polling. It reads what the run has written since the message was sent and, when the answer is not there yet, asks the engine to say when the run is written to again: the wait ends at the
