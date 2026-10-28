@@ -20,7 +20,12 @@ namespace Kairos.Cli
 
               kairos history verify <file>
 
+              kairos audit export --server <https://host> --namespace <guid> --reason "<why>" [--from <date>] [--to <date>] [--run <guid>]... [--out <dir>] [--token-env <name>]
+
               kairos audit verify <bundle> --key <public key file> [--kid <key id>] [--history <file>]... [--require-opened]
+
+            audit export asks a Kairos server for signed audit evidence of one namespace and writes the bundle to a directory. You sign in to the server (token in KAIROS_TOKEN); the administrator
+            role is needed; the server signs with a key of its own, audits every history it reads under your sign-in, and holds no payload key, so sealed steps are reported as not opened.
 
             audit verify checks a signed audit evidence bundle offline: the signature under the public key you supply (the key of the customer who signed, from their key service), the
             evidence against the signed manifest, every record's link, and the chain heads. Each --history file (from history export, full or metadata only) is checked against the recorded
@@ -51,9 +56,25 @@ namespace Kairos.Cli
 
             if (args[0] == "audit")
             {
+                if (args.Length >= 2 && args[1] == "export")
+                {
+                    AuditExportArguments exportArguments;
+                    try
+                    {
+                        exportArguments = AuditExportArguments.Parse(args[2..]);
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        await stderr.WriteLineAsync(ex.Message).ConfigureAwait(false);
+                        return ExitCode.Usage;
+                    }
+
+                    return await AuditExportCommand.RunAsync(exportArguments, stdout, stderr, cancellationToken).ConfigureAwait(false);
+                }
+
                 if (args.Length < 2 || args[1] != "verify")
                 {
-                    await stderr.WriteLineAsync("audit supports: verify <bundle> --key <public key file>").ConfigureAwait(false);
+                    await stderr.WriteLineAsync("audit supports: export --server <https://host> --namespace <guid> --reason \"<why>\" (--from/--to/--run), and verify <bundle> --key <public key file>").ConfigureAwait(false);
                     return ExitCode.Usage;
                 }
 

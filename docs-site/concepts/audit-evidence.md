@@ -11,6 +11,24 @@ Anyone can check such a bundle, offline, with the open source `kairos` tool. An 
 kairos audit verify ./evidence --key auditor-copy-of-public-key.pem
 ```
 
+## Getting a bundle from a Kairos server
+
+A Kairos server can make the bundle for you. An administrator of the namespace signs in and asks for it:
+
+```
+kairos audit export --server https://kairos.example.com --namespace <guid> --reason "annual audit" --from 2026-01-01 --to 2026-07-01 --out ./evidence
+```
+
+The sign-in token is read from the environment variable `KAIROS_TOKEN` (or the one named by `--token-env`). The same request is available as `POST /v1/namespaces/{id}/audit/evidence` and as a gRPC method; the
+answer is a zip of the three files below.
+
+- **Administrators only.** The export reads the audit log and exports histories, so it needs both grants, which only the administrator role holds. Operators, readers, approvers and workers are refused.
+- **A reason is required**, and it is written to the manifest and to the audit entry of every history the export reads. Each of those entries names the identity the server verified, not a name you typed.
+- **The server signs with a key of its own**, set with `Server:AuditEvidence:Signing` (Key Vault, KMS or Cloud KMS, in your account). It must not be the key that signs sessions, and the server refuses to start if it is.
+  A server without that setting answers that the export is not supported.
+- **Sealed steps are not opened.** The server holds no payload key, so approval and tool steps that your application sealed are listed as not opened. To open them, make the bundle in your own process with a protector,
+  using the library the server uses.
+
 ## What you are given
 
 A bundle is three files that belong together:
