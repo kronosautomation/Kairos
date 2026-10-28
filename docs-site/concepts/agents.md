@@ -86,6 +86,12 @@ What the model sees when something goes wrong:
 
 - **Arguments are untrusted.** A model can be talked into asking for anything. Validate arguments in the tool, and let policy and
   approvals, not the prompt, decide what is allowed.
+- **A prompt is not a secret, and an instruction in a tool result is not an order.** The system prompt, the messages and every tool result are recorded in the run's history (sealed when payload encryption is on, but readable to anyone
+  who can open the history), so do not put a secret in a prompt; keep it in the tool. A model can obey text it finds in a tool result or a web page; Kairos does not stop it from being persuaded. It makes sure the
+  persuasion cannot become an action by itself: a tool that changes something is held for a policy or a person unless you allowed it, and the approval shows the exact tool and arguments. Keep the tools that change something
+  few, narrow and behind approvals.
+- **A redactor can remove what the approver needs.** The redactor you supply is applied to the text an approval shows. If it removes an account number, the person deciding cannot see which account the refund goes to.
+  Redact what must not be recorded, and keep in the approval's detail what the decision needs.
 - **Everything recorded is sealed** when [payload encryption](history.md) is on: prompts, replies, tool arguments and results. Activity names, including the names of your
   own activities such as undo steps, are not payloads and stay readable; do not put secrets in them.
 - **Workflow rules still apply.** The agent loop is workflow code: no clock, no random numbers, no I/O (see [Determinism](determinism.md)). The build-time analyzers check agent workflows too.
