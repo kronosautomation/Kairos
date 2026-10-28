@@ -92,6 +92,19 @@ public sealed class KairosOptions
         return this;
     }
 
+    /// <summary>True once <see cref="AllowTls12ToDatabase"/> has been called.</summary>
+    public bool Tls12ToDatabaseAllowed { get; private set; }
+
+    /// <summary>
+    /// The connection to PostgreSQL negotiates TLS 1.3 only whenever the connection string insists on TLS (<c>SSL Mode=Require</c>, <c>VerifyCA</c> or <c>VerifyFull</c>). A database that cannot do 1.3 refuses the
+    /// connection; this call, made in code, accepts TLS 1.2 as well.
+    /// </summary>
+    public KairosOptions AllowTls12ToDatabase()
+    {
+        Tls12ToDatabaseAllowed = true;
+        return this;
+    }
+
     /// <summary>Postgres only: no cluster, no sidecar. Connect as the <c>kairos_dataplane</c> role.</summary>
     public KairosOptions UsePostgres(string connectionString) => UsePostgres(connectionString, _ => { });
 
@@ -106,7 +119,7 @@ public sealed class KairosOptions
         ArgumentNullException.ThrowIfNull(configure);
         StoreFactory = _ =>
         {
-            var builder = new NpgsqlDataSourceBuilder(connectionString);
+            var builder = new NpgsqlDataSourceBuilder(connectionString).ApplyDefault(connectionString, Tls12ToDatabaseAllowed);
             configure(builder);
             NpgsqlDataSource ds = builder.Build();
             PostgresWorkNotifier notifier = PostgresWorkNotifier.Start(ds);
