@@ -15,6 +15,30 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
     private readonly Dictionary<TenantScope, ScopeData> _scopes = [];
     private long _order;
 
+    public ValueTask NoteWorkerPayloadProtectionAsync(TenantScope scope, bool payloadsProtected, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            ScopeData data = Scope(scope, create: true)!;
+            WorkerPosture current = data.Posture;
+            data.Posture = payloadsProtected
+                ? current with { ProtectedPayloadsSeenAt = Later(current.ProtectedPayloadsSeenAt, now) }
+                : current with { ReadablePayloadsSeenAt = Later(current.ReadablePayloadsSeenAt, now) };
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<WorkerPosture> GetWorkerPostureAsync(TenantScope scope, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            return ValueTask.FromResult(Scope(scope, create: false)?.Posture ?? new WorkerPosture(null, null));
+        }
+    }
+
+    private static DateTimeOffset Later(DateTimeOffset? current, DateTimeOffset candidate) => current is { } c && c > candidate ? c : candidate;
+
     public ValueTask<StartRunResult> StartRunAsync(StartRunRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1073,6 +1097,8 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         public Dictionary<(Guid RunId, int ActivityId), ActivityTaskRow> ActivityTasks { get; } = [];
 
         public Dictionary<(Guid RunId, int TimerId), DateTimeOffset> Timers { get; } = [];
+
+        public WorkerPosture Posture { get; set; } = new(null, null);
 
         public List<AuditEntry> Audit { get; } = [];
     }

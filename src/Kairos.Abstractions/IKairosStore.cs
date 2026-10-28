@@ -244,6 +244,15 @@ public interface IKairosStore
     /// </summary>
     ValueTask<IReadOnlyList<TenantScope>> ScopesWithUnpublishedEventsAsync(int max, TenantScope? after, CancellationToken cancellationToken) => ValueTask.FromResult<IReadOnlyList<TenantScope>>([]);
 
+    /// <summary>
+    /// Remembers that a worker of <paramref name="scope"/> said, at <paramref name="now"/>, whether it protects payloads (<paramref name="payloadsProtected"/> true) or stores them readable (false, the worker was told
+    /// <c>AllowUnencryptedPayloads</c>). Only the latest time of each kind is kept. Stores that do not keep this ignore the call.
+    /// </summary>
+    ValueTask NoteWorkerPayloadProtectionAsync(TenantScope scope, bool payloadsProtected, DateTimeOffset now, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+    /// <summary>When a worker of <paramref name="scope"/> last reported each posture. Both null for a store that does not keep it, or when no worker has said.</summary>
+    ValueTask<WorkerPosture> GetWorkerPostureAsync(TenantScope scope, CancellationToken cancellationToken) => ValueTask.FromResult(new WorkerPosture(null, null));
+
     /// <summary>The workflow types and builds with runs in this scope and how many are open or closed. Closed runs are counted from <paramref name="closedSince"/> (null: all).</summary>
     ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This store cannot list runs.");

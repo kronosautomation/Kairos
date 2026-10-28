@@ -1,4 +1,5 @@
 using Kairos.Cloud.SelfHosted;
+using Kairos.Testing;
 using Kairos.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -41,6 +42,34 @@ public sealed class PayloadProtectionDefaultTests
             o.UseStore(new InMemoryKairosStore());
             configure(o);
         });
+
+    private sealed class ReportingStore(IKairosStore inner) : ForwardingStore(inner), IPayloadPostureReporting
+    {
+        public List<bool> Reported { get; } = [];
+
+        public void ReportPayloadProtection(bool payloadsProtected) => Reported.Add(payloadsProtected);
+    }
+
+    [Fact]
+    public void A_store_that_talks_to_a_server_is_told_whether_this_process_encrypts_payloads()
+    {
+        var readable = new ReportingStore(new InMemoryKairosStore());
+        var protectedStore = new ReportingStore(new InMemoryKairosStore());
+
+        using (ServiceProvider provider = new ServiceCollection().AddKairos(o => o.UseStore(readable).AllowUnencryptedPayloads()).BuildServiceProvider())
+        {
+            _ = provider.GetRequiredService<KairosClient>();
+            _ = provider.GetRequiredService<IKairosStore>();
+        }
+
+        using (ServiceProvider provider = new ServiceCollection().AddKairos(o => o.UseStore(protectedStore).UsePayloadProtector(new EnvelopePayloadProtector(LocalKeyProvider.CreateEphemeral()))).BuildServiceProvider())
+        {
+            _ = provider.GetRequiredService<IKairosStore>();
+        }
+
+        Assert.Equal([false], readable.Reported);
+        Assert.Equal([true], protectedStore.Reported);
+    }
 
     [Fact]
     public void A_host_with_no_protector_and_no_explicit_opt_out_refuses_to_start()

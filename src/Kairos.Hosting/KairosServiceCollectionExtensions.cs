@@ -25,7 +25,12 @@ public static class KairosServiceCollectionExtensions
         options.RequirePayloadProtectionDecision();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton(options);
-        services.AddSingleton(sp => options.StoreFactory(sp));
+        services.AddSingleton(sp =>
+        {
+            KairosOptions.StoreHandle created = options.StoreFactory(sp);
+            (created.Store as IPayloadPostureReporting)?.ReportPayloadProtection(options.PayloadProtector is not null); // a store that talks to a server tells it whether payloads are encrypted here
+            return created;
+        });
         services.AddSingleton(sp => sp.GetRequiredService<KairosOptions.StoreHandle>().Store);
         services.AddSingleton(sp => new KairosClient(sp.GetRequiredService<IKairosStore>(), sp.GetRequiredService<TimeProvider>(), payloadProtector: options.PayloadProtector, blobOffload: options.BlobOffload));
         services.AddSingleton(sp => new StuckTaskMonitor(
