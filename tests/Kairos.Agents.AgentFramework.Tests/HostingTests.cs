@@ -54,7 +54,11 @@ public sealed class HostingTests
             o.AllowUnencryptedPayloads();
             o.UseStore(new InMemoryKairosStore());
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(10);
-        }).AddAgentFramework(configure);
+        }).AddAgentFramework(af =>
+        {
+            _ = af.ConfigureAgents(b => b.AllowUnverifiedApprovers());
+            configure(af);
+        });
         return builder.Build();
     }
 

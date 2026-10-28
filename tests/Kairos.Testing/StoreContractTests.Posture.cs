@@ -20,6 +20,19 @@ public abstract partial class StoreContractTests
     }
 
     [Fact]
+    public async Task The_time_workers_last_said_they_accept_unverified_approvers_is_kept_and_never_moves_back()
+    {
+        IKairosStore store = await CreateStoreAsync();
+        DateTimeOffset t0 = Time.GetUtcNow();
+
+        await store.NoteWorkerUnverifiedApproversAsync(A, t0.AddMinutes(3), Ct);
+        await store.NoteWorkerUnverifiedApproversAsync(A, t0, Ct);
+
+        Assert.Equal(new WorkerPosture(null, null, t0.AddMinutes(3)), await store.GetWorkerPostureAsync(A, Ct));
+        Assert.Equal(new WorkerPosture(null, null, null), await store.GetWorkerPostureAsync(B, Ct));
+    }
+
+    [Fact]
     public async Task A_worker_report_is_seen_in_its_own_namespace_only()
     {
         IKairosStore store = await CreateStoreAsync();

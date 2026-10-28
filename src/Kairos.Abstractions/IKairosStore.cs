@@ -250,6 +250,9 @@ public interface IKairosStore
     /// </summary>
     ValueTask NoteWorkerPayloadProtectionAsync(TenantScope scope, bool payloadsProtected, DateTimeOffset now, CancellationToken cancellationToken) => ValueTask.CompletedTask;
 
+    /// <summary>Remembers that a worker of <paramref name="scope"/> said, at <paramref name="now"/>, that it accepts approval decisions without verifying who made them. Only the latest time is kept.</summary>
+    ValueTask NoteWorkerUnverifiedApproversAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
     /// <summary>When a worker of <paramref name="scope"/> last reported each posture. Both null for a store that does not keep it, or when no worker has said.</summary>
     ValueTask<WorkerPosture> GetWorkerPostureAsync(TenantScope scope, CancellationToken cancellationToken) => ValueTask.FromResult(new WorkerPosture(null, null));
 

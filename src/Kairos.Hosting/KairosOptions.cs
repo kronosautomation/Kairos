@@ -175,7 +175,19 @@ public sealed class KairosOptions
     public KairosOptions AddActivity(string activityType, ActivityFunc activity)
     {
         Activities.Register(activityType, activity);
+        NoteSource(activity);
         return this;
+    }
+
+    /// <summary>Components registered through <c>AddActivity</c> / <c>AddActivities</c> that report on how safely this process is configured (see <see cref="IWorkerPostureSource"/>).</summary>
+    internal List<IWorkerPostureSource> PostureSources { get; } = [];
+
+    private void NoteSource(ActivityFunc activity)
+    {
+        if (activity.Target is IWorkerPostureSource source && !PostureSources.Contains(source))
+        {
+            PostureSources.Add(source);
+        }
     }
 
     /// <summary>Registers several activities at once, for example <c>AgentsRuntime.Activities</c>.</summary>
@@ -185,6 +197,7 @@ public sealed class KairosOptions
         foreach ((string type, ActivityFunc activity) in activities)
         {
             Activities.Register(type, activity);
+            NoteSource(activity);
         }
 
         return this;

@@ -62,7 +62,7 @@ public sealed class A2aSamplesTests
         var time = new VirtualTimeProvider();
         var store = new InMemoryKairosStore();
         var client = new KairosClient(store, time);
-        var agents = new AgentsBuilder().UseTimeProvider(time).Build();
+        var agents = new AgentsBuilder().UseTimeProvider(time).AllowUnverifiedApprovers().Build();
         var billing = new Billing { Asks = asks };
         var activities = new ActivityRegistry();
         var workflows = new WorkflowRegistry();

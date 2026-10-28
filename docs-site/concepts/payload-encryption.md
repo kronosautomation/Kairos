@@ -33,6 +33,16 @@ Two things follow:
   spotting odd behaviour, but it does not restrict what the returned key can open. Do not treat it as an access control.
 - **Access to unwrap is access to the period's values.** Decide who may unwrap keys for a tenant and namespace on that basis, and keep the log.
 
+### Defaults and maxima
+
+| Setting | What it bounds | Default | Maximum |
+|---|---|---|---|
+| `DataKeyLifetime` | How long one data key is used for sealing, however quiet the worker. After a revoked master key, sealing stops within this time. | 1 hour | 24 hours |
+| `MaxUsesPerDataKey` | How many payloads one data key seals. | 10,000 | none (at least 1) |
+| `UnwrappedKeyTtl` | How long an unwrapped key is kept for opening. After a revoked master key, opening stops within this time. | 15 minutes | 1 hour |
+
+A protector made with a value above a maximum is refused when it is created, with the name of the setting. The maxima exist so that "revoking the key takes effect within minutes" cannot be configured away.
+
 ### Recording who unwrapped what
 
 The key provider (KMS, Key Vault) has its own audit trail of the calls it receives. The process that makes the calls can record them too: give the protector an `IKeyUseObserver` and it is told

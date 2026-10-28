@@ -109,6 +109,7 @@ public sealed class AgentsOnPostgresTests(PostgresFixture fixture)
     }
 
     private static AgentsRuntime Agents(ScriptedChatClient model) => new AgentsBuilder()
+        .AllowUnverifiedApprovers()
         .AddModel("m", model)
         .AddTool(new AgentTool("lookup", "Finds an order", """{"type":"object","properties":{}}""", ToolAccess.ReadOnly, (i, _) => ValueTask.FromResult("shipped " + i.IdempotencyKey[..8])))
         .Build();

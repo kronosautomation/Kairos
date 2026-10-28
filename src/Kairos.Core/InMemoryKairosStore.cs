@@ -29,6 +29,17 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask NoteWorkerUnverifiedApproversAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            ScopeData data = Scope(scope, create: true)!;
+            data.Posture = data.Posture with { UnverifiedApproversSeenAt = Later(data.Posture.UnverifiedApproversSeenAt, now) };
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
     public ValueTask<WorkerPosture> GetWorkerPostureAsync(TenantScope scope, CancellationToken cancellationToken)
     {
         lock (_gate)

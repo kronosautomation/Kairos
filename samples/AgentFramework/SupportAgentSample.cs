@@ -53,7 +53,7 @@ public static class SupportAgentSample
         services
             .AddKairos(kairos)
             .AddAgentFramework(af => af
-                .ConfigureAgents(agents => agents.UseModelCallGuard(budget))
+                .ConfigureAgents(agents => agents.UseModelCallGuard(budget).AllowUnverifiedApprovers()) // sample only: a real host proves who decides with UseApproverVerifier
                 .AddAgent(Create(model, orders), agent => agent.ReadOnly("lookup_order").Model("support-model", maxOutputTokens: 400)));
     #endregion
 

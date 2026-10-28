@@ -29,7 +29,7 @@ internal sealed class AgentHarness
     private readonly IPayloadProtector? _protector;
     private int _counter;
 
-    public AgentHarness(Action<AgentsBuilder> configure, bool faultInjection = false, VirtualTimeProvider? time = null, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true)
+    public AgentHarness(Action<AgentsBuilder> configure, bool faultInjection = false, VirtualTimeProvider? time = null, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true, bool allowUnverifiedApprovers = true)
     {
         Time = time ?? new VirtualTimeProvider();
         var memory = new InMemoryKairosStore();
@@ -48,6 +48,10 @@ internal sealed class AgentHarness
         if (verifyApprovers)
         {
             builder.UseApproverVerifier(NewVerifier());
+        }
+        else if (allowUnverifiedApprovers)
+        {
+            builder.AllowUnverifiedApprovers(); // the tests that do not care who decides say so, as production code has to
         }
         configure(builder);
         Runtime = builder.Build();

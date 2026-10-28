@@ -1,3 +1,4 @@
+using Kairos.Agents;
 using Kairos.Cloud.SelfHosted;
 using Kairos.Testing;
 using Kairos.Worker;
@@ -13,6 +14,24 @@ public sealed class PayloadProtectionDefaultTests
     private sealed class Lines : ILoggerProvider
     {
         public List<(LogLevel Level, string Text)> All { get; } = [];
+
+        /// <summary>The workers' start-up lines are written from the service's own thread of execution, so the tests wait for the line they expect (and, for a line that must not appear, give it a moment).</summary>
+        public async Task WaitForAsync(Func<(LogLevel Level, string Text), bool> predicate, TimeSpan? limit = null)
+        {
+            DateTime deadline = DateTime.UtcNow + (limit ?? TimeSpan.FromSeconds(5));
+            while (DateTime.UtcNow < deadline)
+            {
+                lock (All)
+                {
+                    if (All.Any(predicate))
+                    {
+                        return;
+                    }
+                }
+
+                await Task.Delay(10);
+            }
+        }
 
         public ILogger CreateLogger(string categoryName) => new Sink(this);
 
@@ -47,7 +66,65 @@ public sealed class PayloadProtectionDefaultTests
     {
         public List<bool> Reported { get; } = [];
 
+        public int UnverifiedReports { get; private set; }
+
         public void ReportPayloadProtection(bool payloadsProtected) => Reported.Add(payloadsProtected);
+
+        public void ReportUnverifiedApprovers() => UnverifiedReports++;
+    }
+
+    private static async Task<(List<(LogLevel Level, string Text)> Log, ReportingStore Store)> StartWithAgentsAsync(Action<AgentsBuilder> configure)
+    {
+        var lines = new Lines();
+        var store = new ReportingStore(new InMemoryKairosStore());
+        var agentsBuilder = new AgentsBuilder();
+        configure(agentsBuilder);
+        AgentsRuntime agents = agentsBuilder.Build();
+        HostApplicationBuilder builder = Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(lines);
+        _ = builder.Services.AddKairos(o => o.UseStore(store).AllowUnencryptedPayloads().AddActivities(agents.Activities));
+        using IHost host = builder.Build();
+        _ = host.Services.GetRequiredService<IKairosStore>();
+        await host.StartAsync();
+        await lines.WaitForAsync(l => l.Level == LogLevel.Warning && l.Text.Contains("approver", StringComparison.OrdinalIgnoreCase), TimeSpan.FromMilliseconds(300));
+        await host.StopAsync();
+        lock (lines.All)
+        {
+            return ([.. lines.All], store);
+        }
+    }
+
+    [Fact]
+    public async Task A_host_whose_agents_have_no_approver_verifier_is_warned_at_start_that_decisions_will_be_refused()
+    {
+        (List<(LogLevel Level, string Text)> log, ReportingStore store) = await StartWithAgentsAsync(_ => { });
+
+        Assert.Contains(log, l => l.Level == LogLevel.Warning && l.Text.Contains("every approval decision will be refused", StringComparison.Ordinal));
+        Assert.Equal(0, store.UnverifiedReports);
+    }
+
+    [Fact]
+    public async Task Allowing_unverified_approvers_is_warned_at_start_and_reported_to_the_store()
+    {
+        (List<(LogLevel Level, string Text)> log, ReportingStore store) = await StartWithAgentsAsync(b => b.AllowUnverifiedApprovers());
+
+        Assert.Contains(log, l => l.Level == LogLevel.Warning && l.Text.Contains("verification is OFF", StringComparison.Ordinal));
+        Assert.Equal(1, store.UnverifiedReports);
+    }
+
+    [Fact]
+    public async Task A_verifier_is_not_warned_about_and_nothing_is_reported()
+    {
+        (List<(LogLevel Level, string Text)> log, ReportingStore store) = await StartWithAgentsAsync(b => b.UseApproverVerifier(new AnyoneVerifier()));
+
+        Assert.DoesNotContain(log, l => l.Text.Contains("approver", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, store.UnverifiedReports);
+    }
+
+    private sealed class AnyoneVerifier : IApproverVerifier
+    {
+        public ValueTask<VerifiedApprover?> VerifyAsync(ApproverEvidenceContext context, CancellationToken cancellationToken) => ValueTask.FromResult<VerifiedApprover?>(null);
     }
 
     [Fact]
@@ -101,6 +178,7 @@ public sealed class PayloadProtectionDefaultTests
 
         using IHost host = builder.Build();
         await host.StartAsync();
+        await lines.WaitForAsync(l => l.Text.Contains("encryption is OFF", StringComparison.Ordinal));
         await host.StopAsync();
 
         lock (lines.All)

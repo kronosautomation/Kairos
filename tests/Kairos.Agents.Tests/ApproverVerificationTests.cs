@@ -200,6 +200,47 @@ public sealed class ApproverVerificationTests
     }
 
     [Fact]
+    public async Task Without_a_verifier_and_without_saying_so_every_decision_is_refused_even_when_the_request_names_nobody()
+    {
+        var h = new AgentHarness(b => b.AddModel("m", AgentHarness.Echo()), verifyApprovers: false, allowUnverifiedApprovers: false);
+        h.Workflow("ask", async (ctx, _) =>
+        {
+            (await ctx.RequestApprovalAsync(new ApprovalRequest { Action = "x", Requirement = new ApprovalRequirement() })).ThrowIfNotApproved();
+            return [];
+        });
+        RunKey run = await h.StartAsync("ask");
+        await h.RunAsync(run);
+        string id = AgentHistory.PendingApprovals(await h.HistoryAsync(run)).Single().ApprovalId;
+
+        await h.Client.DecideApprovalAsync(run, id, Encoding.UTF8.GetBytes(RawDecision(id, "user:anyone", "")), "claim");
+
+        await AssertStillWaitingAsync(h, run);
+        Assert.Contains("AllowUnverifiedApprovers", Assert.Single(h.Runtime.StartupWarnings), StringComparison.Ordinal);
+        Assert.False(h.Runtime.ApproversUnverified);
+    }
+
+    [Fact]
+    public async Task Saying_so_in_code_accepts_an_unrestricted_decision_warns_and_still_refuses_a_restricted_one()
+    {
+        (AgentHarness h, RunKey run, string id) = await WaitingAsync(verify: false, requirement: new ApprovalRequirement(Roles: ["finance"]));
+
+        await h.Client.DecideApprovalAsync(run, id, Encoding.UTF8.GetBytes(RawDecision(id, "user:alice", "\"finance\"")), "claim");
+
+        await AssertStillWaitingAsync(h, run); // a role was required and nothing can prove it
+        Assert.True(h.Runtime.ApproversUnverified);
+        Assert.Contains("OFF", Assert.Single(h.Runtime.StartupWarnings), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_verifier_means_no_warning_and_a_verified_posture()
+    {
+        var h = new AgentHarness(b => b.AddModel("m", AgentHarness.Echo()));
+
+        Assert.Empty(h.Runtime.StartupWarnings);
+        Assert.False(h.Runtime.ApproversUnverified);
+    }
+
+    [Fact]
     public async Task A_verifier_that_throws_leaves_the_approval_open()
     {
         var h = new AgentHarness(

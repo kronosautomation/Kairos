@@ -45,6 +45,8 @@ public sealed class AgentsBuilder
 
     internal IApproverVerifier? Verifier { get; private set; }
 
+    internal bool UnverifiedApproversAllowed { get; private set; }
+
     internal Func<string, string>? Redactor { get; private set; }
 
     internal TimeProvider Time { get; private set; } = TimeProvider.System;
@@ -154,8 +156,19 @@ public sealed class AgentsBuilder
     }
 
     /// <summary>
-    /// Proves who decided each approval. Without a verifier, a decision is accepted only when the request names no approvers and no roles
-    /// (anyone may decide); a request that names approvers or roles refuses every decision, because nothing could prove the claim.
+    /// Says, in code, that approval decisions may be accepted without proof of who made them. Without a verifier (<see cref="UseApproverVerifier"/>) and without this call, **every** approval decision is
+    /// refused: identity is verified, never asserted. With this call, and no verifier, a decision is accepted when the request names no approvers and no roles (anyone who can send it may decide), and a
+    /// request that names approvers or roles still refuses every decision, because nothing could prove the claim. The choice is logged as a warning when the workers start, and a worker connected to a server
+    /// reports it, so that the dashboard shows the namespace. For development, tests and approvals that do not matter.
+    /// </summary>
+    public AgentsBuilder AllowUnverifiedApprovers()
+    {
+        UnverifiedApproversAllowed = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Proves who decided each approval. With a verifier, only what it proves counts. Without one, see <see cref="AllowUnverifiedApprovers"/>: by default every decision is refused.
     /// </summary>
     public AgentsBuilder UseApproverVerifier(IApproverVerifier verifier)
     {
@@ -252,7 +265,7 @@ public sealed class UnknownToolException : Exception
 /// <summary>
 /// The configured agent layer. <see cref="Activities"/> is what workers register; <see cref="CreateContext"/> is what workflow code uses.
 /// </summary>
-public sealed class AgentsRuntime
+public sealed class AgentsRuntime : IWorkerPostureSource
 {
     /// <summary>Passed to the model client in <see cref="ChatOptions.AdditionalProperties"/>; stable across retries of one step.</summary>
     public const string IdempotencyKeyProperty = "kairos.idempotency_key";
@@ -273,6 +286,16 @@ public sealed class AgentsRuntime
             [AgentActivityNames.SagaMark] = (_, input, _) => Task.FromResult(input),
         };
     }
+
+    /// <inheritdoc />
+    public bool ApproversUnverified => _config.Verifier is null && _config.UnverifiedApproversAllowed;
+
+    /// <inheritdoc />
+    public IReadOnlyList<string> StartupWarnings => _config.Verifier is not null
+        ? []
+        : _config.UnverifiedApproversAllowed
+            ? ["Approver verification is OFF (AllowUnverifiedApprovers): an approval that names nobody is decided by whoever sends the decision, and an approval that names approvers or roles is refused."]
+            : ["No approver verifier is configured, so every approval decision will be refused. Call UseApproverVerifier(...) to verify who decides, or AllowUnverifiedApprovers() to accept decisions unverified on purpose."];
 
     /// <summary>Register these on every worker that can run the workflows (<c>options.AddActivities(agents.Activities)</c> in embedded mode).</summary>
     public IReadOnlyDictionary<string, ActivityFunc> Activities => _activities;
@@ -716,7 +739,7 @@ public sealed class AgentsRuntime
     {
         ApprovalVerifyRequest request = WireCodec.Read(input, AgentJson.Default.ApprovalVerifyRequest);
         ApprovalVerifyResult result = await ApprovalRules.EvaluateAsync(
-            request, context.Run, _config.Verifier, cancellationToken, context.IdempotencyKey).ConfigureAwait(false);
+            request, context.Run, _config.Verifier, cancellationToken, context.IdempotencyKey, _config.UnverifiedApproversAllowed).ConfigureAwait(false);
         return WireCodec.Write(result, AgentJson.Default.ApprovalVerifyResult);
     }
 

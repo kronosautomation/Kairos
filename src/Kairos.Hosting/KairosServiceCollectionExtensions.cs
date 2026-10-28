@@ -28,7 +28,15 @@ public static class KairosServiceCollectionExtensions
         services.AddSingleton(sp =>
         {
             KairosOptions.StoreHandle created = options.StoreFactory(sp);
-            (created.Store as IPayloadPostureReporting)?.ReportPayloadProtection(options.PayloadProtector is not null); // a store that talks to a server tells it whether payloads are encrypted here
+            if (created.Store is IPayloadPostureReporting reporting)
+            {
+                reporting.ReportPayloadProtection(options.PayloadProtector is not null); // a store that talks to a server tells it whether payloads are encrypted here
+                if (options.PostureSources.Any(s => s.ApproversUnverified))
+                {
+                    reporting.ReportUnverifiedApprovers();
+                }
+            }
+
             return created;
         });
         services.AddSingleton(sp => sp.GetRequiredService<KairosOptions.StoreHandle>().Store);
@@ -64,6 +72,11 @@ internal sealed partial class KairosWorkerService(
             LogUnencrypted(logger);
         }
 
+        foreach (string warning in options.PostureSources.SelectMany(s => s.StartupWarnings))
+        {
+            LogPosture(logger, warning);
+        }
+
         var loops = new Task[options.WorkerCount];
         for (int i = 0; i < loops.Length; i++)
         {
@@ -80,6 +93,9 @@ internal sealed partial class KairosWorkerService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Payload encryption is OFF (AllowUnencryptedPayloads): workflow inputs, results and signals are stored readable in the database")]
     private static partial void LogUnencrypted(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Warning}")]
+    private static partial void LogPosture(ILogger logger, string warning);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Workflow task for run {RunId} failed replay and was released")]
     private static partial void LogReplayFault(ILogger logger, Exception error, Guid runId);

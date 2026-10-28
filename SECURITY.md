@@ -59,13 +59,31 @@ against your own installation, never against someone else's deployment or agains
 
 ## Supported versions
 
-Security fixes are made to the **latest release**. While Kairos is before 1.0, earlier releases do not receive fixes; upgrade to the release that carries the advisory's fix. This
-table is updated when a support policy for older releases is published.
+Security fixes are made to the **latest release**. While Kairos is before 1.0, earlier releases do not receive fixes; upgrade to the release that carries the advisory's fix.
+**From 1.0**, fixes are made to the **current and the previous minor release**: when 1.4 is the latest, 1.4.x and 1.3.x are fixed, and 1.2.x and older are not. This table is updated
+with each minor release.
 
 | Version | Fixes |
 |---|---|
-| latest release | yes |
-| anything older | no |
+| before 1.0: the latest release | yes |
+| before 1.0: anything older | no |
+| from 1.0: the current minor release | yes |
+| from 1.0: the previous minor release | yes |
+| from 1.0: anything older | no |
+
+## Vulnerabilities that are being exploited
+
+If a vulnerability in a Kairos product is **actively exploited**, we also report it to the authorities, as the EU Cyber Resilience Act requires of the manufacturer of a product with digital
+elements. We make the report through the single reporting platform that ENISA operates, to the coordinating CSIRT and to ENISA:
+
+| When | What we report |
+|---|---|
+| Within 24 hours of becoming aware | An early warning: that an actively exploited vulnerability exists, and what we know so far. |
+| Within 72 hours | A notification: the nature of the vulnerability, the exploit as far as we know it, what we have done or will do, and what users can do meanwhile. |
+| After a corrective measure is available | A final report. |
+
+Users are told through the advisory, and commercial customers directly, as fast as we can once a mitigation exists; the report to the authorities does not wait for the fix. If you report
+something that you know is being exploited, say so at once: that starts these clocks.
 
 ## Verifying what you install
 

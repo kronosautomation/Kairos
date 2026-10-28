@@ -447,7 +447,7 @@ internal static class ApprovalRules
     }
 
     public static async ValueTask<ApprovalVerifyResult> EvaluateAsync(
-        ApprovalVerifyRequest check, RunKey run, IApproverVerifier? verifier, CancellationToken cancellationToken, string? stepKey = null)
+        ApprovalVerifyRequest check, RunKey run, IApproverVerifier? verifier, CancellationToken cancellationToken, string? stepKey = null, bool allowUnverified = false)
     {
         WireApprovalRequest request = check.Request;
         WireApprovalDecision decision = check.Decision;
@@ -467,6 +467,10 @@ internal static class ApprovalRules
 
             subject = proven.Subject;
             roles = [.. proven.Roles];
+        }
+        else if (!allowUnverified)
+        {
+            return Refuse("no approver verifier is configured, so who decided cannot be established (UseApproverVerifier, or AllowUnverifiedApprovers to accept decisions unverified on purpose)");
         }
         else if (restricted)
         {

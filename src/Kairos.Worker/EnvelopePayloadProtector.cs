@@ -35,6 +35,12 @@ public sealed class EnvelopeOptions
     /// <summary>Data keys that are replaced after <paramref name="lifetime"/> or <paramref name="maxUses"/> payloads, whichever comes first.</summary>
     public static EnvelopeOptions ShortLived(TimeSpan lifetime, int maxUses = 100) => new() { DataKeyLifetime = lifetime, MaxUsesPerDataKey = maxUses };
 
+    /// <summary>The longest <see cref="DataKeyLifetime"/> that is accepted: 24 hours. A longer window would keep a revoked master key in use for sealing for longer than a day.</summary>
+    public static readonly TimeSpan MaxDataKeyLifetime = TimeSpan.FromHours(24);
+
+    /// <summary>The longest <see cref="UnwrappedKeyTtl"/> that is accepted: one hour. A longer window would let a running worker keep opening payloads for longer than an hour after a master key was revoked.</summary>
+    public static readonly TimeSpan MaxUnwrappedKeyTtl = TimeSpan.FromHours(1);
+
     internal void Validate()
     {
         if (MaxUsesPerDataKey < 1)
@@ -45,6 +51,16 @@ public sealed class EnvelopeOptions
         if (DataKeyLifetime <= TimeSpan.Zero || UnwrappedKeyTtl <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(DataKeyLifetime), "Key lifetimes must be positive.");
+        }
+
+        if (DataKeyLifetime > MaxDataKeyLifetime)
+        {
+            throw new ArgumentOutOfRangeException(nameof(DataKeyLifetime), $"A data key may be used for sealing for at most {MaxDataKeyLifetime.TotalHours:0} hours.");
+        }
+
+        if (UnwrappedKeyTtl > MaxUnwrappedKeyTtl)
+        {
+            throw new ArgumentOutOfRangeException(nameof(UnwrappedKeyTtl), $"An unwrapped key may be cached for at most {MaxUnwrappedKeyTtl.TotalHours:0} hour.");
         }
 
         if (MaxCachedKeys < 1)

@@ -23,7 +23,7 @@ public sealed class KairosA2aTasksTests
             Time = time ?? new VirtualTimeProvider();
             Kairos = shared ?? new InMemoryKairosStore();
             Client = new KairosClient(Kairos, Time);
-            Agents = new AgentsBuilder().UseTimeProvider(Time).Build();
+            Agents = new AgentsBuilder().UseTimeProvider(Time).AllowUnverifiedApprovers().Build();
             Agents.RegisterInto(_activities);
             Worker = new WorkerRuntime(Kairos, Scope, _workflows, _activities, Time, new WorkerOptions { AutoHeartbeat = false });
             Tasks = new KairosA2aTasks(Client, Scope, options);

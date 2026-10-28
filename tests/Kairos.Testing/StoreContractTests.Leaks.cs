@@ -214,6 +214,12 @@ public abstract partial class StoreContractTests
             await a.Store.NoteWorkerPayloadProtectionAsync(f, payloadsProtected: false, Time.GetUtcNow(), Ct);
             Assert.Equal(before, await a.Store.GetWorkerPostureAsync(A, Ct));
         },
+        [nameof(IKairosStore.NoteWorkerUnverifiedApproversAsync)] = async (a, f) =>
+        {
+            WorkerPosture before = await a.Store.GetWorkerPostureAsync(A, Ct);
+            await a.Store.NoteWorkerUnverifiedApproversAsync(f, Time.GetUtcNow(), Ct);
+            Assert.Equal(before, await a.Store.GetWorkerPostureAsync(A, Ct));
+        },
         [nameof(IKairosStore.GetWorkerPostureAsync)] = async (a, f) =>
         {
             await a.Store.NoteWorkerPayloadProtectionAsync(A, payloadsProtected: false, Time.GetUtcNow(), Ct);

@@ -24,7 +24,7 @@ internal sealed class AfHarness
     private readonly IPayloadProtector? _protector;
 
     public AfHarness(
-        Action<AgentFrameworkBuilder> configure, bool faultInjection = false, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true, AfHarness? redeployOf = null,
+        Action<AgentFrameworkBuilder> configure, bool faultInjection = false, ulong seed = 1, IPayloadProtector? protector = null, bool verifyApprovers = true, AfHarness? redeployOf = null, bool allowUnverifiedApprovers = true,
         Func<IKairosStore, IKairosStore>? wrapStore = null)
     {
         if (redeployOf is null)
@@ -61,6 +61,10 @@ internal sealed class AfHarness
             if (verifyApprovers)
             {
                 b.UseApproverVerifier(NewVerifier());
+            }
+            else if (allowUnverifiedApprovers)
+            {
+                b.AllowUnverifiedApprovers();
             }
         });
         configure(builder);

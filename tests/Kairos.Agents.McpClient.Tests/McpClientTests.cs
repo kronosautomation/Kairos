@@ -97,7 +97,7 @@ public sealed class McpRig
 
         Store = (IKairosStore?)Faults ?? Memory;
         Client = new KairosClient(Store, Time);
-        Agents = new AgentsBuilder().UseTimeProvider(Time).Build();
+        Agents = new AgentsBuilder().UseTimeProvider(Time).AllowUnverifiedApprovers().Build();
         Agents.RegisterInto(_activities);
         McpClientsBuilder builder = new McpClientsBuilder().AddServer("crm", server).ReadOnlyTools("crm", "lookup");
         configure?.Invoke(builder);

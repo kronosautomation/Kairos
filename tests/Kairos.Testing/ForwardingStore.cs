@@ -60,6 +60,9 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask NoteWorkerPayloadProtectionAsync(TenantScope scope, bool payloadsProtected, DateTimeOffset now, CancellationToken cancellationToken) =>
         inner.NoteWorkerPayloadProtectionAsync(scope, payloadsProtected, now, cancellationToken);
 
+    public virtual ValueTask NoteWorkerUnverifiedApproversAsync(TenantScope scope, DateTimeOffset now, CancellationToken cancellationToken) =>
+        inner.NoteWorkerUnverifiedApproversAsync(scope, now, cancellationToken);
+
     public virtual ValueTask<WorkerPosture> GetWorkerPostureAsync(TenantScope scope, CancellationToken cancellationToken) =>
         inner.GetWorkerPostureAsync(scope, cancellationToken);
 

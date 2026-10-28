@@ -56,8 +56,10 @@ evidence that came with them, and records the result as a step, so the check is 
   The memory is per process: the short life and the binding to one decision are what limit a replay on another worker.
 - **Register the verifier** with `UseApproverVerifier`. For an identity provider that issues ID tokens, implement `IApproverVerifier` over
   the provider's validation instead; it receives the run, approval, answer, claimed subject, the evidence and the key of the verification step.
-- **Fail closed.** Without a verifier, a request that names approvers or roles refuses every decision, because nothing could prove the
-  claim. A request that names nobody accepts any identity, and the person the agent acts for is still barred from approving their own request.
+- **Fail closed.** Without a verifier, **every** decision is refused, however little the approval asks for: identity is verified, never asserted. A host that really wants decisions accepted unverified (development,
+  tests, approvals that do not matter) says so in code with `AllowUnverifiedApprovers()`. That choice is logged as a warning when the workers start, and a worker connected to a Kairos server reports it so that the
+  dashboard shows the namespace. Even then, a request that names approvers or roles refuses every decision, because nothing could prove the claim; a request that names nobody accepts any identity, and the
+  person the agent acts for is still barred from approving their own request.
 
 ## Deciding
 

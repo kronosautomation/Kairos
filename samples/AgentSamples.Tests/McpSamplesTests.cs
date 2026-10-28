@@ -46,7 +46,7 @@ public sealed class McpSamplesTests
             Time = new VirtualTimeProvider();
             Store = new InMemoryKairosStore();
             Client = new KairosClient(Store, Time);
-            Agents = new AgentsBuilder().UseTimeProvider(Time).Build();
+            Agents = new AgentsBuilder().UseTimeProvider(Time).AllowUnverifiedApprovers().Build();
             Agents.RegisterInto(_activities);
             if (endpoint is not null)
             {
