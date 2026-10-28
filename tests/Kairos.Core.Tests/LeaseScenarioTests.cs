@@ -3,7 +3,7 @@ using Kairos.Testing.Simulation;
 namespace Kairos.Core.Tests;
 
 /// <summary>
-/// Simulator scenarios for the lease review (docs/reviews/2026-10-24-leases.md): L1 long activities must survive by renewing
+/// Simulator scenarios for the lease review (the lease review): L1 long activities must survive by renewing
 /// their lease, L2 poison tasks must end in a recorded failure instead of looping. (L3, clock skew, needs a database clock and
 /// lives in the Postgres tests; L4, graceful release, is in the store contract tests.)
 /// </summary>

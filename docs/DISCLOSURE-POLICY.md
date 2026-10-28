@@ -23,7 +23,7 @@ research plans, unfixed weaknesses, commercial internals, and operational detail
 | Positioning, competitor analysis, target segments | docs/POSITIONING.md, Strategy and Applications docs | Strategy |
 | Pricing rationale, revenue scenarios, discount programs | Licensing and Pricing doc | Commercial |
 | Research reading list and research-driven plans | docs/RESEARCH.md | Roadmap and differentiation |
-| Code and security reviews with open findings | docs/reviews/ | Unfixed weaknesses; publish only as advisories after fixes ship |
+| Code and security reviews with open findings | Kairos.Commercial/docs/reviews/ (the Apache reviews moved to docs/reviews/apache/ there on 28 Oct 2026; none stays here) | Unfixed weaknesses; publish only as advisories after fixes ship |
 | Hosting design, cost model, cell layout, account structure | docs/HOSTING-AWS.md | Operational security, commercial |
 | Roadmap, milestone plans, kickoff prompts, work map | docs/MULTI-CLOUD-AND-AGENTS.md, docs/KICKOFF.md, CLAUDE.md, work map | Roadmap |
 | Raw benchmark notes | docs/BENCH-GROUP-COMMIT.md | Unreviewed numbers |
@@ -40,7 +40,8 @@ docs site gets **rewritten customer-facing versions**, never copies.
 2. Pages describe behaviour and guarantees, not roadmap: no "coming soon", milestone numbers, internal invariant IDs
    (I1, F2, L3 ...), review IDs, or competitor comparisons beyond the published comparison table.
 3. Commercial features are described by what they do, never how they are built.
-4. CI check (`build/check-disclosure.ps1`, to be added): fails if `docs-site/` or `samples/` reference `docs/`,
+4. Release gate (build/release/Test-ReleaseGate.ps1): fails a release if any file under docs/reviews has an open-items section or an unstarted finding.
+4a. CI check (`build/check-disclosure.ps1`, to be added): fails if `docs-site/` or `samples/` reference `docs/`,
    `reviews`, `Kairos.Commercial`, or contain the terms on a blocklist (milestone, roadmap, revenue, competitor,
    design partner, internal).
 5. Every new public page gets a disclosure review before publishing (Aaron approves).

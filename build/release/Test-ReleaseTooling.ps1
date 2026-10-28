@@ -182,6 +182,14 @@ try {
     $gate = { param($tag) & (Join-Path $PSScriptRoot 'Test-ReleaseGate.ps1') -Tag $tag -Root $repo -SkipMainCheck -SkipVulnerabilityCheck *> $null }
     Expect 'a complete repository on a version tag passes' { & $gate 'refs/tags/v1.2.3'; $true }
     Expect 'a prerelease tag passes' { & $gate 'refs/tags/v1.2.3-rc.1'; $true }
+    New-Item -ItemType Directory -Force -Path (Join-Path $repo 'docs/reviews') | Out-Null
+    Set-Content (Join-Path $repo 'docs/reviews/closed.md') "# A review`n`nEvery finding was fixed."
+    Expect 'a review with nothing open may stay' { & $gate 'refs/tags/v1.2.3'; $true }
+    Set-Content (Join-Path $repo 'docs/reviews/open.md') "# A review`n`n## Open items`n`n1. Something unfixed."
+    Expect 'a review with an open-items section fails the gate' { Fails { & $gate 'refs/tags/v1.2.3' } }
+    Set-Content (Join-Path $repo 'docs/reviews/open.md') "# A review`n`n| L5 | Tracked | Not started. |"
+    Expect 'a review with a finding that is not started fails the gate' { Fails { & $gate 'refs/tags/v1.2.3' } }
+    Remove-Item -Recurse -Force (Join-Path $repo 'docs')
     Expect 'a tag that is not a version fails' { Fails { & $gate 'refs/tags/release-1' } }
     Expect 'a tag with only two version parts fails' { Fails { & $gate 'refs/tags/v1.2' } }
     Set-Content (Join-Path $repo 'README.md') 'Report at https://github.com/REPLACE-ORG/kairos/security/policy'
