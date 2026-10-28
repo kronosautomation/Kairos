@@ -238,6 +238,12 @@ public interface IKairosStore
     /// </summary>
     ValueTask<int> PublishEventsAsync(TenantScope scope, IEventSink sink, int maxRuns, CancellationToken cancellationToken) => ValueTask.FromResult(0);
 
+    /// <summary>
+    /// The scopes that have run events not yet handed to a sink, at most <paramref name="max"/>, in scope order after <paramref name="after"/> (null: from the start). This is the one query that looks across scopes:
+    /// it answers scope ids and nothing else, so that a publisher can visit scopes no worker is polling. Stores without an event feed answer an empty list.
+    /// </summary>
+    ValueTask<IReadOnlyList<TenantScope>> ScopesWithUnpublishedEventsAsync(int max, TenantScope? after, CancellationToken cancellationToken) => ValueTask.FromResult<IReadOnlyList<TenantScope>>([]);
+
     /// <summary>The workflow types and builds with runs in this scope and how many are open or closed. Closed runs are counted from <paramref name="closedSince"/> (null: all).</summary>
     ValueTask<IReadOnlyList<RunGroup>> GetRunGroupsAsync(TenantScope scope, DateTimeOffset? closedSince, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This store cannot list runs.");

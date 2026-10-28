@@ -45,6 +45,49 @@ public sealed partial class PostgresKairosStore
     }
 
     /// <summary>
+    /// The scopes with runs whose events are not all published: the one query that looks across scopes. It sets <c>app.sweep</c> (see migration 0010), which makes exactly those runs readable, and
+    /// returns scope ids only.
+    /// </summary>
+    public async ValueTask<IReadOnlyList<TenantScope>> ScopesWithUnpublishedEventsAsync(int max, TenantScope? after, CancellationToken cancellationToken)
+    {
+        if (max < 1)
+        {
+            return [];
+        }
+
+        await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction tx = await conn.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using (var mark = new NpgsqlCommand("SELECT set_config('app.sweep', 'publish-events', true)", conn, tx))
+        {
+            _ = await mark.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT DISTINCT tenant_id, namespace_id
+            FROM kairos.runs
+            WHERE last_seq > published_seq AND (@hasAfter = false OR (tenant_id, namespace_id) > (@afterT, @afterN))
+            ORDER BY tenant_id, namespace_id
+            LIMIT @max
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("hasAfter", after is not null);
+        cmd.Parameters.AddWithValue("afterT", after?.TenantId ?? Guid.Empty);
+        cmd.Parameters.AddWithValue("afterN", after?.NamespaceId ?? Guid.Empty);
+        cmd.Parameters.AddWithValue("max", max);
+        var scopes = new List<TenantScope>();
+        await using (NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                scopes.Add(new TenantScope(reader.GetGuid(0), reader.GetGuid(1)));
+            }
+        }
+
+        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return scopes;
+    }
+
+    /// <summary>
     /// Hands new events to the sink run by run: reads the run's events after <c>published_seq</c>, lets the sink accept them, and only then moves <c>published_seq</c> with a compare-and-set
     /// (a publisher that lost the race to another node moves nothing, and the consumer de-duplicates the repeat by id). No hash chain is read or checked here: a notice is metadata and says nothing a reader could not get from the history.
     /// </summary>

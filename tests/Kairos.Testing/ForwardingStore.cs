@@ -54,6 +54,9 @@ public abstract class ForwardingStore(IKairosStore inner) : IKairosStore
     public virtual ValueTask<int> ProjectAggregatesAsync(TenantScope scope, int maxRuns, CancellationToken cancellationToken) =>
         inner.ProjectAggregatesAsync(scope, maxRuns, cancellationToken);
 
+    public virtual ValueTask<IReadOnlyList<TenantScope>> ScopesWithUnpublishedEventsAsync(int max, TenantScope? after, CancellationToken cancellationToken) =>
+        inner.ScopesWithUnpublishedEventsAsync(max, after, cancellationToken);
+
     public virtual ValueTask<int> PublishEventsAsync(TenantScope scope, IEventSink sink, int maxRuns, CancellationToken cancellationToken) =>
         inner.PublishEventsAsync(scope, sink, maxRuns, cancellationToken);
 

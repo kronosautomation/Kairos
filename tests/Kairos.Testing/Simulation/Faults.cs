@@ -187,6 +187,9 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
     public ValueTask<int> ProjectAggregatesAsync(TenantScope scope, int maxRuns, CancellationToken cancellationToken) =>
         Faulty(nameof(ProjectAggregatesAsync), () => inner.ProjectAggregatesAsync(scope, maxRuns, cancellationToken));
 
+    public ValueTask<IReadOnlyList<TenantScope>> ScopesWithUnpublishedEventsAsync(int max, TenantScope? after, CancellationToken cancellationToken) =>
+        Faulty(nameof(ScopesWithUnpublishedEventsAsync), () => inner.ScopesWithUnpublishedEventsAsync(max, after, cancellationToken));
+
     public ValueTask<int> PublishEventsAsync(TenantScope scope, IEventSink sink, int maxRuns, CancellationToken cancellationToken) =>
         Faulty(nameof(PublishEventsAsync), () => inner.PublishEventsAsync(scope, sink, maxRuns, cancellationToken));
 

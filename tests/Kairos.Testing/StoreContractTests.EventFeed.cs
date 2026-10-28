@@ -66,6 +66,27 @@ public abstract partial class StoreContractTests
     }
 
     [Fact]
+    public async Task Scopes_with_unpublished_events_are_named_in_order_in_pages_and_leave_the_list_once_published()
+    {
+        IKairosStore store = await CreateStoreAsync();
+        var client = new KairosClient(store, Time);
+        _ = await client.StartAsync(B, "sweep-b", "feed", B8("in"), cancellationToken: Ct);
+        _ = await client.StartAsync(A, "sweep-a", "feed", B8("in"), cancellationToken: Ct);
+        TenantScope[] expected = [.. new[] { A, B }.OrderBy(s => s.TenantId).ThenBy(s => s.NamespaceId)];
+
+        Assert.Equal(expected, await store.ScopesWithUnpublishedEventsAsync(10, null, Ct));
+        Assert.Equal([expected[0]], await store.ScopesWithUnpublishedEventsAsync(1, null, Ct));
+        Assert.Equal([expected[1]], await store.ScopesWithUnpublishedEventsAsync(1, expected[0], Ct));
+        Assert.Empty(await store.ScopesWithUnpublishedEventsAsync(1, expected[1], Ct));
+        Assert.Empty(await store.ScopesWithUnpublishedEventsAsync(0, null, Ct));
+
+        _ = await store.PublishEventsAsync(expected[0], new RecordingSink(), 10, Ct);
+        Assert.Equal([expected[1]], await store.ScopesWithUnpublishedEventsAsync(10, null, Ct));
+        _ = await store.PublishEventsAsync(expected[1], new RecordingSink(), 10, Ct);
+        Assert.Empty(await store.ScopesWithUnpublishedEventsAsync(10, null, Ct));
+    }
+
+    [Fact]
     public async Task The_feed_of_a_scope_carries_only_its_own_runs_and_a_budget_limits_how_many_runs_one_call_reads()
     {
         IKairosStore store = await CreateStoreAsync();

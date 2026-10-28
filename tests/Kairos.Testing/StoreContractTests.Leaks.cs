@@ -198,6 +198,15 @@ public abstract partial class StoreContractTests
         },
         [nameof(IKairosStore.ProjectAggregatesAsync)] = async (a, f) =>
             Assert.Equal(0, await a.Store.ProjectAggregatesAsync(f, 1000, Ct)),
+        [nameof(IKairosStore.ScopesWithUnpublishedEventsAsync)] = async (a, f) =>
+        {
+            // The one query that looks across scopes, by design: it answers scope ids and nothing else. What must hold is that it is not a way to read a scope's events: naming a foreign scope gives no read of it.
+            IReadOnlyList<TenantScope> scopes = await a.Store.ScopesWithUnpublishedEventsAsync(1000, null, Ct);
+            Assert.All(scopes, s => Assert.NotEqual(Guid.Empty, s.TenantId));
+            var sink = new RecordingSink();
+            Assert.Equal(0, await a.Store.PublishEventsAsync(f, sink, 1000, Ct));
+            Assert.Empty(sink.Seen);
+        },
         [nameof(IKairosStore.PublishEventsAsync)] = async (a, f) =>
         {
             var sink = new RecordingSink();

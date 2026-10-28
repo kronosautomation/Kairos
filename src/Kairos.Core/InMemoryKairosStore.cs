@@ -666,6 +666,21 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
         }
     }
 
+    public ValueTask<IReadOnlyList<TenantScope>> ScopesWithUnpublishedEventsAsync(int max, TenantScope? after, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            IReadOnlyList<TenantScope> found = max < 1
+                ? []
+                : [.. _scopes.Where(s => s.Value.Runs.Values.Any(r => r.History.Count > 0 && r.History[^1].Sequence > r.PublishedSeq))
+                    .Select(s => s.Key)
+                    .Where(k => after is not { } a || (k.TenantId, k.NamespaceId).CompareTo((a.TenantId, a.NamespaceId)) > 0)
+                    .OrderBy(k => k.TenantId).ThenBy(k => k.NamespaceId)
+                    .Take(max)];
+            return ValueTask.FromResult(found);
+        }
+    }
+
     public async ValueTask<int> PublishEventsAsync(TenantScope scope, IEventSink sink, int maxRuns, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(sink);
