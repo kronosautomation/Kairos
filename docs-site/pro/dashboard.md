@@ -64,6 +64,7 @@ The details are in [Payload encryption and its limits](../concepts/payload-encry
 Workers report to the server whether they store payloads sealed or readable. The sidebar shows one line for the namespace:
 
 - *Payloads readable: a worker in this namespace reports storing them unencrypted.* A worker reported readable payloads in the last 10 minutes.
+- *Approvals unverified: a worker in this namespace accepts approval decisions without proof of who made them.* A worker reported that in the last 10 minutes (and none reported readable payloads).
 - *Payloads: encrypted by the workers.* Workers reported sealed payloads and none reported readable ones in that time.
 - *Payloads: no worker has reported lately.* Neither was reported in the last 10 minutes.
 

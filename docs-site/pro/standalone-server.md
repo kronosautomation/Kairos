@@ -56,9 +56,11 @@ otherwise. The tenant is set for each transaction from the verified credential, 
 ## TLS
 
 The listeners accept TLS 1.3 only. The connection to PostgreSQL negotiates TLS 1.3 only whenever the connection string requires TLS; set
-`Server:Database:MinimumTls` to `1.2` for a database that cannot do 1.3. `Server:Database:Authentication` can replace the database password with a short-lived
-token from the identity the server runs as (`aws-rds-iam`, `azure-entra`, `gcp-cloudsql-iam`); the connection string then must have no password and must use
-`SSL Mode=VerifyFull` or `VerifyCA`.
+`Server:Database:MinimumTls` to `1.2` for a database that cannot do 1.3.
+
+`Server:Database:Authentication` **must be set**: the server does not start without it. The values are `aws-rds-iam`, `azure-entra` and `gcp-cloudsql-iam`, which replace the database
+password with a short-lived token from the identity the server runs as (the connection string then must have no password and must use `SSL Mode=VerifyFull` or `VerifyCA`), and `password`,
+which keeps the password in the connection string. Choosing `password` is allowed and is logged as a warning every time the node starts.
 
 ## Limits
 
@@ -110,7 +112,7 @@ never its value. A minimal node that signs people in through OpenID Connect:
 ```json
 {
   "ConnectionStrings": { "kairos": "Host=db.example.com;Database=kairos;Username=kairos_dataplane;SSL Mode=VerifyFull" },
-  "Server": { "Deployment": "kairos-prod" },
+  "Server": { "Deployment": "kairos-prod", "Database": { "Authentication": "aws-rds-iam", "Region": "eu-west-1" } },
   "Auth": {
     "Oidc": [
       {
