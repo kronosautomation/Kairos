@@ -61,6 +61,37 @@ public sealed class EnvelopeOptions
 
     /// <summary>Most unwrapped data keys cached at once.</summary>
     public int MaxCachedKeys { get; init; } = 256;
+
+    /// <summary>
+    /// Told about every call this process makes to the key provider (each wrap and each unwrap, successful or refused), so that "who could open what, and when" has a record on the side that
+    /// performs the unwrap. Null: nothing is recorded by Kairos. A recording that fails fails the operation, closed: a key the observer could not record is not used.
+    /// </summary>
+    public IKeyUseObserver? KeyUseObserver { get; init; }
+}
+
+/// <summary>What a key-provider call was.</summary>
+public enum KeyUseKind
+{
+    /// <summary>A new data key was wrapped by the key provider (a payload is about to be sealed under it).</summary>
+    Wrap,
+
+    /// <summary>A wrapped data key was sent to the key provider to be unwrapped (payloads sealed under it can now be opened for as long as the unwrapped key is cached).</summary>
+    Unwrap,
+}
+
+/// <summary>One call to the key provider. It names the key and the scope, never a key's bytes or a payload.</summary>
+/// <param name="Kind">Wrap or unwrap.</param>
+/// <param name="Scope">The tenant and namespace whose payloads the key covers.</param>
+/// <param name="KeyId">The identifier of the master key as the provider reports it; empty when a wrap was refused before it could name one.</param>
+/// <param name="At">When the call returned.</param>
+/// <param name="Succeeded">False when the provider refused or failed.</param>
+public sealed record KeyUseEvent(KeyUseKind Kind, TenantScope Scope, string KeyId, DateTimeOffset At, bool Succeeded);
+
+/// <summary>Receives a <see cref="KeyUseEvent"/> for every call a protector makes to its key provider. Implementations must be quick and must not call back into the protector.</summary>
+public interface IKeyUseObserver
+{
+    /// <summary>Called after the provider answered and before the key is used. Throwing here stops the operation and discards the key.</summary>
+    void KeyUsed(KeyUseEvent use);
 }
 
 /// <summary>
@@ -253,6 +284,17 @@ public sealed class EnvelopePayloadProtector : IPayloadProtector, IDisposable
         catch
         {
             CryptographicOperations.ZeroMemory(dataKey);
+            Observe(KeyUseKind.Wrap, scope, "", false, failing: true);
+            throw;
+        }
+
+        try
+        {
+            Observe(KeyUseKind.Wrap, scope, wrapped.KeyId, true, failing: false);
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(dataKey);
             throw;
         }
 
@@ -298,7 +340,18 @@ public sealed class EnvelopePayloadProtector : IPayloadProtector, IDisposable
         }
         catch (KeyUnwrapException ex)
         {
+            Observe(KeyUseKind.Unwrap, scope, wrapped.KeyId, false, failing: true);
             throw new PayloadProtectionException("The payload could not be opened.", ex);
+        }
+
+        try
+        {
+            Observe(KeyUseKind.Unwrap, scope, wrapped.KeyId, true, failing: false);
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(dataKey);
+            throw;
         }
 
         var holder = new KeyHolder(dataKey, now + _options.UnwrappedKeyTtl);
@@ -308,6 +361,28 @@ public sealed class EnvelopePayloadProtector : IPayloadProtector, IDisposable
         }
 
         return holder;
+    }
+
+    /// <summary>Tells the observer. While an operation is already failing the observer's own failure is not allowed to replace the original one; otherwise it fails the operation (closed).</summary>
+    private void Observe(KeyUseKind kind, TenantScope scope, string keyId, bool succeeded, bool failing)
+    {
+        if (_options.KeyUseObserver is not { } observer)
+        {
+            return;
+        }
+
+        try
+        {
+            observer.KeyUsed(new KeyUseEvent(kind, scope, keyId, _time.GetUtcNow(), succeeded));
+        }
+        catch (Exception ex) when (!failing)
+        {
+            throw new PayloadProtectionException("The use of the key could not be recorded, so the key was not used.", ex);
+        }
+        catch (Exception) when (failing)
+        {
+            // The key provider's failure is the one to report.
+        }
     }
 
     private void Remember(string cacheKey, KeyHolder holder)

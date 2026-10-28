@@ -33,6 +33,16 @@ Two things follow:
   spotting odd behaviour, but it does not restrict what the returned key can open. Do not treat it as an access control.
 - **Access to unwrap is access to the period's values.** Decide who may unwrap keys for a tenant and namespace on that basis, and keep the log.
 
+### Recording who unwrapped what
+
+The key provider (KMS, Key Vault) has its own audit trail of the calls it receives. The process that makes the calls can record them too: give the protector an `IKeyUseObserver` and it is told
+about every wrap and every unwrap it asks the provider for, successful or refused, with the tenant, the namespace and the master key's identifier, and never a key or a payload. Because an
+unwrapped key is cached (for `UnwrappedKeyTtl`), one record stands for every value opened under that key in that time.
+
+[!code-csharp[](../../samples/Concepts/ConceptExamples.cs#key-use-log)]
+
+A record that cannot be written stops the operation: the key is discarded and the payload is not sealed or opened, so there is no unrecorded use of a key. Kairos writes nothing by default.
+
 ### Choosing a smaller unit
 
 You can shorten the life of a data key, at the cost of more calls to your key provider:

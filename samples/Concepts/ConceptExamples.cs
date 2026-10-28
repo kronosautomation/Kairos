@@ -2,6 +2,7 @@ using System.Text;
 using Kairos.Persistence.Postgres;
 using Kairos.Worker;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 
 namespace Kairos.Samples.Concepts;
@@ -189,3 +190,20 @@ public static class ObservabilityExamples
     }
     #endregion
 }
+
+#region key-use-log
+/// <summary>Writes one log line per call the protector makes to the key provider. No key and no payload is ever passed to it.</summary>
+public sealed partial class LoggingKeyUse(ILogger<LoggingKeyUse> logger) : IKeyUseObserver
+{
+    public void KeyUsed(KeyUseEvent use) => Log(logger, use.Kind, use.Scope.TenantId, use.Scope.NamespaceId, use.KeyId, use.Succeeded);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Kind} of a data key for tenant {Tenant}, namespace {Namespace} under key {KeyId} (succeeded: {Succeeded})")]
+    private static partial void Log(ILogger logger, KeyUseKind kind, Guid tenant, Guid @namespace, string keyId, bool succeeded);
+}
+
+public static class KeyUseExamples
+{
+    public static EnvelopePayloadProtector Protector(IKeyProvider keys, ILogger<LoggingKeyUse> logger) =>
+        new(keys, TimeProvider.System, new EnvelopeOptions { KeyUseObserver = new LoggingKeyUse(logger) });
+}
+#endregion
