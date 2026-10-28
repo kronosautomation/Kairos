@@ -207,6 +207,18 @@ public abstract partial class StoreContractTests
             Assert.Equal(0, await a.Store.PublishEventsAsync(f, sink, 1000, Ct));
             Assert.Empty(sink.Seen);
         },
+        [nameof(IKairosStore.NoteWorkerPayloadProtectionAsync)] = async (a, f) =>
+        {
+            // A report made in a foreign scope lands in that scope and nowhere else: the owner's posture does not change.
+            WorkerPosture before = await a.Store.GetWorkerPostureAsync(A, Ct);
+            await a.Store.NoteWorkerPayloadProtectionAsync(f, payloadsProtected: false, Time.GetUtcNow(), Ct);
+            Assert.Equal(before, await a.Store.GetWorkerPostureAsync(A, Ct));
+        },
+        [nameof(IKairosStore.GetWorkerPostureAsync)] = async (a, f) =>
+        {
+            await a.Store.NoteWorkerPayloadProtectionAsync(A, payloadsProtected: false, Time.GetUtcNow(), Ct);
+            Assert.Equal(new WorkerPosture(null, null), await a.Store.GetWorkerPostureAsync(f, Ct)); // what the owner's workers said is not visible from a foreign scope
+        },
         [nameof(IKairosStore.PublishEventsAsync)] = async (a, f) =>
         {
             var sink = new RecordingSink();

@@ -1,0 +1,12 @@
+- name: Commercial features
+  href: index.md
+- name: The standalone server
+  href: standalone-server.md
+- name: The dashboard
+  href: dashboard.md
+- name: Policies, prices and budgets
+  href: policies-and-budgets.md
+- name: Publishing agents as an MCP server
+  href: mcp-server.md
+- name: Publishing agents over A2A
+  href: a2a-server.md
