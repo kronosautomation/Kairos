@@ -5,7 +5,7 @@ no vendor control plane), with an optional standalone multi-tenant server. See `
 Workflows are plain C# async methods; every step is checkpointed to an event history in Postgres,
 and runs survive crashes and redeploys by deterministic replay. Product of Kronos Automation LLC.
 
-**Read `docs/SECURITY-ARCHITECTURE.md` before any design or code change. It is binding.**
+**Read `docs/SECURITY-ARCHITECTURE.md` before any design or code change. It is binding.** Every claim in it has a status (Built and tested / Built, untested / Planned); change the status in the same commit as the code or test that changes it.
 **Embedded mode is first-class:** `services.AddKairos(o => o.UsePostgres(...))` with in-process workers must always work;
 the standalone server is the same engine with a host around it. No AWS/Azure dependency in core projects.
 
@@ -24,9 +24,9 @@ stay in this repository.
 - The server never executes or deserializes customer code/types. Workers are customer-hosted and connect outbound.
 - Every table has `tenant_id` + `namespace_id` and Postgres RLS with FORCE ROW LEVEL SECURITY.
   Services connect as non-owner roles and `SET LOCAL app.tenant_id` per transaction.
-- Data plane (`Kairos.Server`) and control plane (`Kairos.Admin`) are separate hosts, identities, and DB roles.
-- Payloads are opaque byte arrays to the server; the Worker SDK encrypts them client-side (AES-256-GCM envelope).
-- Credentials: mTLS or short-lived tokens for workers; API keys stored only as HMAC-SHA256 hashes; scoped per namespace + role.
+- Data plane (`Kairos.Server`) and control plane (`Kairos.Admin`) are separate hosts, identities, and DB roles. (`Kairos.Admin` is planned, not in the first version; the role exists, no host does.)
+- Payloads are opaque byte arrays to the server; the Worker SDK encrypts them client-side (AES-256-GCM envelope). Encryption is the default: `AddKairos` refuses to start without a protector unless the code says `AllowUnencryptedPayloads()`.
+- Credentials: short-lived tokens or cloud identities for workers (mutual TLS is planned, not built); scoped per namespace + role. The embedded `ApiKeyAuthenticator` helper stores keys only as HMAC-SHA256 hashes.
 - History events are hash-chained (SHA-256 of previous hash + event).
 - Respect the dependency rules in the solution layout section. Core does no I/O.
 - Every persistence feature gets a cross-tenant leak test that proves access fails closed.
