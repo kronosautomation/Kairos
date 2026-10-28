@@ -98,7 +98,7 @@ public sealed class ReplayCheckOnPostgresTests(PostgresFixture fixture)
     }
 
     [Fact]
-    public async Task The_tool_exports_a_run_with_the_data_plane_role_and_audits_it_and_the_file_replays_locally()
+    public async Task The_tool_exports_a_run_with_the_migrator_login_and_audits_it_and_the_file_replays_locally()
     {
         await using TestDatabase db = await fixture.NewDatabaseAsync();
         PostgresKairosStore store = db.NewStore();
@@ -116,17 +116,20 @@ public sealed class ReplayCheckOnPostgresTests(PostgresFixture fixture)
         Directory.CreateDirectory(dir);
         try
         {
-            // The read-only role cannot write the audit log, so it cannot export: an export is never unrecorded.
-            string denied = Path.Combine(dir, "denied.khist");
-            (int readOnlyExit, _, string readOnlyError) = await KairosAsync(
-                db.ReadOnlyConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "should not work", "--out", denied, "--actor", "dev@example.com", .. scope]);
-            Assert.Equal(1, readOnlyExit);
-            Assert.Contains("audit log", readOnlyError, StringComparison.Ordinal);
-            Assert.False(File.Exists(denied));
+            // Neither the read-only role nor the application's own (data-plane) credential may export straight from the database: it is a person's act, done as the migrator login.
+            foreach (string notAllowed in new[] { db.ReadOnlyConnectionString, db.DataPlaneConnectionString })
+            {
+                string denied = Path.Combine(dir, "denied.khist");
+                (int deniedExit, _, string deniedError) = await KairosAsync(
+                    notAllowed, ["history", "export", start.RunId.ToString(), "--reason", "should not work", "--out", denied, "--actor", "dev@example.com", .. scope]);
+                Assert.Equal(2, deniedExit);
+                Assert.Contains("Refused", deniedError, StringComparison.Ordinal);
+                Assert.False(File.Exists(denied));
+            }
 
             string file = Path.Combine(dir, "run.khist");
             (int exit, string output, string error) = await KairosAsync(
-                db.DataPlaneConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "reproduce ticket 4411", "--out", file, "--actor", "dev@example.com", .. scope]);
+                db.MigratorConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "reproduce ticket 4411", "--out", file, "--actor", "dev@example.com", .. scope]);
             Assert.True(exit == 0, output + error);
 
             AuditEntry entry = Assert.Single(await store.GetAuditLogAsync(Scope, default));
@@ -135,7 +138,7 @@ public sealed class ReplayCheckOnPostgresTests(PostgresFixture fixture)
             Assert.Equal($"reproduce ticket 4411 (head {loaded.HeadHash})", entry.Detail);
 
             // Who is written by the database: the login it authenticated and the address it saw. The name given with --actor is kept apart as a claim.
-            Assert.Equal(("kairos_dataplane", "db:kairos_dataplane", "dev@example.com", null), (entry.SessionUser, entry.Actor, entry.ClaimedActor, entry.VerifiedPrincipal));
+            Assert.Equal(("kairos_migrator", "db:kairos_migrator", "dev@example.com", null), (entry.SessionUser, entry.Actor, entry.ClaimedActor, entry.VerifiedPrincipal));
             Assert.False(string.IsNullOrEmpty(entry.ClientAddress));
 
             // The file replays on a developer machine against local code, with the recorded results; a moved step is reported like replay-check reports it.
@@ -149,7 +152,7 @@ public sealed class ReplayCheckOnPostgresTests(PostgresFixture fixture)
 
             string metadata = Path.Combine(dir, "metadata.khist");
             (int metaExit, string metaOut, string metaError) = await KairosAsync(
-                db.DataPlaneConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "shape", "--metadata-only", "--out", metadata, "--actor", "dev@example.com", .. scope]);
+                db.MigratorConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "shape", "--metadata-only", "--out", metadata, "--actor", "dev@example.com", .. scope]);
             Assert.True(metaExit == 0, metaOut + metaError);
             (int verifyExit, string verifyOut, _) = await KairosAsync(db.DataPlaneConnectionString, ["history", "verify", metadata]);
             Assert.Equal(0, verifyExit);
@@ -160,7 +163,7 @@ public sealed class ReplayCheckOnPostgresTests(PostgresFixture fixture)
             // Claiming to be someone else changes only the claim.
             string third = Path.Combine(dir, "third.khist");
             (int thirdExit, _, _) = await KairosAsync(
-                db.DataPlaneConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "pretending", "--out", third, "--actor", "ceo@example.com", .. scope]);
+                db.MigratorConnectionString, ["history", "export", start.RunId.ToString(), "--reason", "pretending", "--out", third, "--actor", "ceo@example.com", .. scope]);
             Assert.Equal(0, thirdExit);
             AuditEntry pretend = (await store.GetAuditLogAsync(Scope, default))[^1];
             Assert.Equal((entry.SessionUser, entry.Actor, entry.ClientAddress.Length > 0, "ceo@example.com"), (pretend.SessionUser, pretend.Actor, pretend.ClientAddress is { Length: > 0 }, pretend.ClaimedActor));

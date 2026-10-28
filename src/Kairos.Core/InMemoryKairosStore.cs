@@ -26,6 +26,11 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
                 return ValueTask.FromResult(new StartRunResult(existing, false));
             }
 
+            if (scope.Runs.Values.Count(r => r.State == RunState.Running) >= _limits.MaxOpenRunsPerNamespace)
+            {
+                throw new NamespaceLimitExceededException(NamespaceLimit.OpenRuns, _limits.MaxOpenRunsPerNamespace);
+            }
+
             var run = new Run(request.Run, request.WorkflowType, request.BuildId) { WorkflowId = request.WorkflowId };
             scope.Runs.Add(request.Run.RunId, run);
             scope.WorkflowIds.Add(request.WorkflowId, request.Run.RunId);
@@ -131,6 +136,16 @@ public sealed class InMemoryKairosStore(StoreLimits? limits = null) : IKairosSto
             if (!closes && run.History.Count + newEvents.Count + 1 > _limits.MaxHistoryEvents) // one slot stays free for the RunTerminated record
             {
                 Append(run, new RunTerminated(task.Run.TenantId, task.Run.NamespaceId, task.Run.RunId, 0, now, StoreRules.HistoryLimitReason(_limits.MaxHistoryEvents)));
+                Close(scope, run, RunState.Failed);
+                scope.WorkflowTasks.Remove(task.Run.RunId);
+                return ValueTask.FromResult(CompletionOutcome.Applied);
+            }
+
+            // Bounded timers per namespace: a task that would start more than the namespace may have waiting, and does not itself close, ends the run.
+            int startedTimers = newEvents.Count(e => e is TimerStarted);
+            if (!closes && startedTimers > 0 && scope.Timers.Count + startedTimers > _limits.MaxPendingTimersPerNamespace)
+            {
+                Append(run, new RunTerminated(task.Run.TenantId, task.Run.NamespaceId, task.Run.RunId, 0, now, StoreRules.TimerLimitReason(_limits.MaxPendingTimersPerNamespace)));
                 Close(scope, run, RunState.Failed);
                 scope.WorkflowTasks.Remove(task.Run.RunId);
                 return ValueTask.FromResult(CompletionOutcome.Applied);

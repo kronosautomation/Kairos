@@ -33,6 +33,28 @@ public sealed partial class PostgresKairosStore(NpgsqlDataSource dataSource, Pos
         key is null || key.Length >= WorkNotice.MinimumKeyBytes ? key : throw new ArgumentException($"The notification key must be at least {WorkNotice.MinimumKeyBytes} bytes.", nameof(key));
 
     private const int MaxAttempts = 4;
+    private NamespaceCounts? _counts;
+
+    private NamespaceCounts Counts => _counts ??= new NamespaceCounts(_options.Limits.NamespaceCountCacheTtl);
+
+    /// <summary>Counts rows of <paramref name="table"/> matching <paramref name="condition"/> in the scope, looking at no more than <paramref name="max"/> of them. Table and condition are constants of this class.</summary>
+    private async ValueTask<long> CountBoundedAsync(TenantScope scope, string table, string condition, int max, CancellationToken cancellationToken)
+    {
+        return await Retry(async () =>
+        {
+            await using NpgsqlConnection conn = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            return await InScope(conn, scope, async tx =>
+            {
+                await using var cmd = new NpgsqlCommand(
+                    $"SELECT count(*) FROM (SELECT 1 FROM {table} WHERE tenant_id = @t AND namespace_id = @n AND {condition} LIMIT @max) AS c", conn, tx);
+                cmd.Parameters.AddWithValue("t", scope.TenantId);
+                cmd.Parameters.AddWithValue("n", scope.NamespaceId);
+                cmd.Parameters.AddWithValue("max", max);
+                return (long)(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+            }, cancellationToken).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+    }
+
     private const string SetScopeSql = "SELECT set_config('app.tenant_id', @scope_t, true), set_config('app.namespace_id', @scope_n, true)";
     private static readonly byte[] NoHash = [];
 
@@ -41,6 +63,19 @@ public sealed partial class PostgresKairosStore(NpgsqlDataSource dataSource, Pos
     public async ValueTask<StartRunResult> StartRunAsync(StartRunRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (!await Counts.TryReserveAsync(
+                request.Run.Scope, NamespaceLimit.OpenRuns, 1, _options.Limits.MaxOpenRunsPerNamespace,
+                (max, ct) => CountBoundedAsync(request.Run.Scope, "kairos.runs", "state = 0", max, ct), cancellationToken).ConfigureAwait(false))
+        {
+            // Starting a workflow id that already has a current run is not a new run: answer with that one, as a start with room would.
+            if (await GetCurrentRunAsync(request.Run.Scope, request.WorkflowId, cancellationToken).ConfigureAwait(false) is { } existing)
+            {
+                return new StartRunResult(existing.RunId, false);
+            }
+
+            throw new NamespaceLimitExceededException(NamespaceLimit.OpenRuns, _options.Limits.MaxOpenRunsPerNamespace);
+        }
+
         var started = new WorkflowStarted(
             request.Run.TenantId, request.Run.NamespaceId, request.Run.RunId, 0, request.Now, request.WorkflowType, request.BuildId, request.Input)
         {
@@ -253,7 +288,18 @@ public sealed partial class PostgresKairosStore(NpgsqlDataSource dataSource, Pos
                 throw new ArgumentException("A group commit must stay within one tenant scope.", nameof(items));
             }
 
-            prepared[i] = Prepare(items[i].Task, items[i].NewEvents, now, _options.Limits.MaxHistoryEvents);
+            IReadOnlyList<HistoryEvent> events = items[i].NewEvents;
+            string? terminate = null;
+            int startedTimers = events.Count(e => e is TimerStarted);
+            if (startedTimers > 0 && !(events.Count > 0 && StoreRules.IsClosing(events[^1])) &&
+                !await Counts.TryReserveAsync(
+                    scope, NamespaceLimit.PendingTimers, startedTimers, _options.Limits.MaxPendingTimersPerNamespace,
+                    (max, ct) => CountBoundedAsync(scope, "kairos.timers", "true", max, ct), cancellationToken).ConfigureAwait(false))
+            {
+                terminate = StoreRules.TimerLimitReason(_options.Limits.MaxPendingTimersPerNamespace);
+            }
+
+            prepared[i] = Prepare(items[i].Task, events, now, _options.Limits.MaxHistoryEvents, terminate);
         }
 
         var outcomes = new CompletionOutcome[prepared.Length];
@@ -432,12 +478,18 @@ public sealed partial class PostgresKairosStore(NpgsqlDataSource dataSource, Pos
     ];
 
     /// <summary>Seals the boundary + command events as one chain extension from the snapshot the worker replayed.</summary>
-    private static PreparedCompletion Prepare(WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now, int maxHistoryEvents)
+    private static PreparedCompletion Prepare(WorkflowTask task, IReadOnlyList<HistoryEvent> newEvents, DateTimeOffset now, int maxHistoryEvents, string? terminateReason = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         StoreRules.ValidateWorkflowTaskEvents(task.Run, newEvents);
         RunKey run = task.Run;
         HistoryEvent head = task.History[^1];
+
+        // The namespace is out of timers: the task's own events are not applied, and the run ends (decided by the caller, who counted).
+        if (terminateReason is not null)
+        {
+            newEvents = [new RunTerminated(run.TenantId, run.NamespaceId, run.RunId, 0, now, terminateReason)];
+        }
 
         // Bounded history (I9): a task that would push the run past the cap, and does not itself close or continue, ends the run.
         bool closes = newEvents.Count > 0 && StoreRules.IsClosing(newEvents[^1]);

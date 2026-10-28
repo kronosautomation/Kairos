@@ -49,12 +49,7 @@ public sealed class HistoryExportCredentialTests(PostgresFixture fixture) : IDis
         Assert.False(File.Exists(refusedFile));
         Assert.DoesNotContain(await database.NewStore().GetAuditLogAsync(A, default), e => e.Action == "ExportHistory");
 
-        string migrator = new NpgsqlConnectionStringBuilder(database.DataPlaneConnectionString)
-        {
-            Username = PostgresProvisioning.MigratorRole,
-            Password = PostgresFixture.PasswordFor(PostgresProvisioning.MigratorRole),
-        }.ConnectionString;
-        (int exit, _, string error, string file) = await ExportAsync(migrator, started.RunId);
+        (int exit, _, string error, string file) = await ExportAsync(database.MigratorConnectionString, started.RunId);
 
         Assert.True(exit == ExitCode.Passed, error);
         Assert.True(File.Exists(file));

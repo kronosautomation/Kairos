@@ -82,6 +82,10 @@ public static class StoreRules
     public static string HistoryLimitReason(int max) =>
         $"HistoryLimitExceeded: the run reached the {max}-event history cap without continuing as new.";
 
+    /// <summary>The reason recorded when a workflow task would start more timers than the namespace may have waiting.</summary>
+    public static string TimerLimitReason(int max) =>
+        $"TimerLimitExceeded: the namespace reached its limit of {max} pending timers.";
+
     /// <summary>Error type recorded when a lease expires without a completion (the worker died, hung, or was partitioned).</summary>
     public const string LeaseExpiredError = "LeaseExpired";
 

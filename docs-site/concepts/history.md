@@ -42,6 +42,18 @@ A run's history has a size limit: **50,000 events by default**, configurable per
 run well before that; `ctx.ShouldContinueAsNew` turns true at 40,000 events. A run that reaches the limit without handing over is ended
 and marked failed, rather than being allowed to grow without bound. See [Long-running workflows](continue-as-new.md).
 
+## Limits that keep one namespace from taking the rest
+
+Two more limits apply to a whole namespace, so that a runaway workload in one cannot starve the others that share the database:
+
+- **Open runs.** At most **100,000** runs may be running at once in a namespace (`StoreLimits.MaxOpenRunsPerNamespace`). Starting one more throws `NamespaceLimitExceededException` and stores nothing; starting a workflow id that
+  already has a run still returns that run. Room appears as runs finish.
+- **Pending timers.** At most **100,000** timers may be waiting to fire in a namespace (`StoreLimits.MaxPendingTimersPerNamespace`). A workflow task that would start timers beyond that ends its run, marked failed with
+  `TimerLimitExceeded`, the same way the history limit does.
+
+The PostgreSQL store counts against these limits from a figure it refreshes every few seconds, so several application processes starting runs at the same moment can overshoot a limit by what they start in that window.
+The limits are for stopping a runaway, not for exact accounting.
+
 ## Reading a history
 
 `KairosClient.GetHistoryAsync` returns the events as stored. With payload encryption on, use `GetOpenedHistoryAsync` with the same

@@ -126,6 +126,10 @@ public sealed class TestDatabase(string name, PostgresFixture fixture) : IAsyncD
 
     public static string DataPlanePassword => PostgresFixture.PasswordFor(PostgresProvisioning.DataPlaneRole);
 
+    /// <summary>For the command-line tool that must be run as the migrator login (a direct history export).</summary>
+    public string MigratorConnectionString =>
+        fixture.ConnectionString(Name, PostgresProvisioning.MigratorRole, PostgresFixture.PasswordFor(PostgresProvisioning.MigratorRole));
+
     /// <summary>For tools that connect as the reporting role (read-only, bound by row-level security like everything else).</summary>
     public string ReadOnlyConnectionString =>
         fixture.ConnectionString(Name, PostgresProvisioning.ReadOnlyRole, PostgresFixture.PasswordFor(PostgresProvisioning.ReadOnlyRole));
