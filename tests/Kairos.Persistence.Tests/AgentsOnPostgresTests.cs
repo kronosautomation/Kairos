@@ -58,6 +58,7 @@ public sealed class AgentsOnPostgresTests(PostgresFixture fixture)
         builder.Logging.ClearProviders();
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(100);
             o.UsePostgres(connectionString).AddActivities(agents.Activities);
             foreach (string name in Effectful)

@@ -39,6 +39,7 @@ internal sealed class FaultScenario : IAsyncDisposable
         builder.Logging.ClearProviders();
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(100);
             o.WorkerCount = 3;
             o.Worker = new WorkerOptions

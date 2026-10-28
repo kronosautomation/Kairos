@@ -69,6 +69,7 @@ public static class SupportAgent
     public static IServiceCollection AddSupportAgent(this IServiceCollection services, string connectionString, AgentsRuntime agents) =>
         services.AddKairos(o => o
             .UsePostgres(connectionString)
+            .AllowUnencryptedPayloads() // sample only: real conversations need UsePayloadProtector
             .AddActivities(agents.Activities)
             .AddWorkflow("support", agents.Workflow(RunAsync)));
     #endregion

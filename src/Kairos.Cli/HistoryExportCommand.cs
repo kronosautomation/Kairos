@@ -1,3 +1,7 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using Kairos.Persistence.Postgres;
 using Npgsql;
 
@@ -24,6 +28,15 @@ internal sealed record HistoryExportArguments
     public string ConnectionVariable { get; init; } = "KAIROS_CONNECTION";
 
     public string? Connection { get; init; }
+
+    /// <summary>Base address of a Kairos server (<c>https://host</c>). When set, the export goes through the server: it checks the sign-in and the operator role and writes the audit entry.</summary>
+    public string? Server { get; init; }
+
+    /// <summary>The environment variable that holds the bearer token for <see cref="Server"/> (a session token or an identity provider token).</summary>
+    public string TokenVariable { get; init; } = "KAIROS_TOKEN";
+
+    /// <summary>The namespace to export from on a server. The tenant comes from the credential.</summary>
+    public Guid? ServerNamespace { get; init; }
 
     public static HistoryExportArguments Parse(IReadOnlyList<string> args)
     {
@@ -63,6 +76,12 @@ internal sealed record HistoryExportArguments
                 case "--connection":
                     result = result with { Connection = Value() };
                     break;
+                case "--server":
+                    result = result with { Server = Value() };
+                    break;
+                case "--token-env":
+                    result = result with { TokenVariable = Value() };
+                    break;
                 case "--connection-env":
                     result = result with { ConnectionVariable = Value() };
                     break;
@@ -92,6 +111,26 @@ internal sealed record HistoryExportArguments
             throw new ArgumentException("Say who is exporting with --actor <name> (or KAIROS_ACTOR): it is written to the audit log.");
         }
 
+        if (result.Server is not null)
+        {
+            if (tenant is not null || result.Connection is not null)
+            {
+                throw new ArgumentException("--server does not go with --tenant or --connection: the server takes the tenant from your sign-in and holds the database credential.");
+            }
+
+            if (ns is null)
+            {
+                throw new ArgumentException("--server needs --namespace <guid>.");
+            }
+
+            if (!Uri.TryCreate(result.Server, UriKind.Absolute, out Uri? uri) || (uri.Scheme != Uri.UriSchemeHttps && !uri.IsLoopback))
+            {
+                throw new ArgumentException("--server must be an https:// address.");
+            }
+
+            return result with { ServerNamespace = ns };
+        }
+
         if (tenant is null != ns is null)
         {
             throw new ArgumentException("--tenant and --namespace go together.");
@@ -103,13 +142,22 @@ internal sealed record HistoryExportArguments
 
 internal static class HistoryExportCommand
 {
-    public static async Task<int> RunAsync(HistoryExportArguments args, IKairosStore? store, TimeProvider time, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
+    /// <summary>The database role an export straight from the database must be made with. The application's own (data-plane) credential is refused: it belongs to the program, not to a person.</summary>
+    internal const string RequiredRole = PostgresProvisioning.MigratorRole;
+
+    public static async Task<int> RunAsync(
+        HistoryExportArguments args, IKairosStore? store, TimeProvider time, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken, HttpMessageHandler? serverHandler = null)
     {
         string path = args.Out ?? $"{args.Run:D}.khist";
         if (File.Exists(path) && !args.Force)
         {
             await stderr.WriteLineAsync($"'{path}' exists. Choose another file with --out, or overwrite it with --force.").ConfigureAwait(false);
             return ExitCode.Usage;
+        }
+
+        if (args.Server is not null)
+        {
+            return await ExportThroughServerAsync(args, path, serverHandler, stdout, stderr, cancellationToken).ConfigureAwait(false);
         }
 
         NpgsqlDataSource? owned = null;
@@ -125,6 +173,14 @@ internal static class HistoryExportCommand
                 }
 
                 owned = NpgsqlDataSource.Create(connection);
+                if (!await HasRequiredRoleAsync(owned, cancellationToken).ConfigureAwait(false))
+                {
+                    await stderr.WriteLineAsync(
+                        $"Refused: a direct export must be made with the {RequiredRole} credential, not the application's. " +
+                        "Either run it as the migrator login (the export is audited under that login and your --reason), or sign in to a Kairos server with the operator role: --server <https://host> --namespace <guid> (token in KAIROS_TOKEN).").ConfigureAwait(false);
+                    return ExitCode.Usage;
+                }
+
                 store = new PostgresKairosStore(owned);
             }
 
@@ -184,6 +240,89 @@ internal static class HistoryExportCommand
             {
                 await owned.DisposeAsync().ConfigureAwait(false);
             }
+        }
+    }
+
+    private static async Task<bool> HasRequiredRoleAsync(NpgsqlDataSource source, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using NpgsqlConnection conn = await source.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            await using var cmd = new NpgsqlCommand("SELECT pg_has_role(current_user, @role, 'MEMBER')", conn);
+            cmd.Parameters.AddWithValue("role", RequiredRole);
+            return await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+        }
+        catch (NpgsqlException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<int> ExportThroughServerAsync(
+        HistoryExportArguments args, string path, HttpMessageHandler? handler, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
+    {
+        string? token = Environment.GetEnvironmentVariable(args.TokenVariable);
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            await stderr.WriteLineAsync($"Set {args.TokenVariable} to the token you signed in to the server with (the operator role is needed).").ConfigureAwait(false);
+            return ExitCode.Usage;
+        }
+
+        using HttpClient http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(new Uri(args.Server!), $"/v1/namespaces/{args.ServerNamespace:D}/runs/{args.Run:D}/export"))
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new Dictionary<string, object> { ["reason"] = args.Reason, ["metadataOnly"] = args.MetadataOnly }), Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await stderr.WriteLineAsync("The server could not be reached.").ConfigureAwait(false);
+            return ExitCode.Usage;
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                await stderr.WriteLineAsync("The server refused the export: sign in with the operator role for this namespace. Nothing was exported.").ConfigureAwait(false);
+                return ExitCode.Failed;
+            }
+
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                await stderr.WriteLineAsync("There is no such run in this namespace. Nothing was exported.").ConfigureAwait(false);
+                return ExitCode.Failed;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                await stderr.WriteLineAsync($"The server answered {(int)response.StatusCode}. Nothing was exported.").ConfigureAwait(false);
+                return ExitCode.Failed;
+            }
+
+            string text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            HistoryFileContents contents;
+            try
+            {
+                contents = HistoryFile.ParseVerified(text); // the server verifies before it answers; a file is never written unless it verifies here too
+            }
+            catch (Exception ex) when (ex is HistoryIntegrityException or FormatException)
+            {
+                await stderr.WriteLineAsync("The server's answer is not a history that verifies. No file was written.").ConfigureAwait(false);
+                return ExitCode.Failed;
+            }
+
+            await File.WriteAllTextAsync(path, text, cancellationToken).ConfigureAwait(false);
+            await stdout.WriteLineAsync(
+                $"Exported {contents.History.Count} events of run {args.Run:D} to {path}{(contents.MetadataOnly ? " (metadata only)" : "")} through the server. The server recorded it in the audit log under your verified sign-in, with your reason.").ConfigureAwait(false);
+            await stdout.WriteLineAsync($"Head hash {contents.HeadHash}. `kairos history verify {path}` checks the file.").ConfigureAwait(false);
+            return ExitCode.Passed;
         }
     }
 }

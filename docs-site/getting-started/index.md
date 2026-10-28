@@ -61,6 +61,9 @@ repeated attempt becomes a harmless repeat instead of a second charge.
 `AddKairos` adds the engine, a `KairosClient` and background workers to your host. The workers poll PostgreSQL (and wake instantly when
 work arrives), so there is nothing else to start.
 
+`AllowUnencryptedPayloads()` is there because Kairos encrypts payloads by default and refuses to start without a payload protector. For this walk-through the payloads are readable
+on purpose; the host logs a warning to say so. Before real data goes in, replace it with `UsePayloadProtector` (see [Payload encryption](../concepts/payload-encryption.md)).
+
 ## 6. Start a run
 
 [!code-csharp[](../../samples/GettingStarted/Program.cs#start)]

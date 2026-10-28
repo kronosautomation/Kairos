@@ -212,6 +212,7 @@ public sealed class MeasurementTests
         builder.Logging.ClearProviders();
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.UseStore(new InMemoryKairosStore());
             o.WorkerCount = 4;
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(5);

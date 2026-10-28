@@ -22,6 +22,7 @@ string connectionString = builder.Configuration.GetConnectionString("Kairos")
 
 builder.Services.AddKairos(options => options
     .UsePostgres(connectionString)
+    .AllowUnencryptedPayloads() // getting started only: real data needs UsePayloadProtector (see Payload encryption)
     .AddOrderProcessing(new ConsoleOrderServices()));
 
 using IHost host = builder.Build();

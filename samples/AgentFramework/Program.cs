@@ -12,7 +12,7 @@ string connectionString = builder.Configuration.GetConnectionString("Kairos")
     ?? throw new InvalidOperationException("Set ConnectionStrings:Kairos to the kairos_dataplane connection string.");
 
 // The model here is a stand-in that asks for the tools a support agent would. Give the agent your provider's IChatClient instead.
-builder.Services.AddSupportAgent(options => options.UsePostgres(connectionString), new DemoModel(), new ConsoleOrders(), new TokenBudget(tokensPerDay: 100_000));
+builder.Services.AddSupportAgent(options => options.UsePostgres(connectionString).AllowUnencryptedPayloads(), new DemoModel(), new ConsoleOrders(), new TokenBudget(tokensPerDay: 100_000));
 
 using IHost host = builder.Build();
 await host.StartAsync();

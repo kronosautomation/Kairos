@@ -51,6 +51,7 @@ public sealed class HostingTests
 
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.UseStore(new InMemoryKairosStore());
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(10);
         }).AddAgentFramework(configure);
@@ -157,7 +158,7 @@ public sealed class HostingTests
     public void An_agent_that_cannot_be_made_durable_stops_the_application_at_registration_not_at_the_first_message()
     {
         var services = new ServiceCollection();
-        services.AddKairos(o => o.UseStore(new InMemoryKairosStore()));
+        services.AddKairos(o => o.UseStore(new InMemoryKairosStore()).AllowUnencryptedPayloads());
 
         InvalidOperationException e = Assert.Throws<InvalidOperationException>(() => services.AddAgentFramework(af => af.AddAgent(new OpaqueAgent("remote", (_, _) => "x"))));
 

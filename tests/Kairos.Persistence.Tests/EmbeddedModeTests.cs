@@ -31,6 +31,7 @@ public sealed class EmbeddedModeTests(PostgresFixture fixture)
         builder.Logging.ClearProviders();
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(100);
             configure(o);
         });

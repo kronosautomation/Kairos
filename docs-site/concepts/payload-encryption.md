@@ -3,6 +3,12 @@
 With payload encryption on, every payload (workflow input and result, activity input and result, signal and approval payloads, failure messages) is sealed in your application before it
 leaves it. Kairos, and the database under it, store ciphertext. This page says how that works, what it protects, and where its edges are.
 
+## Encryption is the default
+
+`AddKairos` refuses to start unless you gave it a payload protector (`UsePayloadProtector`) or said, in code, that readable payloads are what you want (`AllowUnencryptedPayloads()`).
+The second is for development, tests and data that is not sensitive; it is logged as a warning when the workers start, and a worker connected to a Kairos server reports it so that the
+server can show the namespace as holding readable payloads. There is no way to end up without encryption by forgetting to configure it.
+
 ## How a payload is sealed
 
 - Each payload is encrypted with **AES-256-GCM** under a random **data key**.

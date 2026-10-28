@@ -23,6 +23,7 @@ public sealed class PasswordProviderTests(PostgresFixture fixture)
         builder.Logging.ClearProviders();
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(100);
             o.AddWorkflow("hello", (_, input) => Task.FromResult(input));
             configure(o);

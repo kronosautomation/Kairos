@@ -15,7 +15,8 @@ namespace Kairos.Cli
                                   [--strict-coverage] [--format text|json] [--setup <type>]
 
               kairos history export <run-id> --reason "<why>" [--out <file>] [--metadata-only] [--actor <name>] [--force]
-                                    [--connection <string> | set KAIROS_CONNECTION] [--tenant <guid> --namespace <guid>]
+                                    [--connection <migrator connection string> | set KAIROS_CONNECTION] [--tenant <guid> --namespace <guid>]
+                                    or, through a server: --server <https://host> --namespace <guid>  (sign-in token in KAIROS_TOKEN, or --token-env <name>)
 
               kairos history verify <file>
 
@@ -27,8 +28,8 @@ namespace Kairos.Cli
 
             history verify checks a history file (the hash chain, or the digest chain of a metadata-only file) and prints its head hash.
 
-            history export copies one run's history to a file (ciphertext as stored) for local replay under a debugger. Operators only, a reason is required, and the
-            export is written to the audit log with your name and the reason.
+            history export copies one run's history to a file (ciphertext as stored) for local replay under a debugger. A reason is required and the export is audited. Through a
+            server, you sign in and need the operator role. Straight from the database, the connection must be the kairos_migrator login: the application's credential is refused.
 
             replay-check replays recorded histories against the candidate build and exits 1 if any diverges, printing the workflow type, the run and the first
             diverging command. It prints names, ids and sizes only, never payload contents. Exit codes: 0 passed, 1 failed, 2 could not run.

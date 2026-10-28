@@ -40,7 +40,7 @@ public sealed class WorkflowSampleTests
 
     private static void Fast(KairosOptions o)
     {
-        o.UseStore(new InMemoryKairosStore());
+        o.UseStore(new InMemoryKairosStore()).AllowUnencryptedPayloads();
         o.PollFallbackInterval = TimeSpan.FromMilliseconds(10);
     }
 

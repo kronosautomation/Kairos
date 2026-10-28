@@ -55,6 +55,29 @@ public sealed class KairosOptions
         return this;
     }
 
+    /// <summary>True once <see cref="AllowUnencryptedPayloads"/> has been called.</summary>
+    public bool UnencryptedPayloadsAllowed { get; private set; }
+
+    /// <summary>
+    /// Says, in code, that this process may store and read payloads without client-side encryption. Without a protector (<see cref="UsePayloadProtector"/>) and without this call,
+    /// <c>AddKairos</c> refuses to start: payloads are encrypted by default and turning that off has to be visible in the code that does it. The choice is logged as a warning at startup, and a worker connected to
+    /// a Kairos server reports it so that the dashboard can show the namespace as holding readable payloads. Suitable for development, tests and data that is not sensitive.
+    /// </summary>
+    public KairosOptions AllowUnencryptedPayloads()
+    {
+        UnencryptedPayloadsAllowed = true;
+        return this;
+    }
+
+    internal void RequirePayloadProtectionDecision()
+    {
+        if (PayloadProtector is null && !UnencryptedPayloadsAllowed)
+        {
+            throw new InvalidOperationException(
+                "Kairos has no payload protector. Call UsePayloadProtector(...) so that payloads are encrypted before they reach the database, or call AllowUnencryptedPayloads() to store them readable on purpose.");
+        }
+    }
+
     /// <summary>The blob offload set with <see cref="UseBlobOffload"/>, or null.</summary>
     public BlobOffloadOptions? BlobOffload { get; private set; }
 

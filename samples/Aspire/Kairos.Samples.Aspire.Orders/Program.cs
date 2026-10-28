@@ -21,7 +21,7 @@ builder.Services.AddOpenTelemetry()
 builder.Configuration["ConnectionStrings:kairos"] = await DevDatabase.PrepareAsync(
     builder.Configuration["ConnectionStrings:kairos"] ?? throw new InvalidOperationException("Run this through the AppHost: it provides ConnectionStrings:kairos."));
 
-builder.Services.AddKairos(options => options.UsePostgresFromConfiguration(builder.Configuration).AddOrders());
+builder.Services.AddKairos(options => options.UsePostgresFromConfiguration(builder.Configuration).AllowUnencryptedPayloads().AddOrders());
 #endregion
 
 WebApplication app = builder.Build();

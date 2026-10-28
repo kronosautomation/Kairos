@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Kairos.Cli.Tests" />
+    <InternalsVisibleTo Include="Kairos.Persistence.Tests" />
   </ItemGroup>
 
 </Project>

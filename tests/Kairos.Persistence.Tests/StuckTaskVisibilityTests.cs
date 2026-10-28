@@ -41,6 +41,7 @@ public sealed class StuckTaskVisibilityTests
         builder.Logging.AddProvider(logs);
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.UseStore(store);
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(50);
             configure(o);

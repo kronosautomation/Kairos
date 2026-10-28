@@ -156,6 +156,7 @@ public sealed class AgentFrameworkConfidentialityTests
             : new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "lookup_order", AfHarness.Args($$"""{"orderId":"{{Canary.Text}}"}"""))]));
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.UseStore(new InMemoryKairosStore());
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(10);
         }).AddAgentFramework(af => af.AddAgent(AfHarness.AgentWith(model, "support", lookup, unclassified), r => r.ReadOnly("lookup_order")));

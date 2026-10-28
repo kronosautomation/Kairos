@@ -155,6 +155,7 @@ public sealed class TelemetryConfidentialityTests
         int attempts = 0;
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.UseStore(new InMemoryKairosStore());
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(20);
             o.AddActivities(agents.Activities);
@@ -227,6 +228,7 @@ public sealed class TelemetryConfidentialityTests
         builder.Logging.ClearProviders();
         builder.Services.AddKairos(o =>
         {
+            o.AllowUnencryptedPayloads();
             o.UseStore(new InMemoryKairosStore());
             o.PollFallbackInterval = TimeSpan.FromMilliseconds(20);
             o.WorkerCount = 1;

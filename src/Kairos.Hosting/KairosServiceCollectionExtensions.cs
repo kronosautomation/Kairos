@@ -22,6 +22,7 @@ public static class KairosServiceCollectionExtensions
             throw new InvalidOperationException("Call UsePostgres(...) or UseStore(...) when adding Kairos.");
         }
 
+        options.RequirePayloadProtectionDecision();
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton(options);
         services.AddSingleton(sp => options.StoreFactory(sp));
@@ -53,6 +54,11 @@ internal sealed partial class KairosWorkerService(
 {
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (options.PayloadProtector is null)
+        {
+            LogUnencrypted(logger);
+        }
+
         var loops = new Task[options.WorkerCount];
         for (int i = 0; i < loops.Length; i++)
         {
@@ -66,6 +72,9 @@ internal sealed partial class KairosWorkerService(
 
         return Task.WhenAll(loops);
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Payload encryption is OFF (AllowUnencryptedPayloads): workflow inputs, results and signals are stored readable in the database")]
+    private static partial void LogUnencrypted(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Workflow task for run {RunId} failed replay and was released")]
     private static partial void LogReplayFault(ILogger logger, Exception error, Guid runId);

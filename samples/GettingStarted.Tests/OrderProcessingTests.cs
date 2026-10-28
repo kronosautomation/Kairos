@@ -53,6 +53,7 @@ public sealed class OrderProcessingTests
         builder.Logging.ClearProviders();
         builder.Services.AddKairos(options =>
         {
+            options.AllowUnencryptedPayloads();
             useStore(options);
             options.PollFallbackInterval = TimeSpan.FromMilliseconds(50);
             options.AddOrderProcessing(services);

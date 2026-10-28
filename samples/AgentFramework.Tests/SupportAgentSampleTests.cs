@@ -37,7 +37,7 @@ public sealed class SupportAgentSampleTests
         builder.Services.AddSupportAgent(
             o =>
             {
-                o.UseStore(new InMemoryKairosStore());
+                o.UseStore(new InMemoryKairosStore()).AllowUnencryptedPayloads();
                 o.PollFallbackInterval = TimeSpan.FromMilliseconds(10);
             },
             model, orders, budget);
