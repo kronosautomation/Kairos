@@ -1,10 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <IsPackable>false</IsPackable>
+    <IsPackable>true</IsPackable>
+    <PackageId>Kairos.Testing</PackageId>
+    <Description>The Kairos simulator kit: a virtual clock, deterministic simulation world, fault injection, crash-at-every-step helpers, store contract tests, and scripted models for testing your own workflows and agents.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsTestProject>false</IsTestProject>
     <!-- Test support: underscored test names, no public-API polish required. -->
-    <NoWarn>$(NoWarn);CA1707;CA1515;CA1062;CA1859</NoWarn>
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA1062;CA1859;CS1591;CS1573</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

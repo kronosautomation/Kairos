@@ -9,7 +9,7 @@
 
 .NOTES
   Sets CI=true, which switches on ContinuousIntegrationBuild and the path mapping of Directory.Build.props: nothing of the machine that built the package ends up in it.
-  Only projects under src/ are packed; a project that is not packable produces nothing.
+  Only projects under src/ (and Kairos.Testing, which ships for customers' tests) are packed; a project that is not packable produces nothing.
 #>
 [CmdletBinding()]
 param(
@@ -41,8 +41,11 @@ Write-Host "SDK $(& dotnet --version), version $Version, $Configuration, from $R
 
 Invoke-Native dotnet @('restore', $Solution, '-p:RestoreLockedMode=true', '-nologo', '-v', 'q') -WorkingDirectory $Root
 
-$projects = Get-ChildItem -LiteralPath (Join-Path $Root 'src') -Recurse -Filter '*.csproj' -File |
-    Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' } | Sort-Object FullName
+# Everything under src/, plus the projects under tests/ that ship as packages for customers' own tests (docs/REPO-LAYOUT.md).
+$shippedFromTests = @('Kairos.Testing')
+$projects = @(Get-ChildItem -LiteralPath (Join-Path $Root 'src') -Recurse -Filter '*.csproj' -File |
+    Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' } | Sort-Object FullName) +
+    @($shippedFromTests | ForEach-Object { Get-Item -LiteralPath (Join-Path $Root "tests/$_/$_.csproj") })
 foreach ($project in $projects) {
     Invoke-Native dotnet @('pack', $project.FullName, '-c', $Configuration, '--no-restore', '-o', $Output, "-p:Version=$Version", '-nologo', '-v', 'q') -WorkingDirectory $Root -Quiet | Out-Null
 }
