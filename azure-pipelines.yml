@@ -167,12 +167,10 @@ stages:
         dotnet list Kairos.sln package --vulnerable --include-transitive | tee vuln.txt
         if grep -qE "\b(High|Critical)\b" vuln.txt; then echo "##vso[task.logissue type=error]High/critical vulnerable package"; exit 1; fi
       displayName: Vulnerable package report
-    - script: |
-        set -euo pipefail
-        # Fail if anything that looks like a secret was committed.
-        if git grep -nE "(Password|Pwd|AccountKey|SharedAccessKey|client_secret|BEGIN (RSA |EC )?PRIVATE KEY)\s*[=:]" -- . ':!docs/**' ':!*.md'; then
-          echo "##vso[task.logissue type=error]Possible secret in source"; exit 1; fi
-      displayName: Secret pattern scan
+    - pwsh: |
+        ./build/check-secrets.ps1 -SelfTest
+        ./build/check-secrets.ps1
+      displayName: Secret scan (by the shape of the secret; proves first that it can fail)
     - pwsh: ./docker/pin-images.ps1 -Check
       displayName: Every container image pinned to a digest
 

@@ -167,11 +167,11 @@ public sealed class OrderProcessingTests
         await container.StartAsync();
 
         // Step "set up the database" from the tutorial.
-        await Database.ProvisionAsync(container.GetConnectionString(), "sample-dataplane-password");
+        await Database.ProvisionAsync(container.GetConnectionString(), "dataplane-sample");
         var appConnection = new NpgsqlConnectionStringBuilder(container.GetConnectionString())
         {
             Username = "kairos_dataplane",
-            Password = "sample-dataplane-password",
+            Password = "dataplane-sample",
         };
 
         var services = new RecordingServices();
