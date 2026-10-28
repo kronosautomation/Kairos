@@ -118,10 +118,11 @@ public sealed class ReplayCheckOptions
 /// <param name="candidate">The workflow code of the build under test, registered per type and build.</param>
 /// <param name="protector">Opens sealed payloads. Null when the application does not use client-side encryption.</param>
 /// <param name="options">How much to replay.</param>
-public sealed class ReplayChecker(WorkflowRegistry candidate, IPayloadProtector? protector = null, ReplayCheckOptions? options = null)
+/// <param name="blobOffload">Where offloaded payloads are read from. Null when the application does not offload.</param>
+public sealed class ReplayChecker(WorkflowRegistry candidate, IPayloadProtector? protector = null, ReplayCheckOptions? options = null, BlobOffloadOptions? blobOffload = null)
 {
     private readonly ReplayCheckOptions _options = options ?? new ReplayCheckOptions();
-    private readonly PayloadCrypto? _crypto = protector is null ? null : new PayloadCrypto(protector);
+    private readonly PayloadCrypto? _crypto = protector is null ? null : new PayloadCrypto(protector, blobOffload);
 
     /// <summary>
     /// Samples the runs of one tenant scope: for every workflow type and build, the newest <see cref="ReplayCheckOptions.SamplePerGroup"/> open runs and the same number of

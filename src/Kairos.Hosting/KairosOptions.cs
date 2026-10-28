@@ -55,6 +55,20 @@ public sealed class KairosOptions
         return this;
     }
 
+    /// <summary>The blob offload set with <see cref="UseBlobOffload"/>, or null.</summary>
+    public BlobOffloadOptions? BlobOffload { get; private set; }
+
+    /// <summary>
+    /// Keeps large payloads out of the database: a payload longer than <paramref name="thresholdBytes"/> (default 256 KiB) is sealed, stored in <paramref name="store"/> by the SHA-256 of the sealed bytes, and the history
+    /// keeps a sealed reference to it. Needs <see cref="UsePayloadProtector"/>: a blob holds ciphertext and nothing else. Reads verify the length and hash, and a blob that is missing or replaced fails the task with a
+    /// named error. Every process that opens these histories (workers, the client, the replay check) must be configured with the same store.
+    /// </summary>
+    public KairosOptions UseBlobOffload(IBlobOffload store, int thresholdBytes = BlobOffloadOptions.DefaultThresholdBytes)
+    {
+        BlobOffload = new BlobOffloadOptions(store, thresholdBytes).Validated();
+        return this;
+    }
+
     /// <summary>Postgres only: no cluster, no sidecar. Connect as the <c>kairos_dataplane</c> role.</summary>
     public KairosOptions UsePostgres(string connectionString) => UsePostgres(connectionString, _ => { });
 

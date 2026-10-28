@@ -33,6 +33,12 @@ public sealed class SimOptions
     public bool ClockJumpsDuringSlowActivities { get; init; } = true;
 
     public SimFaultOptions Faults { get; init; } = new();
+
+    /// <summary>Seal every payload with this protector (client and workers). Null: payloads are stored as they are.</summary>
+    public IPayloadProtector? Protector { get; init; }
+
+    /// <summary>Offload large payloads to this store (needs <see cref="Protector"/>). The world puts fault injection in front of it, so blob calls are steps of the crash matrix.</summary>
+    public BlobOffloadOptions? Offload { get; init; }
 }
 
 public sealed record SimResult(ulong Seed, int Runs, SimStats Stats, string Fingerprint, IReadOnlyList<byte[]?> Results);
@@ -56,6 +62,8 @@ public sealed class SimWorld
     private readonly FaultInjectingStore _store;
     private readonly KairosClient _client;
     private readonly FakeExternalSystem _external = new();
+    private readonly BlobOffloadOptions? _offload;
+    private readonly PayloadCrypto? _crypto;
     private readonly TenantScope _scope;
     private readonly List<RunInfo> _runs = [];
     private List<WorkerRuntime> _workers = [];
@@ -75,7 +83,9 @@ public sealed class SimWorld
         _rng = new SimRandom(seed);
         _store = new FaultInjectingStore(decorate?.Invoke(_inner) ?? _inner, _rng.Fork(1), _options.Faults, _stats) { FaultsEnabled = _options.InjectFaults };
         SimRandom ids = _rng.Fork(2);
-        _client = new KairosClient(_store, _time, ids.NextGuid);
+        _offload = _options.Offload is null ? null : new BlobOffloadOptions(new FaultInjectingBlobOffload(_options.Offload.Store, _store), _options.Offload.ThresholdBytes);
+        _crypto = _options.Protector is null ? null : new PayloadCrypto(_options.Protector, _offload);
+        _client = new KairosClient(_store, _time, ids.NextGuid, _options.Protector, blobOffload: _offload);
         _scope = new TenantScope(_rng.NextGuid(), _rng.NextGuid());
 
         int count = programs?.Count ?? _rng.Between(_options.MinRuns, _options.MaxRuns);
@@ -302,7 +312,7 @@ public sealed class SimWorld
         _workers = [];
         for (int i = 0; i < _options.Workers; i++)
         {
-            _workers.Add(new WorkerRuntime(_store, _scope, workflows, activities, _time, options)
+            _workers.Add(new WorkerRuntime(_store, _scope, workflows, activities, _time, options, _options.Protector, _offload)
             {
                 OnFault = _ => _stats.NonDeterminismFaults++,
             });
@@ -427,6 +437,8 @@ public sealed class SimWorld
 
     private async Task<SimResult> CheckInvariantsAsync()
     {
+        _store.ForcedFault = null; // the checks read the blob store too; they are not part of the run being crashed
+        _store.FaultsEnabled = false;
         var expectedKeys = new HashSet<string>(StringComparer.Ordinal);
         var results = new List<byte[]?>();
         using var fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -456,7 +468,12 @@ public sealed class SimWorld
             CheckStructure(history, where, expectedKeys);
             _stats.LeaseExpirations += history.OfType<ActivityFailed>().Count(f => f.ErrorType == StoreRules.LeaseExpiredError);
 
-            // I4: the history replays with the current code, no divergence, nothing left to do.
+            // I4: the history replays with the current code, no divergence, nothing left to do. (Sealed histories are opened first, after the chain was checked over what is stored.)
+            if (_crypto is not null)
+            {
+                history = await _crypto.OpenHistoryAsync(history, CancellationToken.None);
+            }
+
             WorkflowFunc code = SimPrograms.Compile(r.Program, _patched);
             try
             {

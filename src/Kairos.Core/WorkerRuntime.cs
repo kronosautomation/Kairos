@@ -45,7 +45,7 @@ public sealed class WorkerRuntime
 
     public WorkerRuntime(
         IKairosStore store, TenantScope scope, WorkflowRegistry workflows, ActivityRegistry activities,
-        TimeProvider time, WorkerOptions? options = null, IPayloadProtector? payloadProtector = null)
+        TimeProvider time, WorkerOptions? options = null, IPayloadProtector? payloadProtector = null, BlobOffloadOptions? blobOffload = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(workflows);
@@ -57,7 +57,9 @@ public sealed class WorkerRuntime
         _activities = activities;
         _time = time;
         _options = options ?? new WorkerOptions();
-        _crypto = payloadProtector is null ? null : new PayloadCrypto(payloadProtector);
+        _crypto = payloadProtector is null
+            ? blobOffload is null ? null : throw new ArgumentException("Blob offload needs a payload protector: a blob holds ciphertext and nothing else.", nameof(blobOffload))
+            : new PayloadCrypto(payloadProtector, blobOffload);
     }
 
     /// <summary>Called for every task that failed replay. Hook for logging/metrics; must not throw.</summary>
@@ -247,7 +249,8 @@ public sealed class WorkerRuntime
                 errorType += "Exception"; // that name is reserved for the record the store writes itself
             }
 
-            bool retry = ex is not ActivityNotRegisteredException && task.RetryPolicy.ShouldRetry(task.Attempt, errorType);
+            // An input that cannot be read back (a missing or replaced blob) does not get better by trying again: the attempt fails for good, with the reason, and the workflow sees it.
+            bool retry = ex is not (ActivityNotRegisteredException or PayloadBlobException) && task.RetryPolicy.ShouldRetry(task.Attempt, errorType);
             DateTimeOffset stamp = _time.GetUtcNow();
             outcome = new ActivityFailed(r.TenantId, r.NamespaceId, r.RunId, 0, stamp, task.ActivityId, task.Attempt, errorType, ex.Message, retry) { Usage = attemptContext?.Usage };
             retryAt = retry ? stamp + task.RetryPolicy.GetBackoff(task.Attempt) : null;

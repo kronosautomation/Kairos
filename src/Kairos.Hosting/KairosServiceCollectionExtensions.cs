@@ -26,7 +26,7 @@ public static class KairosServiceCollectionExtensions
         services.AddSingleton(options);
         services.AddSingleton(sp => options.StoreFactory(sp));
         services.AddSingleton(sp => sp.GetRequiredService<KairosOptions.StoreHandle>().Store);
-        services.AddSingleton(sp => new KairosClient(sp.GetRequiredService<IKairosStore>(), sp.GetRequiredService<TimeProvider>(), payloadProtector: options.PayloadProtector));
+        services.AddSingleton(sp => new KairosClient(sp.GetRequiredService<IKairosStore>(), sp.GetRequiredService<TimeProvider>(), payloadProtector: options.PayloadProtector, blobOffload: options.BlobOffload));
         services.AddSingleton(sp => new StuckTaskMonitor(
             sp.GetRequiredService<KairosOptions.StoreHandle>(), options, sp.GetRequiredService<ILogger<StuckTaskMonitor>>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new KairosWorkerPulse(sp.GetRequiredService<TimeProvider>()));
@@ -56,7 +56,7 @@ internal sealed partial class KairosWorkerService(
         var loops = new Task[options.WorkerCount];
         for (int i = 0; i < loops.Length; i++)
         {
-            var worker = new WorkerRuntime(handle.Store, options.Scope, options.Workflows, options.Activities, time, options.Worker, options.PayloadProtector)
+            var worker = new WorkerRuntime(handle.Store, options.Scope, options.Workflows, options.Activities, time, options.Worker, options.PayloadProtector, options.BlobOffload)
             {
                 OnFault = fault => LogReplayFault(logger, fault.Error, fault.Run.RunId),
             };

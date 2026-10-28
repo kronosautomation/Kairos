@@ -270,6 +270,12 @@ public sealed class FaultInjectingStore(IKairosStore inner, SimRandom rng, SimFa
         }
     }
 
+    /// <summary>
+    /// Counts and faults a call that is not the store's: the blob store the engine puts large payloads in. It takes the next operation index, so a crash-at-every-step run covers the steps between
+    /// "the blob is stored" and "the event that refers to it is committed" with the same <see cref="ForcedFault"/>.
+    /// </summary>
+    public ValueTask<T> InterceptAsync<T>(string operation, Func<ValueTask<T>> call) => Faulty(operation, call);
+
     private async ValueTask<T> Faulty<T>(string operation, Func<ValueTask<T>> call)
     {
         long index = OperationCount++;

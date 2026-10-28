@@ -142,6 +142,19 @@ public static class EncryptionExamples
     #endregion
 }
 
+/// <summary>Large payloads in a blob store instead of the database. The payload-encryption page quotes this.</summary>
+public static class BlobOffloadExamples
+{
+    #region blob-offload
+    // Payloads longer than 256 KiB (the default) are sealed, stored in the blob store by the hash of the sealed bytes, and the history keeps a small sealed reference.
+    // The same store must be given to every process that opens these histories: the workers, the client, the replay check.
+    public static KairosOptions Offload(KairosOptions options, IPayloadProtector protector, IBlobOffload blobs) =>
+        options
+            .UsePayloadProtector(protector) // offload needs it: a blob holds ciphertext and nothing else
+            .UseBlobOffload(blobs, thresholdBytes: 128 * 1024);
+    #endregion
+}
+
 /// <summary>A database password that is a short-lived token. The page on database sign-in quotes this.</summary>
 public static class DatabaseSignInExamples
 {

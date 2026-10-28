@@ -33,14 +33,16 @@ public sealed class KairosClient
     private readonly PayloadCrypto? _crypto;
     private readonly Func<string> _newSignalId;
 
-    public KairosClient(IKairosStore store, TimeProvider time, Func<Guid>? newRunId = null, IPayloadProtector? payloadProtector = null, Func<string>? newSignalId = null)
+    public KairosClient(IKairosStore store, TimeProvider time, Func<Guid>? newRunId = null, IPayloadProtector? payloadProtector = null, Func<string>? newSignalId = null, BlobOffloadOptions? blobOffload = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(time);
         _store = store;
         _time = time;
         _newRunId = newRunId ?? (() => Guid.CreateVersion7(time.GetUtcNow()));
-        _crypto = payloadProtector is null ? null : new PayloadCrypto(payloadProtector);
+        _crypto = payloadProtector is null
+            ? blobOffload is null ? null : throw new ArgumentException("Blob offload needs a payload protector: a blob holds ciphertext and nothing else.", nameof(blobOffload))
+            : new PayloadCrypto(payloadProtector, blobOffload);
         _newSignalId = newSignalId ?? (() => Guid.CreateVersion7(time.GetUtcNow()).ToString("N"));
     }
 

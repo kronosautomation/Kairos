@@ -60,7 +60,7 @@ public interface IPayloadProtector
     ValueTask<byte[]> UnprotectAsync(TenantScope scope, ReadOnlyMemory<byte> protectedPayload, ReadOnlyMemory<byte> context, CancellationToken cancellationToken);
 }
 
-public sealed class PayloadProtectionException : Exception
+public class PayloadProtectionException : Exception
 {
     public PayloadProtectionException()
         : base("The payload could not be opened.")
@@ -95,6 +95,52 @@ public interface IBlobOffload
 
     ValueTask<bool> DeleteAsync(TenantScope scope, BlobRef reference, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Turns on payload offload: a payload larger than <see cref="ThresholdBytes"/> is sealed, stored in <see cref="Store"/> by the SHA-256 of what was stored (ciphertext only), and the history keeps a sealed reference
+/// to it instead. It needs a payload protector (a blob holds ciphertext and nothing else); without one it is refused where it is configured.
+/// </summary>
+/// <param name="Store">Where the ciphertext goes.</param>
+/// <param name="ThresholdBytes">Payloads longer than this many bytes are offloaded. Default 256 KiB.</param>
+public sealed record BlobOffloadOptions(IBlobOffload Store, int ThresholdBytes = BlobOffloadOptions.DefaultThresholdBytes)
+{
+    public const int DefaultThresholdBytes = 256 * 1024;
+
+    /// <summary>Checks the options; returns them for chaining.</summary>
+    public BlobOffloadOptions Validated()
+    {
+        ArgumentNullException.ThrowIfNull(Store);
+        ArgumentOutOfRangeException.ThrowIfLessThan(ThresholdBytes, 1);
+        return this;
+    }
+}
+
+/// <summary>A payload that lives in the blob store could not be read back. Never silent: the run's task fails with this, naming the reference (a hash of ciphertext, no payload) and why.</summary>
+public class PayloadBlobException : PayloadProtectionException
+{
+    public PayloadBlobException(string message, Exception? innerException = null)
+        : base(message, innerException!)
+    {
+    }
+
+    public PayloadBlobException()
+        : base("A payload held in the blob store could not be read.")
+    {
+    }
+
+    public PayloadBlobException(string message)
+        : base(message)
+    {
+    }
+}
+
+/// <summary>The history refers to a blob the store does not have in this scope.</summary>
+public sealed class BlobMissingException(BlobRef reference)
+    : PayloadBlobException($"The payload stored as blob {reference.Sha256Hex[..Math.Min(12, reference.Sha256Hex.Length)]} ({reference.Length} bytes) is missing from the blob store.");
+
+/// <summary>The blob store returned bytes that are not what the history refers to (a different length or hash): the blob was replaced or damaged.</summary>
+public sealed class BlobMismatchException(BlobRef reference, Exception? innerException = null)
+    : PayloadBlobException($"The payload stored as blob {reference.Sha256Hex[..Math.Min(12, reference.Sha256Hex.Length)]} ({reference.Length} bytes) does not match its reference: it was replaced or damaged.", innerException);
 
 // ---- identity -----------------------------------------------------------------------------------------------------
 

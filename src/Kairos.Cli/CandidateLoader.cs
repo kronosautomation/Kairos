@@ -4,7 +4,7 @@ using System.Runtime.Loader;
 namespace Kairos.Cli;
 
 /// <summary>The workflow code and payload protector of a candidate build, as its setup registered them.</summary>
-internal sealed record Candidate(WorkflowRegistry Workflows, IPayloadProtector? Protector, string SetupType);
+internal sealed record Candidate(WorkflowRegistry Workflows, IPayloadProtector? Protector, string SetupType, BlobOffloadOptions? BlobOffload = null);
 
 /// <summary>Loads the assembly of a candidate build beside this tool and asks its <see cref="IReplayCheckSetup"/> for the workflows. Nothing of the application is started.</summary>
 internal static class CandidateLoader
@@ -32,7 +32,7 @@ internal static class CandidateLoader
         var setup = (IReplayCheckSetup)(Activator.CreateInstance(setupType) ?? throw new ArgumentException($"{setupType.FullName} could not be created."));
         var options = new KairosOptions();
         setup.Configure(options);
-        return new Candidate(options.WorkflowRegistry, options.PayloadProtector, setupType.FullName ?? setupType.Name);
+        return new Candidate(options.WorkflowRegistry, options.PayloadProtector, setupType.FullName ?? setupType.Name, options.BlobOffload);
     }
 
     private static Type FindSetupType(Assembly assembly, string? name)

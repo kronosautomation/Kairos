@@ -48,7 +48,7 @@ internal static class ReplayCheckCommand
         }
 
         var options = new ReplayCheckOptions { SamplePerGroup = args.Sample, Since = args.Since };
-        var checker = new ReplayChecker(candidate.Workflows, candidate.Protector, options);
+        var checker = new ReplayChecker(candidate.Workflows, candidate.Protector, options, candidate.BlobOffload);
         var reports = new List<ReplayCheckReport>();
         NpgsqlDataSource? owned = null;
         try

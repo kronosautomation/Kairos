@@ -6,10 +6,25 @@ namespace Kairos;
 /// Applies an <see cref="IPayloadProtector"/> to history events: seals every payload field of an event before it is sent to the store,
 /// and opens them after the hash chain has been verified. Each field is bound to its run, field name and id, so a ciphertext copied to
 /// another event, field or run does not open. Metadata (types, ids, names, timestamps) stays readable so the server can route and index.
+/// <para>
+/// With blob offload on, a payload longer than the threshold is sealed, put in the blob store (which therefore only ever holds ciphertext, bound to the same run, field and id), and the field in the history is
+/// the <b>sealed reference</b> to it: the blob's SHA-256 and length, sealed like any payload, so the server learns neither that a payload was offloaded nor what it hashes to. The reference is inside the event, so the
+/// hash chain covers it; reading verifies the blob's length and SHA-256 against it again, here, whatever the blob store claims. The blob is stored before the event is, so a crash leaves at worst an unreferenced blob,
+/// never a reference to nothing. A blob that is missing or does not match fails the task with <see cref="PayloadBlobException"/>; it is never replaced by an empty or partial payload.
+/// </para>
 /// </summary>
-public sealed class PayloadCrypto(IPayloadProtector protector)
+public sealed class PayloadCrypto
 {
     private const string TextPrefix = "enc:";
+    private readonly IPayloadProtector _protector;
+    private readonly BlobOffloadOptions? _offload;
+
+    public PayloadCrypto(IPayloadProtector protector, BlobOffloadOptions? offload = null)
+    {
+        ArgumentNullException.ThrowIfNull(protector);
+        _protector = protector;
+        _offload = offload?.Validated();
+    }
 
     /// <summary>The authentication field of a signal payload: name and the client-generated id, so equal-named signals are not interchangeable.</summary>
     public static string SignalField(string signalName, string signalId) => $"signal:{signalName}:{signalId}";
@@ -17,11 +32,60 @@ public sealed class PayloadCrypto(IPayloadProtector protector)
     public static byte[] Context(Guid runId, string field, long id = 0) =>
         Encoding.UTF8.GetBytes($"kairos/v1|{runId:N}|{field}|{id}");
 
-    public async ValueTask<byte[]> SealAsync(TenantScope scope, Guid runId, string field, long id, byte[] plaintext, CancellationToken ct) =>
-        await protector.ProtectAsync(scope, plaintext, Context(runId, field, id), ct).ConfigureAwait(false);
+    public async ValueTask<byte[]> SealAsync(TenantScope scope, Guid runId, string field, long id, byte[] plaintext, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(plaintext);
+        byte[] context = Context(runId, field, id);
+        byte[] body = BlobReferences.Escape(plaintext);
+        byte[] sealedBody = await _protector.ProtectAsync(scope, body, context, ct).ConfigureAwait(false);
+        if (_offload is null || plaintext.Length <= _offload.ThresholdBytes)
+        {
+            return sealedBody;
+        }
 
-    public async ValueTask<byte[]> OpenAsync(TenantScope scope, Guid runId, string field, long id, byte[] sealedBytes, CancellationToken ct) =>
-        await protector.UnprotectAsync(scope, sealedBytes, Context(runId, field, id), ct).ConfigureAwait(false);
+        // The blob is the ciphertext, stored before anything refers to it. What goes into the history is a small sealed reference.
+        BlobRef reference = await _offload.Store.PutAsync(scope, sealedBody, ct).ConfigureAwait(false);
+        return await _protector.ProtectAsync(scope, BlobReferences.Encode(reference), context, ct).ConfigureAwait(false);
+    }
+
+    public async ValueTask<byte[]> OpenAsync(TenantScope scope, Guid runId, string field, long id, byte[] sealedBytes, CancellationToken ct)
+    {
+        byte[] context = Context(runId, field, id);
+        byte[] body = await _protector.UnprotectAsync(scope, sealedBytes, context, ct).ConfigureAwait(false);
+        if (!BlobReferences.TryDecode(body, out BlobRef reference))
+        {
+            return BlobReferences.Unescape(body);
+        }
+
+        if (_offload is null)
+        {
+            throw new PayloadBlobException("The history refers to a payload in the blob store, and blob offload is not configured here.");
+        }
+
+        byte[]? blob;
+        try
+        {
+            blob = await _offload.Store.GetAsync(scope, reference, ct).ConfigureAwait(false);
+        }
+        catch (InvalidDataException e)
+        {
+            throw new BlobMismatchException(reference, e);
+        }
+
+        if (blob is null)
+        {
+            throw new BlobMissingException(reference);
+        }
+
+        // The store was asked to verify; this does not rely on it.
+        if (blob.LongLength != reference.Length || !string.Equals(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(blob)), reference.Sha256Hex, StringComparison.Ordinal))
+        {
+            throw new BlobMismatchException(reference);
+        }
+
+        byte[] opened = await _protector.UnprotectAsync(scope, blob, context, ct).ConfigureAwait(false);
+        return BlobReferences.TryDecode(opened, out _) ? throw new PayloadBlobException("A blob holds a reference to another blob; that is never written.") : BlobReferences.Unescape(opened);
+    }
 
     /// <summary>Opens every payload in a verified history. The returned events keep their original hash fields (now stale: verify before opening).</summary>
     public async ValueTask<IReadOnlyList<HistoryEvent>> OpenHistoryAsync(IReadOnlyList<HistoryEvent> history, CancellationToken ct)
@@ -51,13 +115,13 @@ public sealed class PayloadCrypto(IPayloadProtector protector)
         {
             if (!open)
             {
-                return TextPrefix + Convert.ToBase64String(await SealAsync(scope, run, field, id, Encoding.UTF8.GetBytes(value), ct).ConfigureAwait(false));
+                return TextPrefix + Convert.ToBase64String(await _protector.ProtectAsync(scope, Encoding.UTF8.GetBytes(value), Context(run, field, id), ct).ConfigureAwait(false));
             }
 
             // Everything a worker writes is sealed. Unsealed text is refused: accepting it would let a compromised server author
             // failure messages that workflow code (and the models behind agent workflows) would trust.
             return value.StartsWith(TextPrefix, StringComparison.Ordinal)
-                ? Encoding.UTF8.GetString(await OpenAsync(scope, run, field, id, FromBase64(value[TextPrefix.Length..]), ct).ConfigureAwait(false))
+                ? Encoding.UTF8.GetString(await _protector.UnprotectAsync(scope, FromBase64(value[TextPrefix.Length..]), Context(run, field, id), ct).ConfigureAwait(false))
                 : throw new PayloadProtectionException();
         }
 

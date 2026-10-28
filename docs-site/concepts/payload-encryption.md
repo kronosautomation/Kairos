@@ -38,6 +38,29 @@ or rotated master key stops sealing new payloads sooner. Measure your key provid
 
 Keys are never shared across tenants or namespaces, whatever the setting.
 
+## Large payloads in a blob store
+
+A history that carries megabytes is slow to replay and expensive to keep in the database. With **blob offload** on, a payload longer than a threshold (256 KiB unless you set another) is sealed as usual, stored in a blob store
+you configure (a bucket, a container, a directory) under the SHA-256 of the sealed bytes, and the history keeps only a small **reference** to it. The reference is sealed like any other payload, so the server and the
+database see neither that a payload was moved nor the hash it is stored under.
+
+[!code-csharp[](../../samples/Concepts/ConceptExamples.cs#blob-offload)]
+
+What you can rely on:
+
+- **The blob store holds ciphertext only.** The blob is the sealed payload, bound to its tenant, namespace, run, field and id, so it opens nowhere else. Offload needs payload encryption and refuses to start without it.
+- **The hash chain covers the reference.** Changing a reference in the database breaks the chain, which every reader checks before it opens anything.
+- **Reads verify.** The length and the SHA-256 of what the blob store returns are checked against the reference, whatever the store itself claims. A blob that was replaced or damaged fails with `BlobMismatchException`.
+- **A missing blob fails clearly.** The task fails with `BlobMissingException`, naming the first characters of the hash and the size, never a payload. It is retried and reported on every attempt, as for any payload that cannot be opened,
+  and the run does not move on or complete on a guess. An activity whose input is missing fails for good rather than retrying.
+- **A crash cannot leave a reference to nothing.** The blob is stored before the event that refers to it is. A crash in between leaves an unreferenced blob, which wastes space and nothing else.
+
+What it does not do:
+
+- **Nothing deletes old blobs yet.** Blobs of finished runs stay until you remove them with your blob store's own lifecycle rules. Unreferenced blobs from crashes stay too.
+- **Sizes are visible.** A blob's size is visible to whoever can list the blob store, as the size of a payload is to the database.
+- **Every process that opens a history needs the same blob store.** A reader without one is told so, in words, and is not handed the reference as if it were the payload.
+
 ## How long a process keeps a key it has opened
 
 A process that has unwrapped a data key keeps it in memory for `UnwrappedKeyTtl` (15 minutes by default), then wipes it and asks the key provider again, so revoking access at the provider stops
