@@ -15,10 +15,10 @@ public sealed class DatabaseSignInExamplesTests
             return ValueTask.FromResult("short-lived-token");
         });
 
-        string token = await source.GetPasswordAsync(new DatabaseEndpoint("db.example.internal", 5432, "kairos_dataplane"), CancellationToken.None);
+        string token = await source.GetPasswordAsync(new DatabaseEndpoint("db.example.test", 5432, "kairos_dataplane"), CancellationToken.None);
 
         Assert.Equal("short-lived-token", token);
-        Assert.Equal(new DatabaseEndpoint("db.example.internal", 5432, "kairos_dataplane"), asked);
+        Assert.Equal(new DatabaseEndpoint("db.example.test", 5432, "kairos_dataplane"), asked);
     }
 
     [Fact]
@@ -27,7 +27,7 @@ public sealed class DatabaseSignInExamplesTests
         var options = new KairosOptions();
         var source = new DatabaseSignInExamples.MyTokenSource((_, _) => ValueTask.FromResult("t"));
 
-        KairosOptions result = DatabaseSignInExamples.Connect(options, "Host=db.example.internal;Database=kairos;Username=kairos_dataplane;SSL Mode=VerifyFull", source);
+        KairosOptions result = DatabaseSignInExamples.Connect(options, "Host=db.example.test;Database=kairos;Username=kairos_dataplane;SSL Mode=VerifyFull", source);
 
         Assert.Same(options, result);
     }

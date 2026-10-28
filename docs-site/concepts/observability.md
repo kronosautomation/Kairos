@@ -4,13 +4,7 @@ Kairos emits OpenTelemetry **spans** and **metrics** for runs, tasks, activities
 the OpenTelemetry providers of the host to them, so in an application that already exports telemetry (a .NET Aspire service, for
 example) runs show up with no further setup. Without OpenTelemetry nothing is recorded and nothing is paid for.
 
-```csharp
-builder.Services.AddOpenTelemetry()
-    .WithTracing(tracing => tracing.AddAspNetCoreInstrumentation())
-    .UseOtlpExporter();                  // no AddSource("Kairos"), no AddMeter("Kairos")
-
-builder.Services.AddKairos(options => options.UsePostgres(connectionString));
-```
+[!code-csharp[](../../samples/Concepts/ConceptExamples.cs#telemetry-setup)]
 
 If you prefer to subscribe yourself, set `options.RegisterTelemetry = false` and add the source and the meter, both named `Kairos`
 (`KairosTelemetry.SourceName`, `KairosMetrics.MeterName`).

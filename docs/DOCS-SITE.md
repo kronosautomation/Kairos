@@ -15,8 +15,9 @@ updates the docs it affects.
   review IDs; commercial features described by what they do, not how they are built.
 
 ## Code samples stay correct
-- Every code snippet comes from `samples/` projects that compile and run in CI (DocFX code snippet references by region),
-  never hand-typed into Markdown. A sample that stops compiling fails the build.
+- Every typed C# snippet comes from `samples/` projects that compile and run in CI (DocFX code snippet references by region),
+  never hand-typed into Markdown; `build/check-disclosure.ps1` fails a page with a fenced C# block. A sample that stops compiling fails the build.
+- Shell commands and configuration snippets (JSON, YAML, environment variables, CLI usage) may be written inline: they cannot be compiled, and the CLI examples are covered by the tests of the commands they show.
 - Each sample has a test that runs it against the in-memory store, and the Postgres ones against Testcontainers.
 
 ## Information architecture

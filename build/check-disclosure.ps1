@@ -30,9 +30,10 @@ if (-not $Root) { $Root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 # name, regex, case-sensitive?
 $rules = @(
     @{ Name = 'reference to the internal docs folder'; Pattern = '(?<![\w-])docs[/\\]'; CaseSensitive = $false },
-    @{ Name = 'reference to review material';          Pattern = '\breviews?[/\\]|\bcode review\b|\bsecurity review\b'; CaseSensitive = $false },
+    @{ Name = 'reference to review material';          Pattern = '(?<![\w-])reviews?[/\\]|\bcode review\b|\bsecurity review\b'; CaseSensitive = $false },
     @{ Name = 'reference to the commercial repository'; Pattern = 'Kairos\.Commercial'; CaseSensitive = $false },
     @{ Name = 'blocklisted term';                       Pattern = '\b(milestones?|roadmap|revenue|competitors?|design[- ]partners?|internal\w*|coming soon)\b'; CaseSensitive = $false },
+    @{ Name = 'typed C# written into a page (put it in a compiling sample under samples/ and include it by region)'; Pattern = '^\s*```\s*(csharp|cs|c#)\s*$'; CaseSensitive = $false },
     @{ Name = 'internal invariant, review or research id'; Pattern = '\b(I(?:[1-9]|1[01])|[FLER][1-7])\b'; CaseSensitive = $true }
 )
 
@@ -103,6 +104,7 @@ if ($SelfTest) {
         $clean = Invoke-Check -BaseDir $temp -PublicFolders @('docs-site', 'samples') -CommentFolders @('src')
         if ($clean.Count -ne 0) { Write-Error "Self-test: a clean tree produced $($clean.Count) finding(s)."; exit 1 }
 
+        $fence = '`' * 3
         $bad = @{
             'docs-site/a.md'     = 'See [notes](../docs/SECURITY-ARCHITECTURE.md).'
             'docs-site/b.md'     = 'Planned for the next milestone.'
@@ -114,6 +116,7 @@ if ($SelfTest) {
             'docs-site/h.md'     = 'Our design partner asked for it.'
             'docs-site/i.md'     = 'Based on the research reading list R3.'
             'src/Pkg/Leak.cs'    = '/// <summary>See docs/RESEARCH.md for the plan.</summary>'
+            'docs-site/j.md'     = "Setup:`n$fence" + "csharp`nvar x = 1;`n$fence"
         }
         foreach ($entry in $bad.GetEnumerator()) {
             Set-Content (Join-Path $temp $entry.Key) $entry.Value
@@ -129,8 +132,9 @@ if ($SelfTest) {
         Set-Content "$temp/samples/Modifier.cs" "internal sealed class Helper { internal static int X; }"
         New-Item -ItemType Directory -Path "$temp/docs-site/_site" -Force | Out-Null
         Set-Content "$temp/docs-site/_site/generated.html" 'internal roadmap milestone'
-        foreach ($name in @('a', 'b', 'c', 'd', 'e', 'g', 'h', 'i')) { Remove-Item "$temp/docs-site/$name.md" }
+        foreach ($name in @('a', 'b', 'c', 'd', 'e', 'g', 'h', 'i', 'j')) { Remove-Item "$temp/docs-site/$name.md" }
         Remove-Item "$temp/samples/f.cs", "$temp/src/Pkg/Leak.cs"
+        Set-Content "$temp/docs-site/shell.md" "Run it:`n$($fence)bash`ndotnet run`n$fence`n$($fence)json`n{ `"a`": 1 }`n$fence"
         Set-Content "$temp/docs-site/ok.md" 'Documents are processed in order; see docs-site conventions and the I/O section.'
         $after = Invoke-Check -BaseDir $temp -PublicFolders @('docs-site', 'samples') -CommentFolders @('src')
         if ($after.Count -ne 0) { Write-Error "Self-test: false positives: $($after | Format-Table | Out-String)"; exit 1 }

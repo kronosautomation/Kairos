@@ -9,6 +9,8 @@
     <ProjectReference Include="..\..\src\Kairos.Hosting\Kairos.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Worker\Kairos.Worker.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Persistence.Postgres\Kairos.Persistence.Postgres.csproj" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
   </ItemGroup>
 
   <ItemGroup>

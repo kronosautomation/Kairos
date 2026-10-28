@@ -1,6 +1,8 @@
 using System.Text;
 using Kairos.Persistence.Postgres;
 using Kairos.Worker;
+using Microsoft.Extensions.DependencyInjection;
+using OpenTelemetry;
 
 namespace Kairos.Samples.Concepts;
 
@@ -171,5 +173,19 @@ public static class DatabaseSignInExamples
     // The connection string names the host, the database and the role, and carries no password.
     public static KairosOptions Connect(KairosOptions options, string connectionStringWithoutPassword, IDatabaseTokenSource tokens) =>
         options.UsePostgres(connectionStringWithoutPassword, builder => builder.UseTokenPassword(tokens));
+    #endregion
+}
+
+/// <summary>Setting up telemetry beside Kairos.</summary>
+public static class ObservabilityExamples
+{
+    #region telemetry-setup
+    public static IServiceCollection AddObservedKairos(IServiceCollection services, string connectionString, IPayloadProtector protector)
+    {
+        services.AddOpenTelemetry()
+            .UseOtlpExporter();                  // no AddSource("Kairos"), no AddMeter("Kairos"): AddKairos subscribes to both
+
+        return services.AddKairos(options => options.UsePostgres(connectionString).UsePayloadProtector(protector));
+    }
     #endregion
 }

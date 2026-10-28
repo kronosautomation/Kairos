@@ -145,3 +145,13 @@ public sealed class TokenBudget(long tokensPerDay) : IModelCallGuard
     }
 }
 #endregion
+
+/// <summary>The controls native Kairos agents have, set on the Agent Framework builder in the same place.</summary>
+public static class AgentControlsSample
+{
+    #region configure-agents
+    public static AgentFrameworkBuilder ConfigureControls(
+        AgentFrameworkBuilder af, IModelCallGuard budget, Func<string, string> redact, IToolCredentialIssuer issuer, IApproverVerifier verifier) =>
+        af.ConfigureAgents(agents => agents.UseModelCallGuard(budget).UseRedactor(redact).UseCredentials(issuer).UseApproverVerifier(verifier));
+    #endregion
+}

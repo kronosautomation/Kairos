@@ -55,7 +55,7 @@ budgets are CI gates; a change that regresses them is not done.
 Product docs live in `docs-site/` (DocFX), planned in `docs/DOCS-SITE.md`. Follow `docs/DISCLOSURE-POLICY.md`:
 never copy or link anything under `docs/` into `docs-site/`, `samples/`, READMEs or package descriptions; no roadmap,
 strategy, pricing rationale, review findings or commercial internals in anything public. Any change to public behaviour updates the
-affected pages in the same commit. Code snippets come only from compiling `samples/` projects.
+affected pages in the same commit. Typed C# comes only from compiling `samples/` projects (included by region; `build/check-disclosure.ps1` fails a page with a hand-typed C# block). Shell commands and configuration snippets (JSON, YAML, environment variables, CLI usage) may be written inline.
 
 ## CI conventions (Azure DevOps: `azure-pipelines.yml`, `build/azure-pipelines-nightly.yml`)
 

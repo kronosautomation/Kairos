@@ -75,9 +75,7 @@ configured a redactor). The run holds no compute while it waits.
 
 They are the ones native Kairos agents use, set up in the same place:
 
-```csharp
-af.ConfigureAgents(agents => agents.UseModelCallGuard(budget).UseRedactor(Redact).UseCredentials(issuer).UseApproverVerifier(verifier));
-```
+[!code-csharp[](../../samples/AgentFramework/SupportAgentSample.cs#configure-agents)]
 
 - **A budget** is an `IModelCallGuard`. It is asked before every model call, told what the call cost afterwards, and gives its reservation back if the step fails for good. A refused call pauses the run for a person to raise the budget, or ends it.
   Say which model each agent uses with `Model("alias", maxOutputTokens)` (or give the agent's options a `ModelId`), so there is something to reserve and price by.
