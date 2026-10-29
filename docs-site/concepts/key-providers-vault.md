@@ -21,9 +21,10 @@ When the provider first uses the key it reads `transit/keys/kairos` and **refuse
 
 ## A least-privilege policy
 
-The application needs to read the key's settings (once, to check it is derived) and to encrypt and decrypt with it. It does not need to create, rotate, export or delete anything.
+The application needs to read the key's settings (once, to check it is derived), to encrypt and decrypt with it, and to look up its own token (to check that it is not a root token). It does not need to create, rotate, export or delete anything.
 
 ```hcl
+path "auth/token/lookup-self" { capabilities = ["read"] }
 path "transit/keys/kairos"    { capabilities = ["read"] }
 path "transit/encrypt/kairos" { capabilities = ["update"] }
 path "transit/decrypt/kairos" { capabilities = ["update"] }
@@ -33,7 +34,10 @@ path "transit/decrypt/kairos" { capabilities = ["update"] }
 vault policy write kairos-worker kairos-policy.hcl
 ```
 
-Give the application a token, or a role, that carries only this policy. **Never use the root token.** The provider cannot tell a root token from another one, so this is a rule for you to keep.
+Give the application a token, or a role, that carries only this policy. **The root token is refused.** The first time the provider uses a token (and again whenever the token changes, for example when a Vault Agent renews it), it calls `auth/token/lookup-self`.
+A token that carries the `root` policy is not used: the provider throws an `InvalidOperationException` that does not repeat the token. A token that is not allowed to look itself up is refused too, with an error that names
+the permission, because a token that cannot be checked is not trusted. The `default` policy that Vault gives tokens already allows `lookup-self` (verified on Vault 1.18 and OpenBao 2.7), so you only need the first line above
+when you create tokens without the default policy.
 
 ## Use it
 

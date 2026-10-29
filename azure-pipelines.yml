@@ -23,6 +23,9 @@ variables:
   NUGET_PACKAGES: $(Pipeline.Workspace)/.nuget/packages
   KAIROS_SIM_SEEDS: '1000'          # deterministic simulation seeds per commit
   BuildConfiguration: Release
+  # Images for the Vault and OpenBao Transit key-provider tests (category Integration, run by the test step below). Pinned here as in the tests' defaults.
+  KAIROS_VAULT_IMAGE: 'hashicorp/vault:1.18'
+  KAIROS_OPENBAO_IMAGE: 'openbao/openbao:2.7.2'
 
 stages:
 - stage: Test
@@ -69,6 +72,12 @@ stages:
 
       - script: dotnet build Kairos.sln -c $(BuildConfiguration) --no-restore -p:KairosTargetFramework=${{ t.tfm }}
         displayName: Build (warnings are errors)
+
+      # Pulled up front so that the tests do not time out on a slow pull. A failed pull fails the tests that need the image, not this step.
+      - script: |
+          docker pull "$KAIROS_VAULT_IMAGE" || true
+          docker pull "$KAIROS_OPENBAO_IMAGE" || true
+        displayName: Pull the Vault and OpenBao images for the key-provider tests
 
       - script: >
           dotnet test Kairos.sln -c $(BuildConfiguration) --no-build -p:KairosTargetFramework=${{ t.tfm }}
