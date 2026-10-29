@@ -5,6 +5,8 @@ no vendor control plane), with an optional standalone multi-tenant server. See `
 Workflows are plain C# async methods; every step is checkpointed to an event history in Postgres,
 and runs survive crashes and redeploys by deterministic replay. Product of Kronos Automation LLC.
 
+**Current priority (28 Oct 2026): embedded mode v1** (the library inside a customer's application, with no server). The plan is in the private repository (`../Kairos.Commercial/docs/EMBEDDED-V1.md`); read it before starting work.
+
 **Read `docs/SECURITY-ARCHITECTURE.md` before any design or code change. It is binding.** Every claim in it has a status (Built and tested / Built, untested / Planned); change the status in the same commit as the code or test that changes it.
 **Embedded mode is first-class:** `services.AddKairos(o => o.UsePostgres(...))` with in-process workers must always work;
 the standalone server is the same engine with a host around it. No AWS/Azure dependency in core projects.
