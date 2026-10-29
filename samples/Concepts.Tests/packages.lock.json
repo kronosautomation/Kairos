@@ -219,6 +219,7 @@
       "concepts": {
         "type": "Project",
         "dependencies": {
+          "Kairos.Cloud.SelfHosted": "[1.0.0, )",
           "Kairos.Hosting": "[1.0.0, )",
           "Kairos.Persistence.Postgres": "[1.0.0, )",
           "Kairos.Worker": "[1.0.0, )",
@@ -234,6 +235,12 @@
         "dependencies": {
           "Kairos.Core": "[1.0.0, )",
           "Microsoft.Extensions.AI.Abstractions": "[10.11.0, )"
+        }
+      },
+      "kairos.cloud.selfhosted": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )"
         }
       },
       "kairos.core": {

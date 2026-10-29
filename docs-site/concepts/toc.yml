@@ -26,6 +26,8 @@
   href: approvals.md
 - name: Payload encryption and its limits
   href: payload-encryption.md
+- name: Keys in Vault or OpenBao
+  href: key-providers-vault.md
 - name: Verifying audit evidence
   href: audit-evidence.md
 - name: Sagas and compensation
