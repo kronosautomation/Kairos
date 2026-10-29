@@ -184,6 +184,18 @@ public static class PostgresProvisioning
         return new DatabaseRoleInspection(reader.GetString(0), reader.GetBoolean(1), reader.GetBoolean(2), reader.GetInt64(3));
     }
 
+    /// <summary>
+    /// True when the connection signs in as <see cref="MigratorRole"/> itself: both <c>session_user</c> and <c>current_user</c> are that login. Membership is not enough: a superuser is a member of
+    /// every role, and an administrator's credential must not pass for the migrator's. Tools that may only be run as the migrator (<c>kairos db migrate</c>, a direct history or audit export) ask this.
+    /// </summary>
+    public static async Task<bool> IsMigratorLoginAsync(NpgsqlDataSource dataSource, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        await using NpgsqlCommand cmd = dataSource.CreateCommand("SELECT session_user = $1 AND current_user = $1");
+        cmd.Parameters.AddWithValue(MigratorRole);
+        return await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+    }
+
     private static async Task<string> CurrentDatabaseAsync(NpgsqlDataSource ds, CancellationToken ct)
     {
         await using NpgsqlCommand cmd = ds.CreateCommand("SELECT current_database()");

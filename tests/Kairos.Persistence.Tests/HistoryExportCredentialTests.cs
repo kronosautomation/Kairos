@@ -60,6 +60,22 @@ public sealed class HistoryExportCredentialTests(PostgresFixture fixture) : IDis
     }
 
     [Fact]
+    public async Task An_administrator_credential_is_refused_although_it_is_a_member_of_every_role()
+    {
+        await using TestDatabase database = await fixture.NewDatabaseAsync();
+        var client = new KairosClient(database.NewStore(), TimeProvider.System);
+        StartRunResult started = await client.StartAsync(A, "export-credential", "t", [1]);
+
+        // The container's administrator is a superuser: pg_has_role says it is a member of kairos_migrator. The export must still refuse it.
+        (int exit, _, string refusal, string file) = await ExportAsync(fixture.ConnectionString(database.Name, null, null), started.RunId);
+
+        Assert.Equal(ExitCode.Usage, exit);
+        Assert.Contains("kairos_migrator", refusal, StringComparison.Ordinal);
+        Assert.False(File.Exists(file));
+        Assert.DoesNotContain(await database.NewStore().GetAuditLogAsync(A, default), e => e.Action == "ExportHistory");
+    }
+
+    [Fact]
     public async Task A_read_only_credential_is_refused_too()
     {
         await using TestDatabase database = await fixture.NewDatabaseAsync();

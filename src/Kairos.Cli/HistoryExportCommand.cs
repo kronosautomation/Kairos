@@ -247,10 +247,7 @@ internal static class HistoryExportCommand
     {
         try
         {
-            await using NpgsqlConnection conn = await source.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            await using var cmd = new NpgsqlCommand("SELECT pg_has_role(current_user, @role, 'MEMBER')", conn);
-            cmd.Parameters.AddWithValue("role", RequiredRole);
-            return await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+            return await PostgresProvisioning.IsMigratorLoginAsync(source, cancellationToken).ConfigureAwait(false); // the login itself: an administrator is a member of every role and is refused
         }
         catch (NpgsqlException)
         {

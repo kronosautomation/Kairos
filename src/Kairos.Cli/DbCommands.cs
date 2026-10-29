@@ -139,7 +139,7 @@ internal static class DbCommands
         try
         {
             await using NpgsqlDataSource source = new NpgsqlDataSourceBuilder(connection).ApplyDefault(connection).Build();
-            if (!await IsMigratorAsync(source, cancellationToken).ConfigureAwait(false))
+            if (!await PostgresProvisioning.IsMigratorLoginAsync(source, cancellationToken).ConfigureAwait(false))
             {
                 await stderr.WriteLineAsync(
                     $"Refused: migrations are applied as {PostgresProvisioning.MigratorRole}, not with the application's or an administrator's credential. Create it with `kairos db provision`.").ConfigureAwait(false);
@@ -162,13 +162,5 @@ internal static class DbCommands
             await stderr.WriteLineAsync($"Migration failed and was rolled back ({ex.GetType().Name}: {ex.Message}).").ConfigureAwait(false);
             return ExitCode.Failed;
         }
-    }
-
-    private static async Task<bool> IsMigratorAsync(NpgsqlDataSource source, CancellationToken cancellationToken)
-    {
-        await using NpgsqlConnection conn = await source.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var cmd = new NpgsqlCommand("SELECT current_user = $1", conn);
-        cmd.Parameters.AddWithValue(PostgresProvisioning.MigratorRole);
-        return await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
     }
 }
