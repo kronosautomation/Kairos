@@ -15,6 +15,7 @@ public abstract class TransitServerFixture : IAsyncLifetime
     public const string KeyName = "kairos";
     public const string PlainKeyName = "plain";
     private static readonly string[] KairosPolicy = ["kairos"];
+    private static readonly string[] NoLookup = ["kairos-nolookup"];
     private const string RootToken = "kairos-test-dev-root";
     private IContainer? _container;
     private string? _directory;
@@ -48,16 +49,42 @@ public abstract class TransitServerFixture : IAsyncLifetime
         await Ok(http.PostAsJsonAsync($"v1/transit/keys/{KeyName}", new { derived = true }));
         await Ok(http.PostAsJsonAsync($"v1/transit/keys/{PlainKeyName}", new { derived = false }));
         await Ok(http.PutAsJsonAsync("v1/sys/policies/acl/kairos", new { policy = Policy }));
-        HttpResponseMessage created = await http.PostAsJsonAsync("v1/auth/token/create", new { policies = KairosPolicy, ttl = "1h", no_default_policy = true });
-        created.EnsureSuccessStatusCode();
-        using JsonDocument doc = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
-        string token = doc.RootElement.GetProperty("auth").GetProperty("client_token").GetString()!;
+        await Ok(http.PutAsJsonAsync("v1/sys/policies/acl/kairos-nolookup", new { policy = PolicyWithoutLookup }));
 
         _directory = Path.Combine(Path.GetTempPath(), "kairos-vault-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_directory);
-        TokenFile = Path.Combine(_directory, "token");
-        await File.WriteAllTextAsync(TokenFile, token);
+        // The documented policy, with the default policy left out: what the documentation recommends must work on its own.
+        TokenFile = await WriteTokenAsync(http, "token", await CreateTokenAsync(http, KairosPolicy, noDefault: true));
+        RootTokenFile = await WriteTokenAsync(http, "root", RootToken);
+        // No lookup-self permission at all: refused.
+        NoLookupTokenFile = await WriteTokenAsync(http, "nolookup", await CreateTokenAsync(http, NoLookup, noDefault: true));
+        // The same policy plus the default policy, which carries lookup-self: works. This is the claim made in the documentation.
+        DefaultPolicyTokenFile = await WriteTokenAsync(http, "default", await CreateTokenAsync(http, NoLookup, noDefault: false));
     }
+
+    public string RootTokenFile { get; private set; } = null!;
+
+    public string NoLookupTokenFile { get; private set; } = null!;
+
+    public string DefaultPolicyTokenFile { get; private set; } = null!;
+
+    private async Task<string> WriteTokenAsync(HttpClient http, string name, string token)
+    {
+        string path = Path.Combine(_directory!, name);
+        await File.WriteAllTextAsync(path, token);
+        return path;
+    }
+
+    private static async Task<string> CreateTokenAsync(HttpClient http, string[] policies, bool noDefault)
+    {
+        HttpResponseMessage created = await http.PostAsJsonAsync("v1/auth/token/create", new { policies, ttl = "1h", no_default_policy = noDefault });
+        created.EnsureSuccessStatusCode();
+        using JsonDocument doc = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        return doc.RootElement.GetProperty("auth").GetProperty("client_token").GetString()!;
+    }
+
+    public VaultTransitKeyProvider ProviderWithToken(string tokenFile) =>
+        new(new VaultTransitOptions { Address = Address, KeyName = KeyName }.UseTokenFile(tokenFile));
 
     public async Task DisposeAsync()
     {
@@ -95,7 +122,14 @@ public abstract class TransitServerFixture : IAsyncLifetime
     }
 
     // The same least-privilege policy as the documentation (plus the plain key, used to prove it is refused).
+    private const string PolicyWithoutLookup = """
+        path "transit/keys/kairos"    { capabilities = ["read"] }
+        path "transit/encrypt/kairos" { capabilities = ["update"] }
+        path "transit/decrypt/kairos" { capabilities = ["update"] }
+        """;
+
     private const string Policy = """
+        path "auth/token/lookup-self" { capabilities = ["read"] }
         path "transit/keys/kairos"    { capabilities = ["read"] }
         path "transit/keys/plain"     { capabilities = ["read"] }
         path "transit/encrypt/kairos" { capabilities = ["update"] }

@@ -90,6 +90,49 @@ public abstract class TransitServerTests<TFixture>(TFixture server) : KeyProvide
     }
 
     [Fact]
+    public async Task The_root_token_is_refused_without_ever_touching_the_key_and_the_error_does_not_show_it()
+    {
+        using VaultTransitKeyProvider provider = server.ProviderWithToken(server.RootTokenFile);
+        string root = await File.ReadAllTextAsync(server.RootTokenFile);
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await provider.WrapAsync(new byte[32], "ctx"u8.ToArray(), CancellationToken.None));
+
+        Assert.Contains("root", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(root, ex.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_token_with_the_documented_policy_alone_works_because_lookup_self_is_in_that_policy()
+    {
+        using VaultTransitKeyProvider provider = server.Provider();
+        byte[] dataKey = RandomNumberGenerator.GetBytes(32);
+        WrappedKey wrapped = await provider.WrapAsync(dataKey, "ctx"u8.ToArray(), CancellationToken.None);
+        Assert.Equal(dataKey, await provider.UnwrapAsync(wrapped, "ctx"u8.ToArray(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_token_that_may_not_look_itself_up_is_refused_naming_the_permission()
+    {
+        using VaultTransitKeyProvider provider = server.ProviderWithToken(server.NoLookupTokenFile);
+
+        VaultTransitException ex = await Assert.ThrowsAsync<VaultTransitException>(async () =>
+            await provider.WrapAsync(new byte[32], "ctx"u8.ToArray(), CancellationToken.None));
+        Assert.Contains("auth/token/lookup-self", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_default_policy_grants_lookup_self_so_a_token_that_keeps_it_needs_no_extra_rule()
+    {
+        using VaultTransitKeyProvider provider = server.ProviderWithToken(server.DefaultPolicyTokenFile);
+        byte[] dataKey = RandomNumberGenerator.GetBytes(32);
+
+        WrappedKey wrapped = await provider.WrapAsync(dataKey, "ctx"u8.ToArray(), CancellationToken.None);
+
+        Assert.Equal(dataKey, await provider.UnwrapAsync(wrapped, "ctx"u8.ToArray(), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task A_token_without_a_policy_for_the_key_is_refused_as_an_authentication_failure_that_does_not_show_the_token()
     {
         string tokenFile = Path.Combine(Path.GetTempPath(), "kairos-bad-token-" + Guid.NewGuid().ToString("N"));

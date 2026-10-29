@@ -63,7 +63,9 @@ public sealed partial class VaultTransitKeyProvider : IKeyProvider, IDisposable
     private readonly string _namespace;
     private readonly TokenSource _tokens;
     private readonly SemaphoreSlim _checkGate = new(1, 1);
+    private readonly SemaphoreSlim _tokenGate = new(1, 1);
     private volatile bool _keyChecked;
+    private volatile string? _checkedToken;
 
     /// <summary>Creates the provider. Pass <paramref name="httpClient"/> only to supply your own handler (proxy, client certificate); it must not follow redirects.</summary>
     public VaultTransitKeyProvider(VaultTransitOptions options, HttpClient? httpClient = null, TimeProvider? timeProvider = null)
@@ -178,6 +180,7 @@ public sealed partial class VaultTransitKeyProvider : IKeyProvider, IDisposable
     public void Dispose()
     {
         _checkGate.Dispose();
+        _tokenGate.Dispose();
         _tokens.Dispose();
         if (_ownsHttp)
         {
@@ -235,15 +238,80 @@ public sealed partial class VaultTransitKeyProvider : IKeyProvider, IDisposable
     private async Task<(int Status, byte[] Body)> SendAuthorizedAsync(HttpMethod method, string path, byte[]? body, CancellationToken cancellationToken)
     {
         string token = await _tokens.GetAsync(forceRefresh: false, cancellationToken).ConfigureAwait(false);
-        (int status, byte[] response) = await SendAsync(method, path, body, token, cancellationToken).ConfigureAwait(false);
+        int status = 403;
+        byte[] response = [];
+        try
+        {
+            await EnsureTokenAllowedAsync(token, cancellationToken).ConfigureAwait(false);
+            (status, response) = await SendAsync(method, path, body, token, cancellationToken).ConfigureAwait(false);
+        }
+        catch (VaultTransitException ex) when (ex.Failure == VaultFailure.Authentication)
+        {
+            // Treated like a 403: read the token again below; if it is still refused, that error is thrown.
+        }
+
         if (status is 401 or 403)
         {
             // The agent may have renewed or replaced the token: read it again once.
             token = await _tokens.GetAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
+            await EnsureTokenAllowedAsync(token, cancellationToken).ConfigureAwait(false);
             (status, response) = await SendAsync(method, path, body, token, cancellationToken).ConfigureAwait(false);
         }
 
         return (status, response);
+    }
+
+    /// <summary>
+    /// Asks Vault who the token is (<c>auth/token/lookup-self</c>) the first time this token is seen, and refuses a token with the <c>root</c> policy.
+    /// A token that cannot look itself up is refused too: a token that cannot be checked is not trusted. A renewed token is a new value and is checked again.
+    /// </summary>
+    private async ValueTask EnsureTokenAllowedAsync(string token, CancellationToken cancellationToken)
+    {
+        if (string.Equals(_checkedToken, token, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await _tokenGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (string.Equals(_checkedToken, token, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            (int status, byte[] response) = await SendAsync(HttpMethod.Get, "v1/auth/token/lookup-self", null, token, cancellationToken).ConfigureAwait(false);
+            if (status is 401 or 403)
+            {
+                throw new VaultTransitException(
+                    VaultFailure.Authentication,
+                    status,
+                    "Vault refused the token's request to look itself up (auth/token/lookup-self), so it cannot be checked for the root policy and is not used. " +
+                    "Either the token is not valid, or its policies lack: path \"auth/token/lookup-self\" { capabilities = [\"read\"] } (the default policy has it).");
+            }
+
+            if (status != 200)
+            {
+                throw Failure(status, "token check");
+            }
+
+            TokenLookup? data = Parse(response, VaultJson.Default.TokenLookupResponse)?.Data;
+            if (data?.Policies is not { } policies)
+            {
+                throw new VaultTransitException(VaultFailure.Rejected, status, "Vault Transit returned token information in a form that was not expected.");
+            }
+
+            if (policies.Contains("root", StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException("The Vault token has the root policy. Use a token that carries only the policy for this key (see the key provider documentation).");
+            }
+
+            _checkedToken = token;
+        }
+        finally
+        {
+            _tokenGate.Release();
+        }
     }
 
     internal async Task<(int Status, byte[] Body)> SendAsync(HttpMethod method, string path, byte[]? body, string? token, CancellationToken cancellationToken)
@@ -549,6 +617,10 @@ public sealed partial class VaultTransitKeyProvider : IKeyProvider, IDisposable
         [property: JsonPropertyName("derived")] bool? Derived,
         [property: JsonPropertyName("supports_encryption")] bool? SupportsEncryption);
 
+    internal sealed record TokenLookup([property: JsonPropertyName("policies")] string[]? Policies);
+
+    internal sealed record TokenLookupResponse([property: JsonPropertyName("data")] TokenLookup? Data);
+
     internal sealed record KeyInfoResponse([property: JsonPropertyName("data")] KeyInfo? Data);
 
     internal sealed record KubernetesLogin([property: JsonPropertyName("role")] string Role, [property: JsonPropertyName("jwt")] string Jwt);
@@ -567,6 +639,7 @@ public sealed partial class VaultTransitKeyProvider : IKeyProvider, IDisposable
     [JsonSerializable(typeof(EncryptResponse))]
     [JsonSerializable(typeof(DecryptResponse))]
     [JsonSerializable(typeof(KeyInfoResponse))]
+    [JsonSerializable(typeof(TokenLookupResponse))]
     [JsonSerializable(typeof(KubernetesLogin))]
     [JsonSerializable(typeof(AppRoleLogin))]
     [JsonSerializable(typeof(LoginResponse))]

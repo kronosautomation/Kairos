@@ -29,6 +29,8 @@ public sealed class VaultTransitContractTests : IDisposable
     {
         public List<(HttpMethod Method, string Path, string? Token, string? Namespace, string Body)> Requests { get; } = [];
 
+        public string Policies { get; set; } = "\"default\",\"kairos\"";
+
         public bool Derived { get; set; } = true;
 
         public bool SupportsEncryption { get; set; } = true;
@@ -47,6 +49,11 @@ public sealed class VaultTransitContractTests : IDisposable
             if (Override?.Invoke((path, token)) is { } custom)
             {
                 return custom;
+            }
+
+            if (path == "/v1/auth/token/lookup-self")
+            {
+                return Json(200, $$$"""{"data":{"policies":[{{{Policies}}}]}}""");
             }
 
             if (request.Method == HttpMethod.Get && path.StartsWith("/v1/transit/keys/", StringComparison.Ordinal))
@@ -164,7 +171,8 @@ public sealed class VaultTransitContractTests : IDisposable
             await WrapAsync(provider);
         }
 
-        Assert.Equal(1, fake.Requests.Count(r => r.Method == HttpMethod.Get));
+        Assert.Equal(1, fake.Requests.Count(r => r.Path.Contains("/keys/", StringComparison.Ordinal)));
+        Assert.Equal(1, fake.Requests.Count(r => r.Path.EndsWith("lookup-self", StringComparison.Ordinal))); // the token is checked once, not per call
     }
 
     // ----- key id pinning -----
@@ -471,9 +479,10 @@ public sealed class VaultTransitContractTests : IDisposable
 
         await WrapAsync(provider);
 
-        Assert.Equal(2, fake.Requests.Count);
-        Assert.Equal(Token, fake.Requests[0].Token);
-        Assert.Equal("fake-token-CCCC3333-after-renewal", fake.Requests[1].Token);
+        var sent = fake.Requests.Where(r => !r.Path.EndsWith("lookup-self", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, sent.Count);
+        Assert.Equal(Token, sent[0].Token);
+        Assert.Equal("fake-token-CCCC3333-after-renewal", sent[1].Token);
     }
 
     [Fact]
@@ -549,6 +558,71 @@ public sealed class VaultTransitContractTests : IDisposable
         using JsonDocument body = JsonDocument.Parse(fake.Requests.Single().Body);
         Assert.Equal("role-id-1", body.RootElement.GetProperty("role_id").GetString());
         Assert.Equal("fake-secret-id", body.RootElement.GetProperty("secret_id").GetString());
+    }
+
+    // ----- the root token is refused -----
+
+    [Theory]
+    [InlineData("\"root\"")]
+    [InlineData("\"default\",\"root\"")]
+    [InlineData("\"kairos\",\"root\",\"other\"")]
+    public async Task A_token_with_the_root_policy_is_refused_before_it_is_used_for_anything_and_never_shown(string policies)
+    {
+        var fake = new FakeVault { Policies = policies };
+        using VaultTransitKeyProvider provider = Provider(fake);
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(async () => await WrapAsync(provider));
+
+        Assert.Contains("root", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Token, ex.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(fake.Requests, r => r.Path.Contains("/transit/", StringComparison.Ordinal));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await provider.UnwrapAsync(new WrappedKey("transit/kairos#1", "vault:v1:AAAA"u8.ToArray()), Context, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\"default\"")]
+    [InlineData("\"kairos\",\"rootless\"")]
+    public async Task A_token_with_only_scoped_policies_is_accepted(string policies)
+    {
+        var fake = new FakeVault { Policies = policies };
+        using VaultTransitKeyProvider provider = Provider(fake);
+
+        await WrapAsync(provider);
+    }
+
+    [Theory]
+    [InlineData(403)]
+    [InlineData(401)]
+    public async Task A_token_that_cannot_look_itself_up_is_refused_and_the_error_names_the_permission(int status)
+    {
+        var fake = new FakeVault { Override = r => r.Path.EndsWith("lookup-self", StringComparison.Ordinal) ? Json(status, $$$"""{"errors":["{{{r.Token}}}"]}""") : null };
+        using VaultTransitKeyProvider provider = Provider(fake);
+
+        VaultTransitException ex = await Assert.ThrowsAsync<VaultTransitException>(async () => await WrapAsync(provider));
+
+        Assert.Equal(VaultFailure.Authentication, ex.Failure);
+        Assert.Contains("auth/token/lookup-self", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Token, ex.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(fake.Requests, r => r.Path.Contains("/transit/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_renewed_token_is_checked_again_and_a_renewal_that_turns_out_to_be_root_is_refused()
+    {
+        var time = new ManualTime();
+        var fake = new FakeVault();
+        using VaultTransitKeyProvider provider = Provider(fake, time: time);
+        await WrapAsync(provider);
+
+        await File.WriteAllTextAsync(_tokenFile, "fake-token-ROOT9999-renewed");
+        File.SetLastWriteTimeUtc(_tokenFile, DateTime.UtcNow.AddMinutes(5));
+        time.Advance(TimeSpan.FromSeconds(2));
+        fake.Override = r => r.Path.EndsWith("lookup-self", StringComparison.Ordinal) && r.Token == "fake-token-ROOT9999-renewed" ? Json(200, """{"data":{"policies":["root"]}}""") : null;
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(async () => await WrapAsync(provider));
+        Assert.DoesNotContain("ROOT9999", ex.ToString(), StringComparison.Ordinal);
     }
 
     private sealed class Throwing(Exception exception) : HttpMessageHandler
