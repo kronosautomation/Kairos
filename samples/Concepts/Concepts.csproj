@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\src\Kairos.Hosting\Kairos.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Worker\Kairos.Worker.csproj" />
     <ProjectReference Include="..\..\src\Kairos.Cloud.SelfHosted\Kairos.Cloud.SelfHosted.csproj" />
