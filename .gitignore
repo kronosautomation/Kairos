@@ -492,3 +492,4 @@ docs-site/api/.manifest
 
 # The release scripts live in build/release (the Visual Studio template above ignores any folder called Release)
 !/build/release/
+.claude/worktrees/
