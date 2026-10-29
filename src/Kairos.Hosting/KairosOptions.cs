@@ -92,6 +92,20 @@ public sealed class KairosOptions
         return this;
     }
 
+    /// <summary>True once <see cref="AllowPrivilegedDatabaseRole"/> has been called.</summary>
+    public bool PrivilegedDatabaseRoleAllowed { get; private set; }
+
+    /// <summary>
+    /// The application's PostgreSQL login must be the <c>kairos_dataplane</c> kind: not a superuser, not able to bypass row level security, and not the owner of any Kairos table. <c>AddKairos</c> checks this when
+    /// the host starts and refuses to start otherwise, because such a login turns row level security off without any error. This call, made in code, accepts a privileged login anyway (a throwaway development
+    /// database, a test that needs to inspect tables). The choice is logged as a warning at every start and is available to the dashboard through <see cref="KairosDatabaseRole"/>.
+    /// </summary>
+    public KairosOptions AllowPrivilegedDatabaseRole()
+    {
+        PrivilegedDatabaseRoleAllowed = true;
+        return this;
+    }
+
     /// <summary>True once <see cref="AllowTls12ToDatabase"/> has been called.</summary>
     public bool Tls12ToDatabaseAllowed { get; private set; }
 

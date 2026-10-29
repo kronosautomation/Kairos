@@ -32,6 +32,11 @@ $rules = @(
     @{ Name = 'password with a long literal value'; Pattern = '(?i)(password|pwd)["'']?\s*[=:]\s*["''][A-Za-z0-9+/_\-]{24,}["'']' }
 )
 
+# This file holds the patterns above, and a pattern is shaped like what it looks for. Only its rule-definition lines (those that begin with an at-brace and `Name =`) are skipped, by name, here and nowhere
+# else; every other line of this file is scanned like any other, so a secret pasted into the script still fails the build. The self-test fixtures below are assembled from pieces for the same reason.
+$selfPath = 'build/check-secrets.ps1'
+$ruleDefinition = '^\s*@\{ Name = '
+
 $binary = '\.(png|jpg|jpeg|gif|ico|woff2?|ttf|otf|zip|nupkg|dll|exe|pdf|snk|pfx|jar)$'
 
 function Get-Findings {
@@ -45,6 +50,7 @@ function Get-Findings {
         $lineNumber = 0
         foreach ($line in [IO.File]::ReadLines($path)) {
             $lineNumber++
+            if ($relative -eq $selfPath -and $line -match $ruleDefinition) { continue }
             foreach ($rule in $rules) {
                 if ([regex]::IsMatch($line, $rule.Pattern)) {
                     $found.Add([pscustomobject]@{ File = $relative; Line = $lineNumber; Rule = $rule.Name })
@@ -69,15 +75,22 @@ if ($SelfTest) {
         $dash = '-' * 5
         $bad = @{
             'a.txt' = "${dash}BEGIN EC PRIVATE KEY${dash}"
-            'b.txt' = 'key = AKIAABCDEFGHIJKLMNOP'
+            'b.txt' = 'key = AKIA' + ('A' * 16)
             'c.txt' = 'DefaultEndpointsProtocol=https;AccountKey=' + ('A' * 44) + '=='
             'd.txt' = 'https://x.blob.core.windows.net/c?sv=2024&sig=' + ('a' * 40)
             'e.txt' = 'token: ghp_' + ('a' * 36)
-            'f.txt' = 'Authorization: eyJhbGciOiJFUzI1NiJ9AAAAAAAA.eyJzdWIiOiJ4eHh4eHh4eHh4.AAAAAAAAAAAAAAAAAAAA'
-            'g.json' = '{ "client_secret": "abcdefghijklmnop" }'
+            'f.txt' = 'Authorization: ey' + ('J' * 20) + '.ey' + ('J' * 20) + '.' + ('A' * 20)
+            'g.json' = '{ "client_' + 'secret": "' + ('a' * 16) + '" }'
             'h.cs' = 'var p = "Server=db;Password=' + ('Z' * 30) + '";'.Replace('"', '')
         }
         $bad['h.cs'] = 'const string P = "Password=' + ('Z' * 30) + '"; var q = new { Password = "' + ('Z' * 30) + '" };'
+        # The script's own rule lines are skipped and nothing else in it is: a rule-shaped line passes, a secret on any other line of the same path fails.
+        New-Item -ItemType Directory -Path "$temp/build" -Force | Out-Null
+        Set-Content "$temp/build/check-secrets.ps1" ('    @{ Name = ''x''; Pattern = ''' + "${dash}BEGIN PRIVATE KEY${dash}" + ''' },')
+        & git -C $temp add -A
+        $own = Get-Findings -BaseDir $temp
+        if ($own.Count -ne 0) { Write-Error "Self-test: the script's own rule definition was flagged: $($own | Format-Table | Out-String)"; exit 1 }
+        $bad['build/check-secrets.ps1'] = '$token = ''ghp_' + ('a' * 36) + ''''
         foreach ($entry in $bad.GetEnumerator()) { Set-Content (Join-Path $temp $entry.Key) $entry.Value }
         & git -C $temp add -A
         $dirty = Get-Findings -BaseDir $temp

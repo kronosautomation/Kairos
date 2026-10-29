@@ -162,6 +162,28 @@ public static class PostgresProvisioning
         return applied;
     }
 
+    /// <summary>
+    /// What the connection's own login can do: whether it is a superuser, bypasses row level security, or owns tables in the <c>kairos</c> schema. Any of the three turns row level security off for
+    /// the application without an error, so <c>AddKairos</c> refuses such a login unless the code says <c>AllowPrivilegedDatabaseRole()</c>.
+    /// </summary>
+    public static async Task<DatabaseRoleInspection> InspectRoleAsync(NpgsqlDataSource dataSource, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        await using NpgsqlCommand cmd = dataSource.CreateCommand(
+            """
+            SELECT current_user, r.rolsuper, r.rolbypassrls,
+                   (SELECT count(*) FROM pg_catalog.pg_tables t WHERE t.schemaname = 'kairos' AND t.tableowner = current_user)
+            FROM pg_catalog.pg_roles r WHERE r.rolname = current_user
+            """);
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("The database role could not be inspected.");
+        }
+
+        return new DatabaseRoleInspection(reader.GetString(0), reader.GetBoolean(1), reader.GetBoolean(2), reader.GetInt64(3));
+    }
+
     private static async Task<string> CurrentDatabaseAsync(NpgsqlDataSource ds, CancellationToken ct)
     {
         await using NpgsqlCommand cmd = ds.CreateCommand("SELECT current_database()");
@@ -169,4 +191,14 @@ public static class PostgresProvisioning
     }
 
     private static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+}
+
+/// <summary>The result of <see cref="PostgresProvisioning.InspectRoleAsync"/>.</summary>
+public sealed record DatabaseRoleInspection(string Role, bool Superuser, bool BypassesRowLevelSecurity, long OwnedTables)
+{
+    /// <summary>True when this login can read or change every tenant's rows regardless of row level security.</summary>
+    public bool Privileged => Superuser || BypassesRowLevelSecurity || OwnedTables > 0;
+
+    /// <summary>A sentence for logs and error messages.</summary>
+    public string Describe() => $"login {Role}: superuser={Superuser}, bypassrls={BypassesRowLevelSecurity}, owned tables={OwnedTables}";
 }

@@ -62,6 +62,9 @@ public static class KairosServiceCollectionExtensions
             services.AddSingleton<IHostedService, KairosMigrationService>();
         }
 
+        // After the migration (the tables exist) and before the workers: a privileged login stops the host before any work is claimed.
+        services.AddSingleton<KairosDatabaseRole>();
+        services.AddSingleton<IHostedService, KairosRoleCheckService>();
         services.AddSingleton<IHostedService, KairosWorkerService>();
         return services;
     }

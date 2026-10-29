@@ -52,3 +52,5 @@
   href: replay-locally.md
 - name: Verifying a release
   href: verify-releases.md
+- name: The database login
+  href: database-roles.md

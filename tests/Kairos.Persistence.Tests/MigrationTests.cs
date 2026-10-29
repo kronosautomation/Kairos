@@ -195,10 +195,10 @@ public sealed class MigrationTests(PostgresFixture fixture)
         string database = await fixture.NewEmptyDatabaseAsync();
         try
         {
-            // The application connecting as the administrator is a poor choice, but it is not the migrator login, and MigrateOnStart does not pretend to police it (see the review note).
+            // The application connecting as the administrator is a poor choice, but it is not the migrator login: MigrateOnStart accepts it, and only the privileged-role check (opted out of here) objects.
             string admin = fixture.ConnectionStringFor(database, null);
             string migrator = fixture.ConnectionStringFor(database, PostgresProvisioning.MigratorRole);
-            using IHost host = BuildHost(admin, migrator);
+            using IHost host = BuildHost(admin, migrator, o => o.AllowPrivilegedDatabaseRole());
             await host.StartAsync();
             await host.StopAsync();
         }

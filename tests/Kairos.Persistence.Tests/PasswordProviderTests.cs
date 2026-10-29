@@ -85,10 +85,9 @@ public sealed class PasswordProviderTests(PostgresFixture fixture)
         await using TestDatabase db = await fixture.NewDatabaseAsync();
         using IHost host = BuildHost(o => o.UsePostgres(db.DataPlaneConnectionStringWithoutPassword, builder => builder.UsePeriodicPasswordProvider(
             (_, _) => ValueTask.FromResult("not-the-password"), TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(1))));
-        await host.StartAsync();
 
-        var client = host.Services.GetRequiredService<KairosClient>();
-        await Assert.ThrowsAnyAsync<PostgresException>(async () => await client.StartAsync(KairosOptions.DefaultScope, "w-2", "hello", Hello));
+        // The start checks the login's privileges, so a wrong password stops the host before any work is claimed.
+        await Assert.ThrowsAnyAsync<PostgresException>(() => host.StartAsync());
         await Task.Delay(500);
         await using NpgsqlCommand cmd = db.Superuser.CreateCommand("SELECT count(*) FROM pg_stat_activity WHERE datname = @d AND usename = 'kairos_dataplane'");
         cmd.Parameters.AddWithValue("d", db.Name);
@@ -100,10 +99,8 @@ public sealed class PasswordProviderTests(PostgresFixture fixture)
     {
         await using TestDatabase db = await fixture.NewDatabaseAsync();
         using IHost host = BuildHost(o => o.UsePostgres(db.DataPlaneConnectionStringWithoutPassword));
-        await host.StartAsync();
 
-        var client = host.Services.GetRequiredService<KairosClient>();
-        await Assert.ThrowsAnyAsync<Exception>(async () => await client.StartAsync(KairosOptions.DefaultScope, "w-3", "hello", Hello));
+        await Assert.ThrowsAnyAsync<Exception>(() => host.StartAsync());
     }
 
     private sealed class FixedToken(string token, Action<DatabaseEndpoint>? seen = null) : IDatabaseTokenSource
