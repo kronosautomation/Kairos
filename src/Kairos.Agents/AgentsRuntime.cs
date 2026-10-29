@@ -51,6 +51,8 @@ public sealed class AgentsBuilder
 
     internal TimeProvider Time { get; private set; } = TimeProvider.System;
 
+    internal List<Action<IStartupReport>> StartupHooks { get; } = [];
+
     internal TimeSpan ModelTimeout { get; private set; } = TimeSpan.FromMinutes(2);
 
     internal TimeSpan CredentialLifetime { get; private set; } = TimeSpan.FromMinutes(5);
@@ -192,6 +194,17 @@ public sealed class AgentsBuilder
         return this;
     }
 
+    /// <summary>
+    /// Adds a start-up diagnostic: <paramref name="report"/> is called once when the workers that run these agents start, with a way to say things in the host's log. An adapter that wants to tell the operator
+    /// something about how it was configured uses this; nothing here is specific to what it says. A hook that throws is reported as a warning and does not stop the host.
+    /// </summary>
+    public AgentsBuilder OnStartup(Action<IStartupReport> report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        StartupHooks.Add(report);
+        return this;
+    }
+
     public AgentsBuilder UseTimeProvider(TimeProvider time)
     {
         ArgumentNullException.ThrowIfNull(time);
@@ -296,6 +309,25 @@ public sealed class AgentsRuntime : IWorkerPostureSource
         : _config.UnverifiedApproversAllowed
             ? ["Approver verification is OFF (AllowUnverifiedApprovers): an approval that names nobody is decided by whoever sends the decision, and an approval that names approvers or roles is refused."]
             : ["No approver verifier is configured, so every approval decision will be refused. Call UseApproverVerifier(...) to verify who decides, or AllowUnverifiedApprovers() to accept decisions unverified on purpose."];
+
+    /// <inheritdoc />
+#pragma warning disable CA1031 // A diagnostic must never stop the host; the failure is reported instead.
+    public void ReportStartup(IStartupReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        foreach (Action<IStartupReport> hook in _config.StartupHooks)
+        {
+            try
+            {
+                hook(report);
+            }
+            catch (Exception ex)
+            {
+                report.Warning($"A start-up diagnostic failed ({ex.GetType().Name}) and was skipped.");
+            }
+        }
+    }
+#pragma warning restore CA1031
 
     /// <summary>Register these on every worker that can run the workflows (<c>options.AddActivities(agents.Activities)</c> in embedded mode).</summary>
     public IReadOnlyDictionary<string, ActivityFunc> Activities => _activities;

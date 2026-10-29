@@ -30,4 +30,20 @@ public interface IWorkerPostureSource
 
     /// <summary>True when approval decisions are accepted without verifying who made them.</summary>
     bool ApproversUnverified { get; }
+
+    /// <summary>
+    /// Called once when the workers start, after <see cref="StartupWarnings"/> have been logged, so that a component can say more than a fixed list of sentences (its own diagnostics, for example). Whatever is said goes to the
+    /// host's log. The default says nothing.
+    /// </summary>
+    void ReportStartup(IStartupReport report) { }
+}
+
+/// <summary>Where a component says things at start-up: the host passes its own logger's output, so the component needs no logging package.</summary>
+public interface IStartupReport
+{
+    /// <summary>Something the person running this process may want to know. Logged as information.</summary>
+    void Information(string message);
+
+    /// <summary>Something the person running this process should fix or accept on purpose. Logged as a warning.</summary>
+    void Warning(string message);
 }

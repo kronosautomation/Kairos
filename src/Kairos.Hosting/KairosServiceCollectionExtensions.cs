@@ -86,6 +86,12 @@ internal sealed partial class KairosWorkerService(
             LogPosture(logger, warning);
         }
 
+        var report = new LoggerStartupReport(logger);
+        foreach (IWorkerPostureSource source in options.PostureSources)
+        {
+            source.ReportStartup(report);
+        }
+
         var loops = new Task[options.WorkerCount];
         for (int i = 0; i < loops.Length; i++)
         {
@@ -105,6 +111,17 @@ internal sealed partial class KairosWorkerService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Warning}")]
     private static partial void LogPosture(ILogger logger, string warning);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Message}")]
+    private static partial void LogReported(ILogger logger, string message);
+
+    /// <summary>The host's logger, as the <see cref="IStartupReport"/> that components say their start-up diagnostics to.</summary>
+    private sealed class LoggerStartupReport(ILogger logger) : IStartupReport
+    {
+        public void Information(string message) => LogReported(logger, message);
+
+        public void Warning(string message) => LogPosture(logger, message);
+    }
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Workflow task for run {RunId} failed replay and was released")]
     private static partial void LogReplayFault(ILogger logger, Exception error, Guid runId);

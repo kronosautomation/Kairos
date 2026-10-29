@@ -61,6 +61,11 @@ move to Community to help adoption, keeping only the console and governance feat
   count is reported, not enforced. It is a contract, not a lock.
 - The key is read from `KAIROS_LICENSE` (the key), `KAIROS_LICENSE_FILE` (a path) or code. The private signing key lives in Key Vault and in no
   repository; the issuing tool signs through the vault.
+- **Every paid entry point must call `KairosLicense.Check` as it starts**, and that includes the remote policies (`UseRemotePolicies`), the MCP server (`AddKairosMcp`), the A2A server (`MapKairosA2a`),
+  the server host and the dashboard hosts, before any of them ships. A test in the private repository names every paid entry point and fails if one has no check or if a paid project is on neither the
+  list of entry points nor the list of projects that have none of their own (with the reason). The cloud adapters other than the key providers are the one standing exception while that work is parked:
+  the test lists them by file, and a file that gains a check must move off the list.
+- An application that never calls the licensing service registration still gets the license line in its log: the policy entry point reports it through the agents builder's start-up diagnostics when the workers start.
 - The Community packages never check for a key.
 
 ## Not legal advice
