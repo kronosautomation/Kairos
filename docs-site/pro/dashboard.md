@@ -3,7 +3,7 @@
 The dashboard is a web application for the people who watch and steer Kairos runs: they see runs, decide approvals, and follow what agents cost. It talks to a
 [Kairos server](standalone-server.md) with the signed-in person's own session. Payloads are decrypted in the person's browser, with a key broker that you host,
 so the dashboard host and the server see ciphertext and metadata only. This page covers the screens, the sign-in, the key broker and what the dashboard
-cannot do. It is a commercial feature.
+cannot do. It is a commercial feature. To run it inside your own application instead of as a host of its own, see [the dashboard inside your application](dashboard-in-your-application.md).
 
 ## Screens
 

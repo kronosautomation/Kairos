@@ -6,6 +6,7 @@ These pages describe what the commercial features do, how to turn them on, and w
 |---|---|
 | [The standalone server](standalone-server.md) | The same engine as a multi-tenant service: sign-in, roles, isolation, limits, events and audit evidence. |
 | [The dashboard](dashboard.md) | Runs, approvals, agents and cost in a browser, with payloads decrypted in the browser through a key broker you host. |
+| [The dashboard inside your application](dashboard-in-your-application.md) | The same dashboard mounted in your own ASP.NET Core application, signed in with your own authentication and your own claims. |
 | [Policies, prices and budgets](policies-and-budgets.md) | Declarative rules for tool calls, recorded before the tool runs, and budgets reserved before a model is called. |
 | [Publishing agents as an MCP server](mcp-server.md) | Workflows as MCP tools, runs as tasks, approvals answered by the verified caller. |
 | [Publishing agents over A2A](a2a-server.md) | Workflows as A2A skills on a signed Agent Card. |

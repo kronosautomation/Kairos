@@ -4,6 +4,8 @@
   href: standalone-server.md
 - name: The dashboard
   href: dashboard.md
+- name: The dashboard inside your application
+  href: dashboard-in-your-application.md
 - name: Policies, prices and budgets
   href: policies-and-budgets.md
 - name: Publishing agents as an MCP server
