@@ -1,0 +1,14 @@
+- name: Running Kairos in production
+  href: index.md
+- name: Migrations
+  href: migrations.md
+- name: Several instances, one database
+  href: instances.md
+- name: Upgrading
+  href: upgrades.md
+- name: Backup and restore
+  href: backup-and-restore.md
+- name: Monitoring and alerts
+  href: monitoring.md
+- name: Hardening checklist
+  href: hardening.md
