@@ -54,8 +54,13 @@ move to Community to help adoption, keeping only the console and governance feat
   Origin sign-off (`git commit -s`). No CLA is needed because commercial packages are separate code, not relicensed core.
 
 ## License keys (commercial packages only)
-- Signed, offline-verifiable key: organization, tier, production-app count, expiry. No phone-home, so air-gapped sites
+- Signed (ES256), offline-verifiable key: organization, tier, production-app count, expiry. No phone-home, so air-gapped sites
   work the same way. Development, test and CI never need a key.
+- Warn only (decided 28 Oct 2026): a missing, expired, invalid or lower-tier key is logged when the feature starts and daily,
+  and never stops a feature or a running workflow. Production is declared by `KAIROS_ENVIRONMENT=Production` and nothing else. The production-app
+  count is reported, not enforced. It is a contract, not a lock.
+- The key is read from `KAIROS_LICENSE` (the key), `KAIROS_LICENSE_FILE` (a path) or code. The private signing key lives in Key Vault and in no
+  repository; the issuing tool signs through the vault.
 - The Community packages never check for a key.
 
 ## Not legal advice
