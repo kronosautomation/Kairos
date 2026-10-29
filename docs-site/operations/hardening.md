@@ -24,4 +24,4 @@ nobody turns one off by accident.
 ## What this does not cover
 
 Kairos in your application is only as separate from the rest of the application as you make it. An approval is signed by the code that authenticated the person, so the endpoint that decides approvals needs your authentication
-and authorization. The database role keeps tenants apart from each other, not from a compromised application that holds the key.
+and authorization (the [approvals page](approvals-page.md) shows one). The database role keeps tenants apart from each other, not from a compromised application that holds the key.

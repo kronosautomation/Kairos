@@ -11,3 +11,4 @@ to do, what Kairos does for you, and what it does not. Where a page quotes C#, t
 | [Backup and restore](backup-and-restore.md) | What to save, what restoring an older copy does to running work, and the test that proves it. |
 | [Monitoring and alerts](monitoring.md) | The metrics, logs and health check that exist, and the alerts built on them. |
 | [Hardening checklist](hardening.md) | The settings to check before the first production run. |
+| [A minimal approvals page](approvals-page.md) | A small ASP.NET Core page where signed-in people approve or reject, with verified identity. |
