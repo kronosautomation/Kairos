@@ -1,4 +1,5 @@
 using System.Text;
+using Kairos.Cloud.SelfHosted;
 using Kairos.Persistence.Postgres;
 using Kairos.Worker;
 using Microsoft.Extensions.DependencyInjection;
@@ -207,3 +208,34 @@ public static class KeyUseExamples
         new(keys, TimeProvider.System, new EnvelopeOptions { KeyUseObserver = new LoggingKeyUse(logger) });
 }
 #endregion
+
+/// <summary>Wrapping data keys with a Vault or OpenBao Transit key.</summary>
+public static class VaultTransitExamples
+{
+    #region vault-transit
+    // The token comes from a file that a Vault Agent keeps renewed; it is never written in code or configuration.
+    public static IKeyProvider Keys(string tokenFilePath) =>
+        new VaultTransitKeyProvider(
+            new VaultTransitOptions
+            {
+                Address = new Uri("https://vault.example.com:8200"),
+                Mount = "transit",
+                KeyName = "kairos",                // a derived key: see the commands on this page
+            }.UseTokenFile(tokenFilePath));
+
+    public static IServiceCollection AddKairosWithVault(IServiceCollection services, string connectionString, string tokenFilePath) =>
+        services.AddKairos(options => options.UsePostgres(connectionString).UsePayloadProtector(new EnvelopePayloadProtector(Keys(tokenFilePath))));
+    #endregion
+
+    #region vault-transit-kubernetes
+    // In Kubernetes the pod signs in with its service account; Vault answers with a short-lived token.
+    public static IKeyProvider KubernetesKeys() =>
+        new VaultTransitKeyProvider(
+            new VaultTransitOptions
+            {
+                Address = new Uri("https://vault.example.com:8200"),
+                KeyName = "kairos",
+                Namespace = "team-a",              // Vault Enterprise namespaces only
+            }.UseKubernetesAuth(role: "kairos-worker"));
+    #endregion
+}

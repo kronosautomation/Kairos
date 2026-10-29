@@ -384,18 +384,6 @@
         "resolved": "10.0.13",
         "contentHash": "DkNjtQyPR5Ud/zHnWHdsOuKbFRL9nIC92Q76z0NmHVDoQm40toLtsGFTIWq7toBoVa6fo/DInL3PLxY3Asixyw=="
       },
-      "Testcontainers": {
-        "type": "Transitive",
-        "resolved": "4.16.0",
-        "contentHash": "JmMUZk6ZXQovbGQjaMB+YxOR0PbJTdYjOYjRcrm5LrA2dhLVMuCbhVGGunzCGIQfFMUB5Lno2LPOHMMuaGmuIg==",
-        "dependencies": {
-          "Docker.DotNet.Enhanced": "4.3.3",
-          "Docker.DotNet.Enhanced.X509": "4.3.3",
-          "Microsoft.Extensions.Logging.Abstractions": "8.0.3",
-          "SSH.NET": "2026.0.0",
-          "SharpZipLib": "1.4.2"
-        }
-      },
       "xunit.abstractions": {
         "type": "Transitive",
         "resolved": "2.0.3",
@@ -548,6 +536,19 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0",
           "OpenTelemetry.Api": "1.20.1"
+        }
+      },
+      "Testcontainers": {
+        "type": "CentralTransitive",
+        "requested": "[4.16.0, )",
+        "resolved": "4.16.0",
+        "contentHash": "JmMUZk6ZXQovbGQjaMB+YxOR0PbJTdYjOYjRcrm5LrA2dhLVMuCbhVGGunzCGIQfFMUB5Lno2LPOHMMuaGmuIg==",
+        "dependencies": {
+          "Docker.DotNet.Enhanced": "4.3.3",
+          "Docker.DotNet.Enhanced.X509": "4.3.3",
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.3",
+          "SSH.NET": "2026.0.0",
+          "SharpZipLib": "1.4.2"
         }
       }
     }

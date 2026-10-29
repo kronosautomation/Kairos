@@ -153,6 +153,12 @@
       "kairos.abstractions": {
         "type": "Project"
       },
+      "kairos.cloud.selfhosted": {
+        "type": "Project",
+        "dependencies": {
+          "Kairos.Core": "[1.0.0, )"
+        }
+      },
       "kairos.core": {
         "type": "Project",
         "dependencies": {
