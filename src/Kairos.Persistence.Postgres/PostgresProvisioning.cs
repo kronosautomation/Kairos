@@ -56,29 +56,81 @@ public static class PostgresProvisioning
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Applies pending embedded migrations, in order, each in its own transaction. Run as <c>kairos_migrator</c>.</summary>
-    public static async Task MigrateAsync(NpgsqlDataSource migrator, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// The key of the advisory lock every migration run takes first. Instances that start together (a rolling deploy, several replicas with <c>MigrateOnStart</c>) queue on it,
+    /// and the later ones find nothing left to apply.
+    /// </summary>
+    public const long MigrationLockKey = 0x4B41495F4D494752; // "KAI_MIGR"
+
+    /// <summary>How long a migration run waits for another run to finish before it gives up, unless the caller says otherwise.</summary>
+    public static readonly TimeSpan DefaultMigrationLockTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Applies pending embedded migrations, in order, and returns the names it applied (empty when the schema was current). Run as <c>kairos_migrator</c>.
+    /// The whole run is one transaction that begins by taking a transaction-scoped advisory lock (<see cref="MigrationLockKey"/>): concurrent runs serialize, a run that fails
+    /// leaves the schema as it found it, and the lock goes with the transaction, so a crashed migrator or a connection pooler cannot leave it held.
+    /// </summary>
+    /// <param name="migrator">A data source for the migrator login.</param>
+    /// <param name="lockTimeout">How long to wait for the lock; <see cref="DefaultMigrationLockTimeout"/> when null. Waiting longer than this means another run is stuck, and that is reported instead of waited out.</param>
+    /// <param name="cancellationToken">Cancels the wait and the run.</param>
+    public static Task<IReadOnlyList<string>> MigrateAsync(NpgsqlDataSource migrator, TimeSpan? lockTimeout, CancellationToken cancellationToken = default) =>
+        RunMigrationsAsync(migrator, lockTimeout, cancellationToken);
+
+    /// <inheritdoc cref="MigrateAsync(NpgsqlDataSource, TimeSpan?, CancellationToken)"/>
+    public static Task<IReadOnlyList<string>> MigrateAsync(NpgsqlDataSource migrator, CancellationToken cancellationToken = default) =>
+        RunMigrationsAsync(migrator, null, cancellationToken);
+
+    private static async Task<IReadOnlyList<string>> RunMigrationsAsync(NpgsqlDataSource migrator, TimeSpan? lockTimeout, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(migrator);
+        TimeSpan timeout = lockTimeout ?? DefaultMigrationLockTimeout;
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
         Assembly assembly = typeof(PostgresProvisioning).Assembly;
         string[] names = [.. assembly.GetManifestResourceNames().Where(n => n.EndsWith(".sql", StringComparison.Ordinal)).Order(StringComparer.Ordinal)];
 
-        await using (NpgsqlCommand schema = migrator.CreateCommand("CREATE SCHEMA IF NOT EXISTS kairos"))
+        await using NpgsqlConnection conn = await migrator.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction tx = await conn.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            // SET LOCAL takes no bind parameters; the value is a number we format ourselves.
+            await using (var wait = new NpgsqlCommand(
+                FormattableString.Invariant($"SET LOCAL lock_timeout = {(long)Math.Ceiling(timeout.TotalMilliseconds)}"), conn, tx))
+            {
+                await wait.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await using (var take = new NpgsqlCommand("SELECT pg_advisory_xact_lock($1)", conn, tx))
+            {
+                take.Parameters.AddWithValue(MigrationLockKey);
+                await take.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.LockNotAvailable)
+        {
+            throw new TimeoutException(
+                $"Another Kairos migration has held the migration lock for more than {timeout}. Nothing was changed. Find the session that holds advisory lock {MigrationLockKey} (pg_locks) before running again.", ex);
+        }
+
+        await using (var reset = new NpgsqlCommand("SET LOCAL lock_timeout = 0", conn, tx))
+        {
+            await reset.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false); // the migrations themselves wait for their own locks as long as they must
+        }
+
+        await using (var schema = new NpgsqlCommand("CREATE SCHEMA IF NOT EXISTS kairos", conn, tx))
         {
             await schema.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await using (NpgsqlCommand create = migrator.CreateCommand(
-            "CREATE TABLE IF NOT EXISTS kairos.schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"))
+        await using (var create = new NpgsqlCommand(
+            "CREATE TABLE IF NOT EXISTS kairos.schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())", conn, tx))
         {
             await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        var applied = new List<string>();
         foreach (string name in names)
         {
-            await using NpgsqlConnection conn = await migrator.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-            await using NpgsqlTransaction tx = await conn.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-
             await using (var check = new NpgsqlCommand("SELECT 1 FROM kairos.schema_migrations WHERE name = $1", conn, tx))
             {
                 check.Parameters.AddWithValue(name);
@@ -103,8 +155,11 @@ public static class PostgresProvisioning
                 await record.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+            applied.Add(name);
         }
+
+        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return applied;
     }
 
     private static async Task<string> CurrentDatabaseAsync(NpgsqlDataSource ds, CancellationToken ct)

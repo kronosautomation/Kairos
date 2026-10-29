@@ -56,6 +56,12 @@ public static class KairosServiceCollectionExtensions
             services.ConfigureOpenTelemetryMeterProvider(metrics => metrics.AddMeter(KairosMetrics.MeterName));
         }
 
+        if (options.Migration is not null)
+        {
+            // Registered before the worker service: hosted services start in registration order, so the schema is current before the first loop polls.
+            services.AddSingleton<IHostedService, KairosMigrationService>();
+        }
+
         services.AddSingleton<IHostedService, KairosWorkerService>();
         return services;
     }

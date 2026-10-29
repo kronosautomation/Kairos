@@ -81,6 +81,19 @@ public sealed class PostgresFixture : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>A database with the Kairos roles in the cluster but no schema: what a customer has after `kairos db provision` and before the first migration.</summary>
+    internal async Task<string> NewEmptyDatabaseAsync()
+    {
+        string name = $"kairos_e{Interlocked.Increment(ref _counter)}_{Guid.NewGuid():N}";
+        await Execute(_admin!, $"CREATE DATABASE {name}");
+        await using NpgsqlDataSource asAdmin = NpgsqlDataSource.Create(ConnectionString(name, null, null));
+        await PostgresProvisioning.PrepareDatabaseAsync(asAdmin);
+        return name;
+    }
+
+    internal string ConnectionStringFor(string database, string? role) =>
+        ConnectionString(database, role, role is null ? null : PasswordFor(role));
+
     internal async Task DropAsync(string name) =>
         await Execute(_admin!, $"DROP DATABASE IF EXISTS {name} WITH (FORCE)");
 

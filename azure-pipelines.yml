@@ -148,6 +148,52 @@ stages:
       artifact: docs-site
       displayName: Keep the built site
 
+- stage: PackedSamples
+  displayName: The packages work as packages (samples from a local feed)
+  dependsOn: []
+  jobs:
+  # Packs everything to a folder feed, then restores, builds and runs the samples from that feed alone, with the kairos tool provisioning and migrating the database (build/Test-PackedSamples.ps1).
+  - job: Linux
+    displayName: Samples from the feed (Linux)
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 30
+    steps:
+    - checkout: self
+      fetchDepth: 1
+    - task: UseDotNet@2
+      displayName: Install the .NET SDK from global.json
+      inputs:
+        packageType: sdk
+        useGlobalJson: true
+    - script: |
+        set -euo pipefail
+        docker run -d --name kairos-pg -e POSTGRES_PASSWORD=ci-only -p 5432:5432 "${KAIROS_PG_IMAGE:-postgres:17}"
+        for i in $(seq 1 30); do docker exec kairos-pg pg_isready -U postgres && exit 0; sleep 2; done
+        exit 1
+      displayName: Start a throwaway PostgreSQL
+    - pwsh: ./build/Test-PackedSamples.ps1
+      displayName: Pack, then restore, build and run the samples from the feed only
+      env:
+        KAIROS_SAMPLE_ADMIN_CONNECTION: Host=127.0.0.1;Port=5432;Username=postgres;Password=ci-only;Database=postgres
+
+  - job: Windows
+    displayName: Samples from the feed (Windows)
+    pool:
+      vmImage: windows-latest
+    timeoutInMinutes: 40
+    steps:
+    - checkout: self
+      fetchDepth: 1
+    - task: UseDotNet@2
+      displayName: Install the .NET SDK from global.json
+      inputs:
+        packageType: sdk
+        useGlobalJson: true
+    # No Docker with Linux containers here: the script starts a throwaway cluster from the PostgreSQL that the image carries.
+    - pwsh: ./build/Test-PackedSamples.ps1
+      displayName: Pack, then restore, build and run the samples from the feed only
+
 - stage: SupplyChain
   displayName: Supply chain checks
   dependsOn: []

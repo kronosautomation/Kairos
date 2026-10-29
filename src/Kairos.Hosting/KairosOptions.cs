@@ -129,7 +129,7 @@ public sealed class KairosOptions
             {
                 await notifier.DisposeAsync().ConfigureAwait(false);
                 await ds.DisposeAsync().ConfigureAwait(false);
-            });
+            }, ds);
         };
         return this;
     }
@@ -203,6 +203,37 @@ public sealed class KairosOptions
         return this;
     }
 
+    /// <summary>The migration to run when the host starts, set with <see cref="MigrateOnStart(NpgsqlDataSource, TimeSpan?)"/>, or null.</summary>
+    internal MigrationSettings? Migration { get; private set; }
+
+    /// <summary>
+    /// Applies pending schema migrations when the host starts, before any worker runs, using <paramref name="migrator"/> (a data source for the <c>kairos_migrator</c> login). The application's own
+    /// connection (<c>UsePostgres</c>) stays the data-plane login: the two must be different credentials, and the host refuses to start if they are the same login or if the application's login is
+    /// the migrator. Instances that start together queue on a database lock, so the schema is migrated once and nobody fails. The recommended way to migrate is still a deploy step (<c>kairos db migrate</c>)
+    /// before the instances roll; this is for small teams. The caller owns <paramref name="migrator"/>. Hosted services registered before <c>AddKairos</c> start before the migration does and must not use Kairos in their start.
+    /// </summary>
+    /// <param name="migrator">A data source connecting as the migrator login.</param>
+    /// <param name="lockTimeout">How long to wait for another instance's migration; five minutes when null. After that the host fails to start rather than wait for a stuck one.</param>
+    public KairosOptions MigrateOnStart(NpgsqlDataSource migrator, TimeSpan? lockTimeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(migrator);
+        Migration = new MigrationSettings(migrator, null, lockTimeout);
+        return this;
+    }
+
+    /// <summary>
+    /// As <see cref="MigrateOnStart(NpgsqlDataSource, TimeSpan?)"/>, from a connection string for the migrator login. The data source is built at start with the same TLS default as the application's and
+    /// disposed once the migration is done.
+    /// </summary>
+    public KairosOptions MigrateOnStart(string migratorConnectionString, TimeSpan? lockTimeout = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(migratorConnectionString);
+        Migration = new MigrationSettings(null, migratorConnectionString, lockTimeout);
+        return this;
+    }
+
+    internal sealed record MigrationSettings(NpgsqlDataSource? DataSource, string? ConnectionString, TimeSpan? LockTimeout);
+
     internal sealed record StoreHandle(
-        IKairosStore Store, Func<TimeSpan, CancellationToken, Task>? WaitForWork, Func<ValueTask>? Dispose);
+        IKairosStore Store, Func<TimeSpan, CancellationToken, Task>? WaitForWork, Func<ValueTask>? Dispose, NpgsqlDataSource? DataSource = null);
 }

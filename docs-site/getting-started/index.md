@@ -31,6 +31,24 @@ dotnet run --project samples/GettingStarted -- --provision "<admin connection st
 
 From now on your application connects as `kairos_dataplane` only.
 
+In a real deployment, do the same with the `kairos` tool from your pipeline instead of from code. `provision` runs once per database, with an administrator
+connection; `migrate` runs before each new version starts, as `kairos_migrator`, and does nothing when the schema is current. Passwords and connection strings
+come from the environment, never from the command line:
+
+```
+dotnet tool install --global Kairos.Cli
+
+export KAIROS_ADMIN_CONNECTION="<administrator connection string>"
+export KAIROS_MIGRATOR_PASSWORD="..." KAIROS_DATAPLANE_PASSWORD="..." KAIROS_CONTROLPLANE_PASSWORD="..." KAIROS_READONLY_PASSWORD="..."
+kairos db provision
+
+export KAIROS_CONNECTION="<kairos_migrator connection string>"
+kairos db migrate
+```
+
+`migrate` applies everything in one transaction behind a database lock, so running it twice, or from several machines at once, is safe. If your application connects
+as the data-plane role and a second, migrator credential is available to it, `MigrateOnStart` does the same when the host starts; the `kairos db migrate` deploy step is the recommended way.
+
 ## 3. Write the workflow
 
 A workflow is an `async` method over an `IWorkflowContext`. Everything it does that has to be remembered goes through that context:

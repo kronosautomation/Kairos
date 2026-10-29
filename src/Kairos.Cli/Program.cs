@@ -10,6 +10,11 @@ namespace Kairos.Cli
         private const string Usage = """
             kairos: Kairos command line
 
+              kairos db provision [--admin-connection-env <name>] [--migrator-password-env <name>] [--dataplane-password-env <name>]
+                                  [--controlplane-password-env <name>] [--readonly-password-env <name>]
+
+              kairos db migrate [--connection-env <name>] [--lock-timeout <seconds>]
+
               kairos replay-check --build <assembly> [--connection <string> | set KAIROS_CONNECTION] [--corpus <dir>]
                                   [--tenant <guid> --namespace <guid>] [--sample <n|all>] [--since <30m|12h|7d|date>]
                                   [--strict-coverage] [--format text|json] [--setup <type>]
@@ -23,6 +28,11 @@ namespace Kairos.Cli
               kairos audit export --server <https://host> --namespace <guid> --reason "<why>" [--from <date>] [--to <date>] [--run <guid>]... [--out <dir>] [--token-env <name>]
 
               kairos audit verify <bundle> --key <public key file> [--kid <key id>] [--history <file>]... [--require-opened]
+
+            db provision is first-time setup, run once per database with an administrator connection (KAIROS_ADMIN_CONNECTION): it creates the four Kairos roles and lets kairos_migrator create the
+            schema. Passwords come from the environment (KAIROS_MIGRATOR_PASSWORD, KAIROS_DATAPLANE_PASSWORD, KAIROS_CONTROLPLANE_PASSWORD, KAIROS_READONLY_PASSWORD), never from the command line.
+            db migrate applies pending schema migrations as kairos_migrator (KAIROS_CONNECTION), as one transaction behind a database lock: run it as a deploy step before the new version starts. Running it
+            twice, or from several machines at once, is harmless. Exit codes: 0 done, 1 failed (rolled back), 2 could not run.
 
             audit export asks a Kairos server for signed audit evidence of one namespace and writes the bundle to a directory. You sign in to the server (token in KAIROS_TOKEN); the administrator
             role is needed; the server signs with a key of its own, audits every history it reads under your sign-in, and holds no payload key, so sealed steps are reported as not opened.
@@ -52,6 +62,27 @@ namespace Kairos.Cli
             {
                 await stdout.WriteLineAsync(typeof(Cli).Assembly.GetName().Version?.ToString() ?? "0").ConfigureAwait(false);
                 return ExitCode.Passed;
+            }
+
+            if (args[0] == "db")
+            {
+                if (args.Length < 2 || args[1] is not ("provision" or "migrate"))
+                {
+                    await stderr.WriteLineAsync("db supports: provision, and migrate").ConfigureAwait(false);
+                    return ExitCode.Usage;
+                }
+
+                try
+                {
+                    return args[1] == "provision"
+                        ? await DbCommands.ProvisionAsync(DbProvisionArguments.Parse(args[2..]), stdout, stderr, cancellationToken).ConfigureAwait(false)
+                        : await DbCommands.MigrateAsync(DbMigrateArguments.Parse(args[2..]), stdout, stderr, cancellationToken).ConfigureAwait(false);
+                }
+                catch (ArgumentException ex)
+                {
+                    await stderr.WriteLineAsync(ex.Message).ConfigureAwait(false);
+                    return ExitCode.Usage;
+                }
             }
 
             if (args[0] == "audit")
