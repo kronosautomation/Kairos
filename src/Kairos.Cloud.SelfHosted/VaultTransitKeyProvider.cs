@@ -372,7 +372,7 @@ public sealed partial class VaultTransitKeyProvider : IKeyProvider, IDisposable
             int.TryParse(id.AsSpan(hash + 1), NumberStyles.None, CultureInfo.InvariantCulture, out version) && version > 0);
     }
 
-    [GeneratedRegex(@"^vault:v([0-9]{1,6}):([A-Za-z0-9+/]+={0,2})$")]
+    [GeneratedRegex(@"^vault:v([0-9]{1,6}):([A-Za-z0-9+/]+={0,2})\z")]
     private static partial Regex CiphertextPattern();
 
     // ----- tokens -----

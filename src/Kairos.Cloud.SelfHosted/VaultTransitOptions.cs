@@ -168,17 +168,17 @@ public sealed partial class VaultTransitOptions
         text.StartsWith("hvs.", StringComparison.Ordinal) || text.StartsWith("hvb.", StringComparison.Ordinal) || text.StartsWith("hvr.", StringComparison.Ordinal) ||
         TokenShape().IsMatch(text);
 
-    [GeneratedRegex(@"^[A-Za-z0-9_-]{1,64}(/[A-Za-z0-9_-]{1,64}){0,3}$")]
+    [GeneratedRegex(@"^[A-Za-z0-9_-]{1,64}(/[A-Za-z0-9_-]{1,64}){0,3}\z")]
     private static partial Regex MountPattern();
 
-    [GeneratedRegex(@"^[A-Za-z0-9_-]{1,128}$")]
+    [GeneratedRegex(@"^[A-Za-z0-9_-]{1,128}\z")]
     private static partial Regex NamePattern();
 
-    [GeneratedRegex(@"^[A-Za-z0-9._-]{1,128}(/[A-Za-z0-9._-]{1,128}){0,7}/?$")]
+    [GeneratedRegex(@"^[A-Za-z0-9._-]{1,128}(/[A-Za-z0-9._-]{1,128}){0,7}/?\z")]
     private static partial Regex NamespacePattern();
 
     // The shape of a legacy Vault token ("s." and 24 letters or digits); a file path has a separator or an extension.
-    [GeneratedRegex(@"^s\.[A-Za-z0-9]{20,}$")]
+    [GeneratedRegex(@"^s\.[A-Za-z0-9]{20,}\z")]
     private static partial Regex TokenShape();
 }
 
