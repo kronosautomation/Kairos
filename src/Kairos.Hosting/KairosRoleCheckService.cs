@@ -4,13 +4,23 @@ using Microsoft.Extensions.Logging;
 
 namespace Kairos;
 
-/// <summary>What the host found about the application's database login at start; read by the dashboard to show a standing warning. Null <see cref="Inspection"/> means the store is not PostgreSQL or has not started.</summary>
-public sealed class KairosDatabaseRole
+/// <summary>What the host found about the application's database login at start. Read by the dashboard to show a standing warning; a test double can implement it.</summary>
+public interface IDatabaseRoleReport
 {
-    /// <summary>The login's privileges as found at start, or null.</summary>
-    public DatabaseRoleInspection? Inspection { get; internal set; }
+    /// <summary>The login's privileges as found at start, or null when the store is not PostgreSQL or has not started.</summary>
+    DatabaseRoleInspection? Inspection { get; }
 
     /// <summary>True when the login is privileged and the code said <c>AllowPrivilegedDatabaseRole()</c>.</summary>
+    bool PrivilegedAllowed { get; }
+}
+
+/// <summary>What the host found about the application's database login at start (see <see cref="IDatabaseRoleReport"/>).</summary>
+public sealed class KairosDatabaseRole : IDatabaseRoleReport
+{
+    /// <inheritdoc />
+    public DatabaseRoleInspection? Inspection { get; internal set; }
+
+    /// <inheritdoc />
     public bool PrivilegedAllowed { get; internal set; }
 }
 
