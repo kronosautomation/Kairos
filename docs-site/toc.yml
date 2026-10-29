@@ -4,6 +4,8 @@
   href: getting-started/
 - name: Concepts
   href: concepts/
+- name: Operations
+  href: operations/
 - name: Commercial features
   href: pro/
 - name: API reference
