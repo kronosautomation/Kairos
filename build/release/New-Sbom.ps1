@@ -27,7 +27,7 @@ $Packages = (Resolve-Path $Packages).Path
 Invoke-Native dotnet @('tool', 'restore') -WorkingDirectory $Root -Quiet | Out-Null
 
 $projects = @{}
-(@(Get-ChildItem -LiteralPath (Join-Path $Root 'src') -Recurse -Filter '*.csproj' -File | Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' }) + @(Get-Item -LiteralPath (Join-Path $Root 'tests/Kairos.Testing/Kairos.Testing.csproj'))) | ForEach-Object {
+(@(Get-ChildItem -LiteralPath (Join-Path $Root 'src') -Recurse -Filter '*.csproj' -File | Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' }) + @(Get-Item -LiteralPath (Join-Path $Root 'tests/Kairos.Testing/Kairos.Testing.csproj') -ErrorAction SilentlyContinue)) | ForEach-Object {
     $xml = [xml](Get-Content -LiteralPath $_.FullName -Raw)
     $explicit = $xml.SelectSingleNode('//PackageId')
     $projects[$(if ($explicit) { [string]$explicit.InnerText } else { $_.BaseName })] = $_.FullName

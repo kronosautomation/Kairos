@@ -56,7 +56,7 @@ $reviews = Join-Path $Root 'docs/reviews'
 if (Test-Path -LiteralPath $reviews) {
     foreach ($file in Get-ChildItem -LiteralPath $reviews -Recurse -File -Filter '*.md') {
         $hit = Select-String -LiteralPath $file.FullName -Pattern '^#{1,6}\s.*\bopen (items|findings)\b', '\bNot started\b', '\|\s*Tracked\s*\|' -List
-        if ($hit) { $problems.Add("A review with open findings is in the tree and would be published: $($file.FullName.Substring($Root.Length).TrimStart('', '/')) (line $($hit.LineNumber)). Move it to the private repository, or close the findings.") }
+        if ($hit) { $problems.Add("A review with open findings is in the tree and would be published: $($file.FullName.Substring($Root.Length).TrimStart('\', '/')) (line $($hit.LineNumber)). Move it to the private repository, or close the findings.") }
     }
 }
 

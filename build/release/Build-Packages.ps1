@@ -45,7 +45,7 @@ Invoke-Native dotnet @('restore', $Solution, '-p:RestoreLockedMode=true', '-nolo
 $shippedFromTests = @('Kairos.Testing')
 $projects = @(Get-ChildItem -LiteralPath (Join-Path $Root 'src') -Recurse -Filter '*.csproj' -File |
     Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' } | Sort-Object FullName) +
-    @($shippedFromTests | ForEach-Object { Get-Item -LiteralPath (Join-Path $Root "tests/$_/$_.csproj") })
+    @($shippedFromTests | ForEach-Object { Join-Path $Root "tests/$_/$_.csproj" } | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { Get-Item -LiteralPath $_ })  # the private repository has none
 foreach ($project in $projects) {
     Invoke-Native dotnet @('pack', $project.FullName, '-c', $Configuration, '--no-restore', '-o', $Output, "-p:Version=$Version", '-nologo', '-v', 'q') -WorkingDirectory $Root -Quiet | Out-Null
 }
