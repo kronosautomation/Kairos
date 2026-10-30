@@ -8,13 +8,16 @@
   - SECURITY.md exists and says where to report a vulnerability.
   - build/release/cosign.pub exists and is a public key: the key attestations are verified against. The pipeline does not trust a key it finds in the vault on the day; it trusts this file, which a
     reviewed commit put here.
-  - No review with open findings is in the tree (docs/reviews): a review that lists what is still unfixed is internal until a fix has shipped (docs/DISCLOSURE-POLICY.md). A review whose open items are all
-    closed may stay; a file under docs/reviews with an "Open items" or "Open findings" heading, a "Not started" status or a "Tracked" row fails the gate.
+  - No review with open findings is published: a review that lists what is still unfixed is internal until a fix has shipped (docs/DISCLOSURE-POLICY.md). A file with an "Open items" or "Open findings"
+    heading, a "Not started" status or a "Tracked" row fails the gate when it is under docs/reviews of a public repository, or is a Markdown file in a published path (package READMEs, the docs site)
+    of any repository. A review whose open items are all closed may stay. With -PrivateRepository (Kairos.Commercial, which is never published) docs/reviews is not checked: its reviews are meant to
+    hold findings. What that repository does publish (-PublishedPaths) is checked all the same.
   - Nothing that is published still has a place-holder to fill in ("REPLACE-" followed by a name): the docs site, samples, README, SECURITY.md, package metadata, security.txt settings.
   - No known high or critical vulnerability in what ships (the same check the per-commit pipeline makes).
 
 .PARAMETER Tag          refs/tags/v1.2.3 or v1.2.3.
 .PARAMETER Root         The repository.
+.PARAMETER PrivateRepository  The repository is never published; only what -PublishedPaths names leaves it, so its docs/reviews are not checked.
 .PARAMETER SkipMainCheck, SkipVulnerabilityCheck  For tests, and for a repository with no origin.
 #>
 [CmdletBinding()]
@@ -23,6 +26,7 @@ param(
     [string]$Root = '',
     [string]$MainBranch = 'origin/main',
     [string[]]$PublishedPaths = @('README.md', 'SECURITY.md', 'docs-site', 'samples', 'src', 'Directory.Build.props', 'build/release/cosign.pub'),
+    [switch]$PrivateRepository,
     [switch]$SkipMainCheck,
     [switch]$SkipVulnerabilityCheck
 )
@@ -52,10 +56,11 @@ $pub = Join-Path $Root 'build/release/cosign.pub'
 if (-not (Test-Path -LiteralPath $pub)) { $problems.Add('build/release/cosign.pub is missing: export the release key''s public half from Key Vault (cosign public-key --key azurekms://...) and commit it (docs/RELEASE.md, one-time setup).') }
 elseif ((Get-Content -LiteralPath $pub -Raw) -notmatch '-----BEGIN PUBLIC KEY-----[\s\S]+-----END PUBLIC KEY-----') { $problems.Add('build/release/cosign.pub is not a PEM public key.') }
 
+$openFindings = '^#{1,6}\s.*\bopen (items|findings)\b', '\bNot started\b', '\|\s*Tracked\s*\|'
 $reviews = Join-Path $Root 'docs/reviews'
-if (Test-Path -LiteralPath $reviews) {
+if (-not $PrivateRepository -and (Test-Path -LiteralPath $reviews)) {
     foreach ($file in Get-ChildItem -LiteralPath $reviews -Recurse -File -Filter '*.md') {
-        $hit = Select-String -LiteralPath $file.FullName -Pattern '^#{1,6}\s.*\bopen (items|findings)\b', '\bNot started\b', '\|\s*Tracked\s*\|' -List
+        $hit = Select-String -LiteralPath $file.FullName -Pattern $openFindings -List
         if ($hit) { $problems.Add("A review with open findings is in the tree and would be published: $($file.FullName.Substring($Root.Length).TrimStart('\', '/')) (line $($hit.LineNumber)). Move it to the private repository, or close the findings.") }
     }
 }
@@ -68,8 +73,13 @@ foreach ($path in $PublishedPaths) {
         Get-ChildItem -LiteralPath $full -Recurse -File | Where-Object { $_.FullName -notmatch '[\\/](obj|bin|node_modules|_site)[\\/]' -and $_.Extension -in '.md', '.cs', '.csproj', '.props', '.json', '.yml', '.yaml', '.html', '.txt', '.xml', '.toml' }
     } else { Get-Item -LiteralPath $full }
     foreach ($file in $files) {
+        $relative = $file.FullName.Substring($Root.Length).TrimStart('\', '/')
         $hits = Select-String -LiteralPath $file.FullName -Pattern 'REPLACE-[A-Za-z0-9_-]+' -AllMatches -ErrorAction SilentlyContinue
-        foreach ($hit in $hits) { $left += "$($file.FullName.Substring($Root.Length).TrimStart('\', '/')):$($hit.LineNumber) $($hit.Matches[0].Value)" }
+        foreach ($hit in $hits) { $left += "${relative}:$($hit.LineNumber) $($hit.Matches[0].Value)" }
+        if ($file.Extension -eq '.md') {
+            $finding = Select-String -LiteralPath $file.FullName -Pattern $openFindings -List -ErrorAction SilentlyContinue
+            if ($finding) { $problems.Add("Published text reads like a review with open findings: $relative (line $($finding.LineNumber)). Findings stay in the private repository.") }
+        }
     }
 }
 foreach ($item in ($left | Select-Object -First 20)) { $problems.Add("A place-holder is left in published text: $item") }

@@ -40,7 +40,7 @@ docs site gets **rewritten customer-facing versions**, never copies.
 2. Pages describe behaviour and guarantees, not roadmap: no "coming soon", milestone numbers, internal invariant IDs
    (I1, F2, L3 ...), review IDs, or competitor comparisons beyond the published comparison table.
 3. Commercial features are described by what they do, never how they are built.
-4. Release gate (build/release/Test-ReleaseGate.ps1): fails a release if any file under docs/reviews has an open-items section or an unstarted finding.
+4. Release gate (build/release/Test-ReleaseGate.ps1): fails a release if any file under docs/reviews of this (public) repository, or any Markdown file in a published path of either repository (READMEs, package READMEs, docs-site), has an open-items section or an unstarted finding. Kairos.Commercial is never published, so its pipeline passes `-PrivateRepository` and its docs/reviews may hold findings; what it publishes is checked all the same.
 4a. CI check (`build/check-disclosure.ps1`, to be added): fails if `docs-site/` or `samples/` reference `docs/`,
    `reviews`, `Kairos.Commercial`, or contain the terms on a blocklist (milestone, roadmap, revenue, competitor,
    design partner, internal).

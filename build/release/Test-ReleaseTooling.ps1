@@ -189,7 +189,18 @@ try {
     Expect 'a review with an open-items section fails the gate' { Fails { & $gate 'refs/tags/v1.2.3' } }
     Set-Content (Join-Path $repo 'docs/reviews/open.md') "# A review`n`n| L5 | Tracked | Not started. |"
     Expect 'a review with a finding that is not started fails the gate' { Fails { & $gate 'refs/tags/v1.2.3' } }
+    $privateGate = { param([string[]]$paths) & (Join-Path $PSScriptRoot 'Test-ReleaseGate.ps1') -Tag 'refs/tags/v1.2.3' -Root $repo -PrivateRepository -SkipMainCheck -SkipVulnerabilityCheck -PublishedPaths $paths *> $null }
+    Expect 'the same review may stay in a private repository' { & $privateGate 'README.md,SECURITY.md,src,docs-site'; $true }
     Remove-Item -Recurse -Force (Join-Path $repo 'docs')
+    New-Item -ItemType Directory -Force -Path (Join-Path $repo 'src/Pkg') | Out-Null
+    Set-Content (Join-Path $repo 'src/Pkg/README.md') "# Pkg`n`n## Open findings`n`n1. Something unfixed."
+    Expect 'a package README of a private repository with open findings fails the gate' { Fails { & $privateGate 'README.md,SECURITY.md,src,docs-site' } }
+    Expect 'and so does the same README in a public repository' { Fails { & $gate 'refs/tags/v1.2.3' } }
+    Remove-Item -Recurse -Force (Join-Path $repo 'src')
+    New-Item -ItemType Directory -Force -Path (Join-Path $repo 'docs-site') | Out-Null
+    Set-Content (Join-Path $repo 'docs-site/page.md') "# A page`n`n| Item | Tracked | Not started |"
+    Expect 'a docs-site page of a private repository with a tracked finding fails the gate' { Fails { & $privateGate 'README.md,SECURITY.md,src,docs-site' } }
+    Remove-Item -Recurse -Force (Join-Path $repo 'docs-site')
     Expect 'a tag that is not a version fails' { Fails { & $gate 'refs/tags/release-1' } }
     Expect 'a tag with only two version parts fails' { Fails { & $gate 'refs/tags/v1.2' } }
     Set-Content (Join-Path $repo 'README.md') 'Report at https://github.com/REPLACE-ORG/kairos/security/policy'
