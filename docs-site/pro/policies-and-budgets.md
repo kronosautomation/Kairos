@@ -80,6 +80,9 @@ Policies, prices and budgets are stored in the same PostgreSQL database as the r
 On a [standalone server](standalone-server.md), set `Server:Policies:Enabled` to `true`. Without it, the policy endpoints answer that they are not supported. Workers
 without a database of their own ask the server over gRPC, and are refused if it cannot answer.
 
+In an application that embeds Kairos, the policy engine's tables are created and migrated by `kairos-pro db migrate`, run as `kairos_migrator` as a deploy step
+([The kairos-pro command line](kairos-pro.md)); the application's own login then reads and enforces them.
+
 | Endpoint (under `/v1/namespaces/{namespaceId}`) | Read | Change |
 |---|---|---|
 | `/policy`, `/prices`, `/budgets` | `GET`: operators and administrators | `PUT`: administrators only |

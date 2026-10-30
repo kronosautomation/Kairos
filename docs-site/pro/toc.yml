@@ -8,6 +8,8 @@
   href: dashboard-in-your-application.md
 - name: Policies, prices and budgets
   href: policies-and-budgets.md
+- name: The kairos-pro command line
+  href: kairos-pro.md
 - name: Publishing agents as an MCP server
   href: mcp-server.md
 - name: Publishing agents over A2A

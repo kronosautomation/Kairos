@@ -29,6 +29,11 @@ answer is a zip of the three files below.
 - **Sealed steps are not opened.** The server holds no payload key, so approval and tool steps that your application sealed are listed as not opened. To open them, make the bundle in your own process with a protector,
   using the library the server uses.
 
+## Getting a bundle from an application with no server
+
+An application that embeds Kairos exports with the commercial command line, `kairos-pro audit export --database`, run as the `kairos_migrator` login and signed with a key file you
+hold. It can open sealed steps with your Vault key. See [The kairos-pro command line](../pro/kairos-pro.md).
+
 ## What you are given
 
 A bundle is three files that belong together:
